@@ -37,6 +37,42 @@ services:
       - "saber.service.name=incident-5-db"
       - "saber.execution.service=true"
 
+  # Permanent sandbox for agent tool execution (shared across all episodes)
+  # Replaces per-episode sandbox containers — targeted by name via executor target_container config
+  excytin-sandbox:
+    image: saber/excytin_demo/sandbox:latest
+    container_name: saber-excytin-sandbox
+    working_dir: /workspace
+    depends_on:
+      incident-5-db:
+        condition: service_healthy
+    environment:
+      - PYTHONPATH=/workspace
+      - PYTHONUNBUFFERED=1
+      - MYSQL_HOST=saber-excytin-incident-5
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=admin
+      - MYSQL_DATABASE=env_monitor_db
+    networks:
+      - excytin-database
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-d", "/workspace"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+    labels:
+      - "saber.domain=excytin"
+      - "saber.service.type=permanent"
+      - "saber.service.name=excytin-sandbox"
+
 # Shared network for communication with sandbox environments
 networks:
   excytin-database:

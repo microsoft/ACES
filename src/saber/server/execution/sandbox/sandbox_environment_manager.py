@@ -58,7 +58,7 @@ class SandboxEnvironmentManager:
         self.active_orchestrators: dict[str, ComposeOrchestrator] = {}
         self.episode_compose_files: dict[str, Path] = {}
 
-        # Use typed config fields
+        # Use typed config fields (domain validation happens in SandboxConfig.from_dict)
         self.domain = self._config.domain
 
         # Build base path for sandbox environments (validation happens lazily during episode creation)

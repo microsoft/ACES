@@ -340,7 +340,7 @@ class TestConfigurationValidation:
             SandboxEnvironmentManager(config)
 
         error_msg = str(excinfo.value)
-        assert "Compose file not found" in error_msg or "not found" in error_msg or "domain is required" in error_msg
+        assert "Compose file not found" in error_msg or "not found" in error_msg or "domain" in error_msg.lower()
 
     def test_invalid_configuration_type(self):
         """Test that invalid configuration types cause errors when used."""

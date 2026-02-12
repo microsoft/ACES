@@ -7,6 +7,7 @@ with MCP integration and comprehensive security validation in Docker containers.
 
 import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, mock_open, patch
 
 import pytest
@@ -96,7 +97,7 @@ class TestExecutionManager:
             registry = ExecutionManager(temp_config_dir)
 
         # Should have default timeout since no config provided during initialization
-        assert 300.0 == 300.0
+        assert registry._configuration.get("timeout", 300.0) == 300.0
 
         # Should have empty allowed commands by default
         assert registry._configuration.get("allowed_commands", []) == []
@@ -526,6 +527,148 @@ networks:
 
         # Verify permanent environment manager was created
 
+class TestExecutionManagerPermanentEnvValidation:
+    """Test cases for permanent environment initialization validation."""
+
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    def test_initialize_permanent_environment_manager_missing_domain_raises(self, mock_sandbox_class, tmp_path: Path) -> None:
+        """Test that ValueError is raised when domain is missing from permanent env config."""
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        config_without_domain: dict[str, Any] = {
+            "config_dir": "/test/config",
+            "enable_logging": True,
+        }
+
+        with pytest.raises(ValueError, match="domain is required in permanent environment config"):
+            execution_manager.initialize_permanent_environment_manager(config_without_domain)
+
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    def test_initialize_permanent_environment_manager_empty_domain_raises(self, mock_sandbox_class, tmp_path: Path) -> None:
+        """Test that ValueError is raised when domain is an empty string."""
+        execution_manager = ExecutionManager(str(tmp_path))
+
+        config_with_empty_domain: dict[str, Any] = {
+            "domain": "",
+            "config_dir": "/test/config",
+        }
+
+        with pytest.raises(ValueError, match="domain is required in permanent environment config"):
+            execution_manager.initialize_permanent_environment_manager(config_with_empty_domain)
+
+
+class TestHasEpisodeEnvironment:
+    """Test cases for has_episode_environment() method."""
+
+    def test_has_episode_environment_no_sandbox_manager(self, tmp_path: Path) -> None:
+        """Test returns False when _sandbox_environment_manager is None."""
+        execution_manager = ExecutionManager(str(tmp_path))
+        execution_manager._sandbox_environment_manager = None
+
+        assert execution_manager.has_episode_environment("episode_123") is False
+
+    def test_has_episode_environment_exists(self, tmp_path: Path) -> None:
+        """Test returns True when episode has an active environment."""
+        execution_manager = ExecutionManager(str(tmp_path))
+        mock_sandbox = MagicMock()
+        mock_sandbox.get_episode_environment.return_value = MagicMock()  # Non-None environment
+        execution_manager._sandbox_environment_manager = mock_sandbox
+
+        assert execution_manager.has_episode_environment("episode_123") is True
+        mock_sandbox.get_episode_environment.assert_called_once_with("episode_123")
+
+    def test_has_episode_environment_not_exists(self, tmp_path: Path) -> None:
+        """Test returns False when episode has no environment."""
+        execution_manager = ExecutionManager(str(tmp_path))
+        mock_sandbox = MagicMock()
+        mock_sandbox.get_episode_environment.return_value = None
+        execution_manager._sandbox_environment_manager = mock_sandbox
+
+        assert execution_manager.has_episode_environment("episode_123") is False
+        mock_sandbox.get_episode_environment.assert_called_once_with("episode_123")
+
+
+class TestConfigureForTaskAsyncDomainValidation:
+    """Test cases for domain validation in configure_for_task_async()."""
+
+    def test_configure_for_task_async_raises_when_domain_missing(self, tmp_path: Path) -> None:
+        """Test that ValueError is raised when domain is missing from configuration."""
+        execution_manager = ExecutionManager(str(tmp_path))
+        # _configuration starts empty => no 'domain' key
+        execution_manager._sandbox_environment_manager = None
+
+        mock_task = MagicMock()
+        mock_task.environment = "test_env"
+        mock_task.execution_config = {"timeout": 60.0}
+        mock_task.allowed_executors = ["bash"]
+
+        with pytest.raises(ValueError, match="'domain' not found in execution configuration"):
+            execution_manager.configure_for_task_async("ep_1", mock_task)
+
+    def test_configure_for_task_async_raises_when_domain_empty(self, tmp_path: Path) -> None:
+        """Test that ValueError is raised when domain is an empty string."""
+        execution_manager = ExecutionManager(str(tmp_path))
+        execution_manager._sandbox_environment_manager = None
+        execution_manager._configuration["domain"] = ""
+
+        mock_task = MagicMock()
+        mock_task.environment = "test_env"
+        mock_task.execution_config = {"timeout": 60.0}
+        mock_task.allowed_executors = ["bash"]
+
+        with pytest.raises(ValueError, match="'domain' not found in execution configuration"):
+            execution_manager.configure_for_task_async("ep_2", mock_task)
+
+
+class TestConfigureForTaskAsyncNoEnvironment:
+    """Test cases for configure_for_task_async() when task.environment is None."""
+
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    def test_configure_for_task_async_no_environment_skips_sandbox(self, mock_sandbox_class: MagicMock, tmp_path: Path) -> None:
+        """Test that sandbox creation is skipped when task.environment is None."""
+        mock_sandbox_instance = MagicMock()
+        mock_sandbox_class.return_value = mock_sandbox_instance
+
+        execution_manager = ExecutionManager(str(tmp_path))
+        execution_manager._configuration["domain"] = "test_domain"
+
+        mock_task = MagicMock()
+        mock_task.environment = None
+        mock_task.execution_config = {"timeout": 60.0}
+        mock_task.allowed_executors = ["bash"]
+        mock_task.bash_config = None
+        mock_task.python_config = None
+
+        execution_manager.configure_for_task_async("episode_no_env", mock_task, session_id="sess_1")
+
+        # create_episode_environment_async should NOT be called
+        mock_sandbox_instance.create_episode_environment_async.assert_not_called()
+
+    @patch('saber.server.execution.execution_manager.SandboxEnvironmentManager')
+    def test_configure_for_task_async_no_environment_registers_executor(self, mock_sandbox_class: MagicMock, tmp_path: Path) -> None:
+        """Test that executor registration still happens when task.environment is None."""
+        mock_sandbox_instance = MagicMock()
+        mock_sandbox_class.return_value = mock_sandbox_instance
+
+        execution_manager = ExecutionManager(str(tmp_path))
+        execution_manager._configuration["domain"] = "test_domain"
+
+        mock_task = MagicMock()
+        mock_task.environment = None
+        mock_task.execution_config = {"timeout": 120.0}
+        mock_task.allowed_executors = ["bash"]
+        mock_task.bash_config = None
+        mock_task.python_config = None
+
+        execution_manager.configure_for_task_async("episode_no_env", mock_task, session_id="sess_2")
+
+        # Configuration should still be updated
+        assert execution_manager._configuration["timeout"] == 120.0
+
+        # Executor factory should have registered the episode
+        assert execution_manager._executor_factory is not None
+
+
 class TestExecutionManagerDebugMode:
     """Test cases for ExecutionManager debug mode functionality."""
 
@@ -584,6 +727,7 @@ class TestExecutionManagerDebugMode:
         mock_sandbox_class.return_value = mock_sandbox_instance
 
         execution_manager = ExecutionManager(str(tmp_path))
+        execution_manager._configuration["domain"] = "test_domain"
 
         # Create a mock task object
         mock_task = MagicMock()

@@ -9,7 +9,7 @@ import asyncio
 import os
 import subprocess
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -83,9 +83,7 @@ class ClientSession(BaseModel):
             current_time: Current time (defaults to UTC now if None)
         """
         if current_time is None:
-            from datetime import timezone
-
-            current_time = datetime.now(timezone.utc)
+            current_time = datetime.now(UTC)
         self.last_activity = current_time
 
     def add_creating_episode(self, episode_id: str) -> None:
@@ -208,6 +206,7 @@ class SessionManager:
         self.active_sessions: dict[str, ClientSession] = {}
         self.cleanup_task: asyncio.Task[None] | None = None
         self.shutdown_event = asyncio.Event()
+        self._shutdown_in_progress = False
 
         # Semaphore for episode creation to limit concurrent Docker resource usage
         # This limits episode creation to prevent overwhelming the Docker daemon
@@ -580,16 +579,22 @@ class SessionManager:
         ]
 
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
             logger.info(
                 "Redis container stopped",
                 extra={"event": "redis_container_stopped"},
             )
         except Exception as e:
-            logger.warning(
-                f"Failed to stop Redis container: {e}",
-                extra={"event": "redis_container_stop_failed", "error": str(e)},
-            )
+            if isinstance(e, subprocess.TimeoutExpired):
+                logger.warning(
+                    "Redis container stop timed out after 30s",
+                    extra={"event": "redis_container_stop_timeout"},
+                )
+            else:
+                logger.warning(
+                    f"Failed to stop Redis container: {e}",
+                    extra={"event": "redis_container_stop_failed", "error": str(e)},
+                )
         finally:
             self._redis_compose_path = None
 
@@ -624,7 +629,18 @@ class SessionManager:
         await asyncio.gather(rest_task, mcp_task, self.cleanup_task)
 
     async def shutdown(self) -> None:
-        """Shutdown the SessionManager and cleanup resources."""
+        """Shutdown the SessionManager and cleanup resources.
+
+        This method is idempotent — concurrent or repeated calls are safely ignored.
+        """
+        if self._shutdown_in_progress:
+            logger.info(
+                "Shutdown already in progress; ignoring duplicate call",
+                extra={"event": "session_manager_shutdown_duplicate", "domain": self.domain_name},
+            )
+            return
+        self._shutdown_in_progress = True
+
         logger.info(
             "Shutting down SessionManager",
             extra={"event": "session_manager_shutdown_start", "domain": self.domain_name},
@@ -664,10 +680,7 @@ class SessionManager:
                     },
                 )
 
-        # Clean up SABER episode networks before shutting down MCP server
-        await self._cleanup_saber_episode_networks()
-
-        # Shutdown MCP server first
+        # Shutdown MCP server
         await self.mcp_api.shutdown_mcp_server()
 
         # Cleanup all active sessions
@@ -687,11 +700,13 @@ class SessionManager:
             )
             await self.terminate_session(session_id)
 
-        # Disconnect RedisManager
+        # Disconnect RedisManager and stop container BEFORE slow network cleanup
+        # so the force-exit watchdog doesn't kill us before Redis is stopped
         await self.redis_manager.disconnect()
-
-        # Stop managed Redis container (after client disconnect)
         self._stop_redis_container()
+
+        # Clean up SABER episode networks (can be slow, best-effort)
+        await self._cleanup_saber_episode_networks()
 
         logger.info(
             "SessionManager shutdown complete",
@@ -1357,7 +1372,7 @@ class SessionManager:
                     ),
                     timeout=5.0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning(
                     "Finalization task cancellation timed out",
                     extra={
@@ -1744,44 +1759,57 @@ class SessionManager:
                 },
             )
 
+            # Cache the environment check — avoid repeated calls to has_episode_environment()
+            has_env = self.execution_manager.has_episode_environment(episode_id)
+
             # Wait for health checks (runs in parallel with other episodes)
-            try:
-                health_task = self.execution_manager.wait_for_episode_healthy(
-                    episode_id=episode_id, timeout_seconds=180
-                )
-                await asyncio.wait_for(health_task, timeout=200)
+            # Only if this episode has a sandbox environment configured
+            if has_env:
+                try:
+                    health_task = self.execution_manager.wait_for_episode_healthy(
+                        episode_id=episode_id, timeout_seconds=180
+                    )
+                    await asyncio.wait_for(health_task, timeout=200)
+                    logger.info(
+                        "Episode health checks passed",
+                        extra={
+                            "event": "episode_health_check_passed",
+                            "episode_id": episode_id,
+                        },
+                    )
+                except TimeoutError:
+                    error_msg = "Health check exceeded 200s timeout"
+                    logger.error(
+                        "Episode health check timed out",
+                        extra={
+                            "event": "episode_health_check_timeout",
+                            "episode_id": episode_id,
+                            "timeout_seconds": 200,
+                        },
+                    )
+                    self.episode_manager.mark_episode_failed_creation(episode_id, error_msg)
+                    await self._cleanup_failed_episode_environment(episode_id)
+                    return
+                except Exception as e:
+                    logger.error(
+                        "Episode health check failed",
+                        extra={
+                            "event": "episode_health_check_failed",
+                            "episode_id": episode_id,
+                            "error": str(e),
+                        },
+                    )
+                    self.episode_manager.mark_episode_failed_creation(episode_id, f"Health check failed: {e}")
+                    await self._cleanup_failed_episode_environment(episode_id)
+                    return
+            else:
                 logger.info(
-                    "Episode health checks passed",
+                    "No sandbox environment for episode - skipping health checks",
                     extra={
-                        "event": "episode_health_check_passed",
+                        "event": "episode_health_check_skipped",
                         "episode_id": episode_id,
                     },
                 )
-            except asyncio.TimeoutError:
-                error_msg = "Health check exceeded 200s timeout"
-                logger.error(
-                    "Episode health check timed out",
-                    extra={
-                        "event": "episode_health_check_timeout",
-                        "episode_id": episode_id,
-                        "timeout_seconds": 200,
-                    },
-                )
-                self.episode_manager.mark_episode_failed_creation(episode_id, error_msg)
-                await self._cleanup_failed_episode_environment(episode_id)
-                return
-            except Exception as e:
-                logger.error(
-                    "Episode health check failed",
-                    extra={
-                        "event": "episode_health_check_failed",
-                        "episode_id": episode_id,
-                        "error": str(e),
-                    },
-                )
-                self.episode_manager.mark_episode_failed_creation(episode_id, f"Health check failed: {e}")
-                await self._cleanup_failed_episode_environment(episode_id)
-                return
 
             # Generate prompts
             try:
@@ -1818,20 +1846,32 @@ class SessionManager:
                 return
 
             # Copy initial files to execution container (after health checks pass)
-            try:
-                await self.execution_manager.copy_initial_files_to_episode(episode_id, task)
-            except Exception as e:
-                logger.error(
-                    "Initial files copy failed",
+            # Only if task has initial files AND episode has a sandbox environment
+            if task.initial_files and has_env:
+                try:
+                    await self.execution_manager.copy_initial_files_to_episode(episode_id, task)
+                except Exception as e:
+                    logger.error(
+                        "Initial files copy failed",
+                        extra={
+                            "event": "episode_initial_files_copy_failed",
+                            "episode_id": episode_id,
+                            "error": str(e),
+                        },
+                    )
+                    self.episode_manager.mark_episode_failed_creation(episode_id, f"File copy failed: {e}")
+                    await self._cleanup_failed_episode_environment(episode_id)
+                    return
+            elif not has_env:
+                logger.warning(
+                    "No sandbox environment for episode - skipping initial file copy"
+                    " (task has initial_files configured)",
                     extra={
-                        "event": "episode_initial_files_copy_failed",
+                        "event": "episode_initial_files_copy_skipped_no_environment",
                         "episode_id": episode_id,
-                        "error": str(e),
+                        "initial_files_count": len(task.initial_files) if task.initial_files else 0,
                     },
                 )
-                self.episode_manager.mark_episode_failed_creation(episode_id, f"File copy failed: {e}")
-                await self._cleanup_failed_episode_environment(episode_id)
-                return
 
             # Configure evaluation
             try:
@@ -2810,7 +2850,7 @@ class SessionManager:
                     await asyncio.wait_for(self.shutdown_event.wait(), timeout=self.cleanup_interval_minutes * 60)
                     # If shutdown event is set, exit the loop
                     break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # Timeout is expected - continue with next cleanup cycle
                     continue
 

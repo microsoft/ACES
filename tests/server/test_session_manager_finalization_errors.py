@@ -146,6 +146,10 @@ class TestFinalizationErrors:
         }
         manager.episode_manager.configure_for_task = AsyncMock()
 
+        # Ensure file copy path is reached: task needs initial_files and episode environment must exist
+        mock_task.initial_files = {"test_file.txt": "test content"}
+        manager.execution_manager.has_episode_environment = MagicMock(return_value=True)
+
         # Make file copy fail
         manager.execution_manager.copy_initial_files_to_episode.side_effect = Exception("File copy error")
 
@@ -197,6 +201,53 @@ class TestFinalizationErrors:
             assert "Evaluation configuration failed" in call_args[0][1]
 
             mock_cleanup.assert_called_once_with("episode_123")
+
+    @pytest.mark.asyncio
+    async def test_no_sandbox_environment_skips_health_and_file_copy(self, session_manager_with_episode, mock_task):
+        """Test finalization when has_episode_environment() returns False.
+
+        Health checks and file copies should be skipped, but the episode
+        should still reach READY state.
+        """
+        manager, session, episode = session_manager_with_episode
+
+        # Make has_episode_environment return False (permanent sandbox path)
+        manager.execution_manager.has_episode_environment = MagicMock(return_value=False)
+
+        # Make prompt generation succeed
+        manager.benchmark_manager.prompt_generator.render_agent_prompts_for_task.return_value = {
+            "instruction": "test instruction"
+        }
+
+        # Make episode manager config succeed
+        manager.episode_manager.configure_for_task = AsyncMock()
+
+        # Configure evaluation to succeed
+        manager.evaluation_manager.configure_for_task = MagicMock()
+
+        # Mock mark_episode_ready
+        manager.episode_manager.mark_episode_ready = MagicMock()
+
+        await manager._finalize_episode_creation(
+            episode_id="episode_123",
+            session_id=session.session_id,
+            task_id="test_task",
+            task=mock_task
+        )
+
+        await asyncio.sleep(0.1)
+
+        # Health checks should NOT have been called
+        manager.execution_manager.wait_for_episode_healthy.assert_not_called()
+
+        # File copy should NOT have been called
+        manager.execution_manager.copy_initial_files_to_episode.assert_not_called()
+
+        # Episode should NOT be marked as failed
+        manager.episode_manager.mark_episode_failed_creation.assert_not_called()
+
+        # Episode should still be marked as ready
+        manager.episode_manager.mark_episode_ready.assert_called_once_with("episode_123")
 
     @pytest.mark.asyncio
     async def test_episode_start_logging_failure_nonfatal(self, session_manager_with_episode, mock_task):

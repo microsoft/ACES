@@ -101,26 +101,27 @@ class DockerExecutor(CommandExecutor[P]):
         # Pass config correctly to __init__ (not as docker_config)
         return cls(sandbox_manager=sandbox_manager, config=config, **merged_kwargs)
 
-    def get_episode_environment(self, episode_id: str) -> "ComposeOrchestrator":
+    def get_episode_environment(self, episode_id: str) -> "ComposeOrchestrator | None":
         """
-        Retrieve Docker environment orchestrator for the given episode.
+        Retrieve Docker environment orchestrator for the given episode, or None if not available.
 
         Args:
             episode_id: Episode identifier
 
         Returns:
-            ComposeOrchestrator for the episode
-
-        Raises:
-            SandboxExecutionError: If episode environment cannot be retrieved
+            ComposeOrchestrator for the episode, or None if no sandbox environment exists
         """
         try:
             environment = self._sandbox_manager.get_episode_environment(episode_id)
             if not environment:
-                raise SandboxExecutionError(
-                    f"No environment found for episode {episode_id}. Environment must be created before execution."
+                logger.debug(
+                    "No sandbox environment found for episode",
+                    extra={
+                        "event": "docker_environment_not_found",
+                        "episode_id": episode_id,
+                    },
                 )
-            return environment
+            return environment  # May be None — caller should check or use target_container
         except Exception as exc:
             log_operation_failure(
                 logger,
@@ -129,6 +130,84 @@ class DockerExecutor(CommandExecutor[P]):
                 episode_id=episode_id,
             )
             raise SandboxExecutionError(f"Failed to get episode environment: {exc}") from exc
+
+    def _get_target_container(self) -> str | None:
+        """Get the target container name from executor config, if configured."""
+        return self._config.target_container
+
+    async def _execute_on_target_container(
+        self, command: list[str], timeout: int, target_container: str
+    ) -> CommandResult:
+        """Execute a command directly on a named target container, bypassing episode-based resolution.
+
+        Used when no per-episode sandbox environment exists (permanent sandbox mode).
+
+        Args:
+            command: Command arguments to execute
+            timeout: Execution timeout in seconds
+            target_container: Name of the Docker container to target
+
+        Returns:
+            CommandResult with execution results
+        """
+        from ..sandbox.compose_orchestrator import ComposeOrchestrator
+
+        orchestrator = ComposeOrchestrator()
+        return await orchestrator.execute_command(command=command, timeout=timeout, target_container=target_container)
+
+    async def _execute_in_container(
+        self,
+        episode_id: str,
+        command: list[str],
+        timeout: int,
+    ) -> CommandResult:
+        """Execute a command in the appropriate container for the episode.
+
+        Routes to either the episode's ComposeOrchestrator environment or
+        directly to a named target_container (permanent sandbox mode).
+
+        Args:
+            episode_id: Episode identifier for environment lookup
+            command: Command arguments to execute
+            timeout: Execution timeout in seconds
+
+        Returns:
+            CommandResult with execution output
+
+        Raises:
+            SandboxExecutionError: If neither environment nor target_container is available
+        """
+        target_container = self._get_target_container()
+        environment = self.get_episode_environment(episode_id)
+
+        if environment is None and target_container is None:
+            raise SandboxExecutionError(
+                f"No sandbox environment and no target_container configured for episode {episode_id}"
+            )
+
+        if environment is not None:
+            return await environment.execute_command(
+                command=command, timeout=timeout, target_container=target_container
+            )
+
+        assert target_container is not None  # guaranteed by guard above
+        return await self._execute_on_target_container(command, timeout, target_container)
+
+    def _get_container_id(self, episode_id: str) -> str:
+        """Get a display container ID for logging/metadata.
+
+        Args:
+            episode_id: Episode identifier
+
+        Returns:
+            Short container ID string for display purposes
+        """
+        environment = self.get_episode_environment(episode_id)
+        if environment is not None:
+            container = environment.get_execution_container()
+            return container.id[:12] if container else "unknown"
+        target_container = self._get_target_container()
+        return f"direct:{target_container}" if target_container else "unknown"
 
     def ensure_container_ready(self, episode_id: str) -> bool:
         """
@@ -142,8 +221,10 @@ class DockerExecutor(CommandExecutor[P]):
         """
         try:
             environment = self.get_episode_environment(episode_id)
-            # The sandbox manager handles container readiness internally
-            return environment is not None
+            if environment is not None:
+                return True
+            # For permanent sandbox mode, check if target container is configured
+            return self._get_target_container() is not None
         except Exception as exc:
             logger.error(
                 "Container readiness check failed",

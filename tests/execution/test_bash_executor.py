@@ -14,6 +14,7 @@ from saber.server.base import CommandResult
 from saber.server.execution.base import BashParameters, ExecutionContext, ParameterType, ValidationResult
 from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
+from saber.server.execution.models import ExecutorConfig
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from saber.server.execution.utils.security_validator import SecurityValidator
 
@@ -290,7 +291,7 @@ class TestBashExecutorIntegration:
 
         # Verify Docker environment was called correctly (shell mode)
         env.execute_command.assert_called_once_with(
-            command=["/bin/sh", "-c", "echo 'Hello from Docker!'"], timeout=30  # Timeout from fixture config
+            command=["/bin/sh", "-c", "echo 'Hello from Docker!'"], timeout=30, target_container=None
         )
 
     @pytest.mark.asyncio
@@ -311,7 +312,7 @@ class TestBashExecutorIntegration:
         assert result.data["stdout"] == "hello world\n"
 
         # Verify shell command was constructed correctly
-        env.execute_command.assert_called_once_with(command=["/bin/sh", "-c", "echo hello world"], timeout=30)
+        env.execute_command.assert_called_once_with(command=["/bin/sh", "-c", "echo hello world"], timeout=30, target_container=None)
 
     @pytest.mark.asyncio
     async def test_execute_docker_integration_failure(self, docker_bash_tool_with_env, mock_sandbox_manager_with_env):
@@ -388,3 +389,135 @@ class TestBashExecutorIntegration:
         assert result.success is False
         assert "Docker command execution failed" in result.error
         assert "Docker daemon not available" in result.error
+
+
+class TestBashExecutorTargetContainer:
+    """Tests for target_container execution path in BashExecutor."""
+
+    @pytest.fixture
+    def mock_sandbox_manager_no_env(self) -> MagicMock:
+        """Create a SandboxEnvironmentManager that returns None for episode environments."""
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {
+            "image": "saber/sandbox:latest",
+            "network_mode": "none",
+            "read_only_root": True,
+            "user": "tooluser:tooluser",
+        }
+        manager.get_episode_environment.return_value = None
+        return manager
+
+    @pytest.fixture
+    def bash_executor_with_target_container(self, mock_sandbox_manager_no_env: MagicMock) -> BashExecutor:
+        """Create a BashExecutor with target_container configured and no episode environment."""
+        config = ExecutorConfig(timeout=30.0, target_container="saber-excytin-sandbox")
+        return BashExecutor(
+            sandbox_manager=mock_sandbox_manager_no_env,
+            config=config,
+            allowed_commands=["echo", "cat"],
+        )
+
+    @pytest.fixture
+    def mock_sandbox_manager_with_env_for_tc(self) -> MagicMock:
+        """Create a SandboxEnvironmentManager that returns a valid environment."""
+        env = MagicMock()
+        container_mock = MagicMock()
+        container_mock.id = "container123456789"
+        env.get_execution_container.return_value = container_mock
+        env.execute_command = MagicMock()
+
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {
+            "image": "saber/sandbox:latest",
+            "network_mode": "none",
+            "read_only_root": True,
+            "user": "tooluser:tooluser",
+        }
+        manager.get_episode_environment.return_value = env
+        return manager
+
+    @pytest.fixture
+    def bash_executor_with_target_container_and_env(
+        self, mock_sandbox_manager_with_env_for_tc: MagicMock
+    ) -> BashExecutor:
+        """Create a BashExecutor with target_container configured AND a valid episode environment."""
+        config = ExecutorConfig(timeout=30.0, target_container="saber-excytin-sandbox")
+        return BashExecutor(
+            sandbox_manager=mock_sandbox_manager_with_env_for_tc,
+            config=config,
+            allowed_commands=["echo", "cat"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_with_target_container_no_episode_env(
+        self, bash_executor_with_target_container: BashExecutor
+    ) -> None:
+        """Test execution via direct ComposeOrchestrator when no episode environment exists."""
+        command_result = CommandResult(exit_code=0, stdout="sandbox output\n", stderr="", execution_time=0.3)
+
+        with patch(
+            "saber.server.execution.sandbox.compose_orchestrator.ComposeOrchestrator"
+        ) as mock_orch_cls:
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute_command = AsyncMock(return_value=command_result)
+            mock_orch_cls.return_value = mock_orchestrator
+
+            parameters = BashParameters(command="echo hello")
+            context = ExecutionContext(episode_id="ep_no_env", session_id="sess_1")
+
+            result = await bash_executor_with_target_container(parameters, context)
+
+        assert result.success is True
+        assert result.data["stdout"] == "sandbox output\n"
+        mock_orchestrator.execute_command.assert_called_once_with(
+            command=["/bin/sh", "-c", "echo hello"],
+            timeout=30,
+            target_container="saber-excytin-sandbox",
+        )
+        assert result.metadata["container_id"] == "direct:saber-excytin-sandbox"
+
+    @pytest.mark.asyncio
+    async def test_execute_with_target_container_and_episode_env(
+        self,
+        bash_executor_with_target_container_and_env: BashExecutor,
+        mock_sandbox_manager_with_env_for_tc: MagicMock,
+    ) -> None:
+        """Test that target_container is passed through to environment.execute_command when both exist."""
+        command_result = CommandResult(exit_code=0, stdout="env output\n", stderr="", execution_time=0.2)
+
+        env = mock_sandbox_manager_with_env_for_tc.get_episode_environment.return_value
+        env.execute_command = AsyncMock(return_value=command_result)
+
+        parameters = BashParameters(command="echo hello")
+        context = ExecutionContext(episode_id="ep_with_env", session_id="sess_2")
+
+        result = await bash_executor_with_target_container_and_env(parameters, context)
+
+        assert result.success is True
+        env.execute_command.assert_called_once_with(
+            command=["/bin/sh", "-c", "echo hello"],
+            timeout=30,
+            target_container="saber-excytin-sandbox",
+        )
+        # container_id comes from environment, not from direct path
+        assert result.metadata["container_id"] == "container123"
+
+    @pytest.mark.asyncio
+    async def test_execute_no_environment_no_target_container_raises(
+        self, mock_sandbox_manager_no_env: MagicMock
+    ) -> None:
+        """Test that SandboxExecutionError is raised when neither environment nor target_container exists."""
+        config = ExecutorConfig(timeout=30.0)  # No target_container
+        executor = BashExecutor(
+            sandbox_manager=mock_sandbox_manager_no_env,
+            config=config,
+            allowed_commands=["echo"],
+        )
+
+        parameters = BashParameters(command="echo hello")
+        context = ExecutionContext(episode_id="ep_nothing", session_id="sess_3")
+
+        result = await executor(parameters, context)
+
+        assert result.success is False
+        assert "No sandbox environment and no target_container configured" in result.error

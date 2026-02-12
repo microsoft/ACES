@@ -244,8 +244,6 @@ class BashExecutor(DockerExecutor):
             pipes, redirects, etc.) are handled naturally by the shell.
         """
         try:
-            # Get Docker environment for episode
-            environment = self.get_episode_environment(context.episode_id)
             timeout = int(self.get_timeout())
 
             # 🔥 BASH TIMEOUT LOGGING: Log command start with timeout info
@@ -263,7 +261,7 @@ class BashExecutor(DockerExecutor):
             command_args = self._build_command(params)
 
             try:
-                result = await environment.execute_command(command=command_args, timeout=timeout)
+                result = await self._execute_in_container(context.episode_id, command_args, timeout)
                 log_operation_success(
                     logger,
                     "bash_command_execution",
@@ -298,8 +296,7 @@ class BashExecutor(DockerExecutor):
             tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code)
 
             # Add execution metadata
-            container = environment.get_execution_container()
-            container_id = container.id[:12] if container else "unknown"
+            container_id = self._get_container_id(context.episode_id)
 
             tool_result.metadata.update(
                 {

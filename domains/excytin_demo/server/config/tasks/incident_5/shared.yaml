@@ -12,4 +12,11 @@ initial_context:
     connection_example: "mysql -h incident-5-db --skip-ssl -u admin -padmin env_monitor_db"
 
 prompt_template_file: "excytin_demo.md"
-sandbox_environment: "excytin_sandbox"
+
+# Executors target the permanent sandbox container (no per-episode sandbox needed)
+execution_config:
+  executors:
+    bash:
+      target_container: saber-excytin-sandbox
+    python:
+      target_container: saber-excytin-sandbox

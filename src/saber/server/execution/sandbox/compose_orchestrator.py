@@ -859,15 +859,21 @@ class ComposeOrchestrator:
         return execution_services[0]
 
     async def execute_command(
-        self, command: list[str], timeout: int = 30, working_dir: str | None = None
+        self,
+        command: list[str],
+        timeout: int = 30,
+        working_dir: str | None = None,
+        target_container: str | None = None,
     ) -> CommandResult:
         """
-        Execute command in designated execution service container.
+        Execute command in designated execution service container or a named target container.
 
         Args:
             command: Command to execute as list of strings
             timeout: Command timeout in seconds
             working_dir: Working directory for command (optional)
+            target_container: Optional container name to execute against directly,
+                bypassing episode-based container resolution
 
         Returns:
             CommandResult with execution details
@@ -875,25 +881,33 @@ class ComposeOrchestrator:
         Raises:
             RuntimeError: If execution service not available or command fails
         """
-        # Fail-fast validations
-        if not self.execution_service_name:
-            raise RuntimeError("No execution service identified. Environment must be started first.")
+        if target_container is not None:
+            # Direct container execution — bypass episode-based resolution
+            try:
+                container = await asyncio.to_thread(self.docker_client.containers.get, target_container)
+            except Exception as e:
+                raise RuntimeError(f"Target container '{target_container}' not found or not running: {e}") from e
+        else:
+            # Standard episode-based container resolution
+            # Fail-fast validations
+            if not self.execution_service_name:
+                raise RuntimeError("No execution service identified. Environment must be started first.")
 
-        if not self.episode_id:
-            raise RuntimeError(
-                "Episode ID required for container resolution but not set in orchestrator. "
-                "This indicates an improper orchestrator initialization."
-            )
+            if not self.episode_id:
+                raise RuntimeError(
+                    "Episode ID required for container resolution but not set in orchestrator. "
+                    "This indicates an improper orchestrator initialization."
+                )
 
-        # Get execution container using episode-aware resolution (offload to thread pool)
-        container = await self.get_execution_container_async()
-        if not container:
-            expected_name = self._get_actual_container_name(self.execution_service_name)
-            raise RuntimeError(
-                f"Execution container '{expected_name}' not found or not running. "
-                f"Episode: {self.episode_id}, Service: {self.execution_service_name}. "
-                f"Ensure environment is started and container is healthy."
-            )
+            # Get execution container using episode-aware resolution (offload to thread pool)
+            container = await self.get_execution_container_async()
+            if not container:
+                expected_name = self._get_actual_container_name(self.execution_service_name)
+                raise RuntimeError(
+                    f"Execution container '{expected_name}' not found or not running. "
+                    f"Episode: {self.episode_id}, Service: {self.execution_service_name}. "
+                    f"Ensure environment is started and container is healthy."
+                )
 
         logger.debug(
             "Container command execution started",
@@ -957,7 +971,7 @@ class ComposeOrchestrator:
 
             return result
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Command exceeded timeout - kill and return timeout error
             execution_time = time.time() - start_time
             logger.error(
@@ -1229,7 +1243,7 @@ class ComposeOrchestrator:
 
             try:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 process.kill()
                 await process.wait()
                 error_msg = f"Timeout stopping environment {compose_file_path}"

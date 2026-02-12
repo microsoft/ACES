@@ -1548,15 +1548,22 @@ class DomainOrchestrator:
             print(line, flush=True)
         # Don't fail - just warn, as sometimes healthchecks take longer
 
-    def _stop_server_subprocess(self, domain: str, timeout: int = 10) -> bool:
+    def _stop_server_subprocess(self, domain: str, timeout: int = 30) -> bool:
         """Stop server subprocess gracefully.
+
+        The server handles its own cleanup (stopping Docker containers, cleaning up
+        networks, shutting down MCP, etc.) when it receives SIGTERM. The default
+        timeout of 30s allows enough time for the server's shutdown handler to
+        complete and for the process to exit. Progress is reported every 5 seconds.
 
         Args:
             domain: Domain name
-            timeout: Seconds to wait for graceful shutdown
+            timeout: Seconds to wait for graceful shutdown (default 180s to allow
+                for Docker container stop operations)
 
         Returns:
-            True if stopped successfully, False otherwise
+            True if the server stopped gracefully within the timeout,
+            False if it had to be force-killed or failed to stop.
         """
         domain_root = self._domains_root / domain
         pid_file = domain_root / "server" / "logs" / f"{domain}.pid"
@@ -1601,21 +1608,47 @@ class DomainOrchestrator:
             # Send SIGTERM for graceful shutdown
             os.kill(pid, signal.SIGTERM)
 
-            # Wait for process to terminate
-            for _ in range(timeout * 10):
+            # Wait for process to terminate, reporting progress every 5 seconds
+            graceful = False
+            report_interval = 5  # seconds between progress reports
+            start_time = time.monotonic()
+            next_report = start_time + report_interval
+
+            while True:
+                elapsed = time.monotonic() - start_time
+                if elapsed >= timeout:
+                    break
                 try:
                     os.kill(pid, 0)  # Check if process exists
-                    time.sleep(0.1)
                 except OSError:
                     # Process terminated
+                    graceful = True
                     break
-            else:
+
+                now = time.monotonic()
+                if now >= next_report:
+                    elapsed_int = int(now - start_time)
+                    print(
+                        f"  ⏳ Waiting for server cleanup... ({elapsed_int}s/{timeout}s)",
+                        flush=True,
+                    )
+                    next_report = now + report_interval
+
+                time.sleep(0.1)
+
+            if not graceful:
                 # Still running after timeout - force kill
-                print("Server did not stop gracefully, sending SIGKILL...", flush=True)
+                print(
+                    f"Server did not stop gracefully within {timeout}s, sending SIGKILL...",
+                    flush=True,
+                )
                 os.kill(pid, signal.SIGKILL)
                 time.sleep(0.5)
 
-            print("✓ Server stopped", flush=True)
+            if graceful:
+                print("✓ Server stopped gracefully", flush=True)
+            else:
+                print("✓ Server stopped (forced)", flush=True)
 
             # Cleanup
             if domain in DomainOrchestrator._running_servers:
@@ -1623,7 +1656,7 @@ class DomainOrchestrator:
             self._close_log_file(domain)
             if pid_file.exists():
                 pid_file.unlink()
-            return True
+            return graceful
 
         except ProcessLookupError:
             # Process already gone
@@ -1653,14 +1686,26 @@ class DomainOrchestrator:
             print(f"Would stop server subprocess for domain {domain}")
             return
 
-        # Stop server subprocess
-        self._stop_server_subprocess(domain)
+        # Stop server subprocess - returns True if graceful shutdown completed
+        stopped_gracefully = self._stop_server_subprocess(domain)
 
-        # Also clean up any sandbox/permanent environment containers
-        self._cleanup_sandbox_containers(domain)
+        # Only clean up containers as a safety net if the server was force-killed.
+        # During graceful shutdown the server handles its own Docker cleanup
+        # (permanent environments, networks, etc.), so this is redundant in that case.
+        if not stopped_gracefully:
+            self._cleanup_sandbox_containers(domain)
+        else:
+            # Verify no containers are still running (paranoia check)
+            self._cleanup_sandbox_containers(domain, quiet=True)
 
-    def _cleanup_sandbox_containers(self, domain: str) -> None:
-        """Clean up sandbox and permanent environment containers for a domain."""
+    def _cleanup_sandbox_containers(self, domain: str, quiet: bool = False) -> None:
+        """Clean up sandbox and permanent environment containers for a domain.
+
+        Args:
+            domain: Domain name
+            quiet: If True, only print output when containers are actually found
+                and removed (used for post-graceful-shutdown verification).
+        """
         # Clean up permanent environment containers if any
         permanent_project_name = f"{domain}_permanent_environment"
 
@@ -1681,16 +1726,24 @@ class DomainOrchestrator:
 
             container_ids = find_result.stdout.strip().split()
             if container_ids and container_ids[0]:
-                print(f"Stopping {len(container_ids)} permanent environment container(s)...", flush=True)
+                if not quiet:
+                    print(f"Stopping {len(container_ids)} permanent environment container(s)...", flush=True)
                 for container_id in container_ids:
                     try:
                         subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=30)
                     except Exception:
                         pass
-                print("✓ Permanent environment containers stopped", flush=True)
+                if quiet:
+                    print(
+                        f"⚠ Found {len(container_ids)} leftover container(s) after graceful shutdown, cleaned up",
+                        flush=True,
+                    )
+                else:
+                    print("✓ Permanent environment containers stopped", flush=True)
 
         except Exception as e:
-            print(f"Warning: Failed to clean up permanent environment containers: {e}", flush=True)
+            if not quiet:
+                print(f"Warning: Failed to clean up permanent environment containers: {e}", flush=True)
 
     def build_domain(
         self, domain: str, image_filter: str | None = None, dry_run: bool = False, rebuild_mode: bool = True

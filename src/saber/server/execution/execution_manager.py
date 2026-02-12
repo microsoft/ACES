@@ -466,6 +466,33 @@ class ExecutionManager:
             session_id: Optional session identifier
             target_episode_id: Optional episode ID to attach network to
         """
+        # Always ensure sandbox manager is initialized (needed for executor factory)
+        if self._sandbox_environment_manager is None:
+            domain = self._configuration.get("domain")
+            if not domain:
+                raise ValueError(
+                    "Cannot initialize sandbox environment manager: 'domain' not found in execution configuration. "
+                    "Ensure the domain is set in the execution configuration "
+                    "or call initialize_permanent_environment_manager() first."
+                )
+            server_dir = Path(self._config_dir).parent
+            sandbox_config = {
+                "domain": domain,
+                "config_dir": self._config_dir,
+                "logs_dir": str(server_dir / "logs"),
+                "enable_container_logging": True,
+            }
+            self._sandbox_environment_manager = SandboxEnvironmentManager(sandbox_config)
+            self._executor_factory = None
+
+            logger.info(
+                "Sandbox environment manager initialized (async)",
+                extra={
+                    "event": "sandbox_manager_initialized_async",
+                    "episode_id": episode_id,
+                },
+            )
+
         # Resolve environment if specified in task
         if task.environment:
             logger.info(
@@ -477,26 +504,6 @@ class ExecutionManager:
                     "session_id": session_id,  # DEBUG: Log session_id
                 },
             )
-
-            # Ensure sandbox manager is initialized
-            if self._sandbox_environment_manager is None:
-                server_dir = Path(self._config_dir).parent
-                sandbox_config = {
-                    "domain": "excytin_demo",
-                    "config_dir": self._config_dir,
-                    "logs_dir": str(server_dir / "logs"),
-                    "enable_container_logging": True,
-                }
-                self._sandbox_environment_manager = SandboxEnvironmentManager(sandbox_config)
-                self._executor_factory = None
-
-                logger.info(
-                    "Sandbox environment manager initialized (async)",
-                    extra={
-                        "event": "sandbox_manager_initialized_async",
-                        "episode_id": episode_id,
-                    },
-                )
 
             # Create episode environment WITHOUT health checks
             log_operation_start(
@@ -532,10 +539,10 @@ class ExecutionManager:
                 )
                 raise
         else:
-            logger.warning(
-                "Task has no sandbox environment",
+            logger.info(
+                "Task has no sandbox environment configured - episode will use direct container execution",
                 extra={
-                    "event": "task_environment_missing_async",
+                    "event": "task_no_sandbox_environment",
                     "episode_id": episode_id,
                 },
             )
@@ -584,6 +591,12 @@ class ExecutionManager:
                 "allowed_executors": allowed_executors,
             },
         )
+
+    def has_episode_environment(self, episode_id: str) -> bool:
+        """Check if an episode has an active sandbox environment."""
+        if self._sandbox_environment_manager is None:
+            return False
+        return self._sandbox_environment_manager.get_episode_environment(episode_id) is not None
 
     async def wait_for_episode_healthy(self, episode_id: str, timeout_seconds: int = 180) -> None:
         """

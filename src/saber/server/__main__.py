@@ -204,6 +204,7 @@ async def start_server(args: argparse.Namespace) -> None:
     """Start the SABER server with the given arguments."""
     session_manager: SessionManager | None = None
     shutdown_event = asyncio.Event()
+    _shutdown_initiated = False
 
     async def shutdown_handler() -> None:
         """Handle graceful shutdown."""
@@ -225,10 +226,40 @@ async def start_server(args: argparse.Namespace) -> None:
                 )
         shutdown_event.set()
 
+        # Safety net: force-exit if uvicorn/MCP servers don't terminate promptly.
+        # After SessionManager.shutdown() completes (including Redis stop), the
+        # only remaining work is cancelling the uvicorn tasks. Uvicorn's
+        # capture_signals() re-raises SIGTERM through a chain of signal handlers,
+        # and _wait_tasks_to_complete() defaults to timeout_graceful_shutdown=None
+        # (wait forever). This watchdog ensures the process actually exits.
+        # Placed AFTER shutdown() so all cleanup (Redis, Docker, etc.) completes
+        # before the countdown begins.
+        import threading
+
+        def _force_exit() -> None:
+            import time
+
+            time.sleep(10)
+            logger.warning(
+                "Force-exiting: uvicorn/async cleanup did not complete within 10s after shutdown",
+                extra={"event": "server_force_exit"},
+            )
+            os._exit(0)
+
+        threading.Thread(target=_force_exit, daemon=True).start()
+
     # Setup signal handlers for graceful shutdown using asyncio
     loop = asyncio.get_running_loop()
 
     def signal_handler() -> None:
+        nonlocal _shutdown_initiated
+        if _shutdown_initiated:
+            logger.info(
+                "Duplicate shutdown signal received; ignoring (shutdown already in progress)",
+                extra={"event": "server_shutdown_signal_duplicate"},
+            )
+            return
+        _shutdown_initiated = True
         logger.info(
             "Signal received; scheduling shutdown",
             extra={"event": "server_shutdown_signal_received"},

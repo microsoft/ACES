@@ -11,7 +11,7 @@ import pytest
 
 from saber.server.base import CommandResult
 from saber.server.execution.base import ParameterType, ValidationResult, ExecutionContext, PythonParameters
-from saber.server.execution.models import PythonExecutorConfig
+from saber.server.execution.models import ExecutorConfig, PythonExecutorConfig
 from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.executors.standard_registry.python_executor import PythonExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
@@ -266,3 +266,122 @@ import numpy as np
 
         result = python_executor.validate_parameters(parameters)
         assert result.valid is True
+
+
+class TestPythonExecutorTargetContainer:
+    """Tests for target_container execution path in PythonExecutor."""
+
+    @pytest.fixture
+    def mock_sandbox_manager_no_env(self) -> MagicMock:
+        """Create a SandboxEnvironmentManager that returns None for episode environments."""
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {
+            "image": "saber/sandbox:latest",
+            "network_mode": "none",
+            "read_only_root": True,
+            "user": "tooluser:tooluser",
+        }
+        manager.get_episode_environment.return_value = None
+        return manager
+
+    @pytest.fixture
+    def python_executor_with_target_container(self, mock_sandbox_manager_no_env: MagicMock) -> PythonExecutor:
+        """Create a PythonExecutor with target_container configured and no episode environment."""
+        config = ExecutorConfig(timeout=30.0, target_container="saber-excytin-sandbox")
+        return PythonExecutor(sandbox_manager=mock_sandbox_manager_no_env, config=config)
+
+    @pytest.fixture
+    def mock_sandbox_manager_with_env_for_tc(self) -> MagicMock:
+        """Create a SandboxEnvironmentManager that returns a valid environment."""
+        env = MagicMock()
+        container_mock = MagicMock()
+        container_mock.id = "container123456789"
+        env.get_execution_container.return_value = container_mock
+        env.execute_command = MagicMock()
+
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {
+            "image": "saber/sandbox:latest",
+            "network_mode": "none",
+            "read_only_root": True,
+            "user": "tooluser:tooluser",
+        }
+        manager.get_episode_environment.return_value = env
+        return manager
+
+    @pytest.fixture
+    def python_executor_with_target_container_and_env(
+        self, mock_sandbox_manager_with_env_for_tc: MagicMock
+    ) -> PythonExecutor:
+        """Create a PythonExecutor with target_container configured AND a valid episode environment."""
+        config = ExecutorConfig(timeout=30.0, target_container="saber-excytin-sandbox")
+        return PythonExecutor(sandbox_manager=mock_sandbox_manager_with_env_for_tc, config=config)
+
+    @pytest.mark.asyncio
+    async def test_execute_with_target_container_no_episode_env(
+        self, python_executor_with_target_container: PythonExecutor
+    ) -> None:
+        """Test execution via direct ComposeOrchestrator when no episode environment exists."""
+        command_result = CommandResult(exit_code=0, stdout="hello\n", stderr="", execution_time=0.3)
+
+        with patch(
+            "saber.server.execution.sandbox.compose_orchestrator.ComposeOrchestrator"
+        ) as mock_orch_cls:
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute_command = AsyncMock(return_value=command_result)
+            mock_orch_cls.return_value = mock_orchestrator
+
+            parameters = PythonParameters(code="print('hello')")
+            context = ExecutionContext(episode_id="ep_test")
+
+            result = await python_executor_with_target_container(parameters, context)
+
+        assert result.success is True
+        assert result.data["stdout"] == "hello\n"
+        # PythonExecutor calls execute_command twice: create script file + run script
+        assert mock_orchestrator.execute_command.call_count == 2
+        for call in mock_orchestrator.execute_command.call_args_list:
+            assert call.kwargs["target_container"] == "saber-excytin-sandbox"
+        assert result.metadata["container_id"] == "direct:saber-excytin-sandbox"
+
+    @pytest.mark.asyncio
+    async def test_execute_with_target_container_and_episode_env(
+        self,
+        python_executor_with_target_container_and_env: PythonExecutor,
+        mock_sandbox_manager_with_env_for_tc: MagicMock,
+    ) -> None:
+        """Test that target_container is passed through to environment.execute_command when both exist."""
+        create_result = CommandResult(exit_code=0, stdout="", stderr="", execution_time=0.1)
+        execute_result = CommandResult(exit_code=0, stdout="env output\n", stderr="", execution_time=0.5)
+
+        env = mock_sandbox_manager_with_env_for_tc.get_episode_environment.return_value
+        env.execute_command = AsyncMock(side_effect=[create_result, execute_result])
+
+        parameters = PythonParameters(code="print('hello')")
+        context = ExecutionContext(episode_id="ep_with_env")
+
+        result = await python_executor_with_target_container_and_env(parameters, context)
+
+        assert result.success is True
+        assert result.data["stdout"] == "env output\n"
+        assert env.execute_command.call_count == 2
+        for call in env.execute_command.call_args_list:
+            assert call.kwargs["target_container"] == "saber-excytin-sandbox"
+        # container_id comes from environment, not from direct path
+        assert result.metadata["container_id"] == "container123"
+
+    @pytest.mark.asyncio
+    async def test_execute_no_environment_no_target_container_raises(
+        self, mock_sandbox_manager_no_env: MagicMock
+    ) -> None:
+        """Test error result when neither environment nor target_container exists."""
+        config = ExecutorConfig(timeout=30.0)  # No target_container
+        executor = PythonExecutor(sandbox_manager=mock_sandbox_manager_no_env, config=config)
+
+        parameters = PythonParameters(code="print('hello')")
+        context = ExecutionContext(episode_id="ep_nothing")
+
+        result = await executor(parameters, context)
+
+        assert result.success is False
+        assert "No sandbox environment and no target_container configured" in result.error

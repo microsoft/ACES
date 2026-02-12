@@ -32,6 +32,7 @@ from .....logging_config import LogCategory, get_saber_logger
 from .....models.rest.websocket_messages import TranscriptOperation
 from ....base import CommandResult
 from ...base import ExecutionContext, ExecutorParameters, InjectPromptParameters, Parameter, ParameterType
+from ...exceptions import SandboxExecutionError
 from ...models import ExecutorConfig
 from ...sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 from ..base_executors import normalize_context, normalize_parameters
@@ -244,6 +245,11 @@ class InjectPromptExecutor(DockerExecutor):
 
             # Get Docker environment for episode
             environment = self.get_episode_environment(ctx.episode_id)
+            if environment is None:
+                raise SandboxExecutionError(
+                    f"No sandbox environment available for episode {ctx.episode_id}. "
+                    "InjectPromptExecutor requires a sandbox environment."
+                )
 
             # Resolve target episode ID from orchestration metadata
             target_episode_id = await self._resolve_target_episode_id(ctx)

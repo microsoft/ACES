@@ -185,15 +185,13 @@ class WriteExecutor(DockerExecutor):
                 content_length=len(params.file_text),
             )
 
-            # Get Docker environment for episode
-            environment = self.get_episode_environment(context.episode_id)
             timeout = int(self.get_timeout())
 
             # Execute the create command
             command_args = self._build_command(params)
 
             try:
-                result = await environment.execute_command(command=command_args, timeout=timeout)
+                result = await self._execute_in_container(context.episode_id, command_args, timeout)
 
                 if result.exit_code == 0:
                     log_operation_success(

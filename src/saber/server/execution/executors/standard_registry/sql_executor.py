@@ -331,8 +331,6 @@ class SQLExecutor(DockerExecutor):
             All execution happens in Docker containers.
         """
         try:
-            # Get Docker environment for episode
-            environment = self.get_episode_environment(context.episode_id)
             timeout = int(self.get_timeout())
 
             # Get SQL query
@@ -363,7 +361,7 @@ class SQLExecutor(DockerExecutor):
 
             # Execute the command
             try:
-                result = await environment.execute_command(command=command_args, timeout=timeout)
+                result = await self._execute_in_container(context.episode_id, command_args, timeout)
                 log_operation_success(
                     logger,
                     "sql_query_execution",
@@ -398,8 +396,7 @@ class SQLExecutor(DockerExecutor):
             tool_result = self.parse_output(result.stdout, result.stderr, result.exit_code, query)
 
             # Add execution metadata
-            container = environment.get_execution_container()
-            container_id = container.id[:12] if container else "unknown"
+            container_id = self._get_container_id(context.episode_id)
 
             tool_result.metadata.update(
                 {

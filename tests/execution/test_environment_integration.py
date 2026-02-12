@@ -532,7 +532,7 @@ services:
         os.chdir(temp_directory)
 
         try:
-            # Domain is now required - test that it works when provided
+            # Domain is now required - SandboxConfig.from_dict validates this
             config = {"domain": "excytin_demo"}
             manager = SandboxEnvironmentManager(config)
             assert manager.domain == "excytin_demo"

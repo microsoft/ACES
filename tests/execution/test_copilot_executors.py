@@ -14,6 +14,7 @@ from saber.server.execution.base import (
     CreateParameters,
     EditParameters,
     ExecutionContext,
+    GlobParameters,
     GrepParameters,
     ParameterType,
     ValidationResult,
@@ -25,6 +26,7 @@ from saber.server.execution.executors.copilot_registry.view_executor import View
 from saber.server.execution.executors.copilot_registry.write_executor import WriteExecutor
 from saber.server.execution.executors.copilot_registry.edit_executor import EditExecutor
 from saber.server.execution.executors.copilot_registry.grep_executor import GrepExecutor
+from saber.server.execution.executors.copilot_registry.glob_executor import GlobExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 
@@ -639,3 +641,65 @@ class TestCopilotExecutorIntegration:
         # Should raise SandboxExecutionError when environment not found
         with pytest.raises(SandboxExecutionError):
             await view_executor.execute(params, context=context)
+
+
+class TestNoneEnvironmentErrorPaths:
+    """Tests verifying executors raise SandboxExecutionError when no sandbox environment exists."""
+
+    @pytest.fixture
+    def mock_sandbox_manager_no_env(self) -> MagicMock:
+        """Create a mock SandboxEnvironmentManager that returns None for get_episode_environment."""
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {"image": "saber/sandbox:latest"}
+        manager.get_episode_environment.return_value = None
+        return manager
+
+    @pytest.fixture
+    def context(self) -> ExecutionContext:
+        """Create a standard execution context for testing."""
+        return ExecutionContext(episode_id="test-episode")
+
+    @pytest.mark.asyncio
+    async def test_view_execute_raises_when_no_environment(self, mock_sandbox_manager_no_env: MagicMock, context: ExecutionContext) -> None:
+        """Test that ViewExecutor raises SandboxExecutionError when no sandbox environment."""
+        executor = ViewExecutor(sandbox_manager=mock_sandbox_manager_no_env)
+        params = ViewParameters(path="/workspace/test.py")
+
+        with pytest.raises(SandboxExecutionError, match="No sandbox environment"):
+            await executor.execute(params=params, context=context)
+
+    @pytest.mark.asyncio
+    async def test_write_execute_raises_when_no_environment(self, mock_sandbox_manager_no_env: MagicMock, context: ExecutionContext) -> None:
+        """Test that WriteExecutor raises SandboxExecutionError when no sandbox environment."""
+        executor = WriteExecutor(sandbox_manager=mock_sandbox_manager_no_env)
+        params = CreateParameters(path="/workspace/new_file.py", file_text="print('hello')")
+
+        with pytest.raises(SandboxExecutionError, match="No sandbox environment"):
+            await executor.execute(params=params, context=context)
+
+    @pytest.mark.asyncio
+    async def test_edit_execute_raises_when_no_environment(self, mock_sandbox_manager_no_env: MagicMock, context: ExecutionContext) -> None:
+        """Test that EditExecutor raises SandboxExecutionError when no sandbox environment."""
+        executor = EditExecutor(sandbox_manager=mock_sandbox_manager_no_env)
+        params = EditParameters(path="/workspace/test.py", old_str="def foo():", new_str="def bar():")
+
+        with pytest.raises(SandboxExecutionError, match="No sandbox environment"):
+            await executor.execute(params=params, context=context)
+
+    @pytest.mark.asyncio
+    async def test_grep_execute_raises_when_no_environment(self, mock_sandbox_manager_no_env: MagicMock, context: ExecutionContext) -> None:
+        """Test that GrepExecutor raises SandboxExecutionError when no sandbox environment."""
+        executor = GrepExecutor(sandbox_manager=mock_sandbox_manager_no_env)
+        params = GrepParameters(pattern="def test_")
+
+        with pytest.raises(SandboxExecutionError, match="No sandbox environment"):
+            await executor.execute(params=params, context=context)
+
+    @pytest.mark.asyncio
+    async def test_glob_execute_raises_when_no_environment(self, mock_sandbox_manager_no_env: MagicMock, context: ExecutionContext) -> None:
+        """Test that GlobExecutor raises SandboxExecutionError when no sandbox environment."""
+        executor = GlobExecutor(sandbox_manager=mock_sandbox_manager_no_env)
+        params = GlobParameters(pattern="**/*.py")
+
+        with pytest.raises(SandboxExecutionError, match="No sandbox environment"):
+            await executor.execute(params=params, context=context)

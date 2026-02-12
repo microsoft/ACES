@@ -1561,6 +1561,12 @@ class SessionRestAPI:
             },
         )
 
-        config = uvicorn.Config(app=self.app, host=self.host, port=self.port, log_level="info")
+        config = uvicorn.Config(
+            app=self.app,
+            host=self.host,
+            port=self.port,
+            log_level="info",
+            timeout_graceful_shutdown=5,
+        )
         server = uvicorn.Server(config)
         await server.serve()

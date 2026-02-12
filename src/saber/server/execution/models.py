@@ -7,9 +7,7 @@ and centralized field definitions.
 """
 
 from dataclasses import dataclass, field, fields, replace
-from typing import Any, Protocol, TypeVar, runtime_checkable
-
-from typing_extensions import Self
+from typing import Any, Protocol, Self, TypeVar, runtime_checkable
 
 
 @runtime_checkable
@@ -92,6 +90,7 @@ class ExecutorConfig:
     """
 
     timeout: float = 300.0
+    target_container: str | None = None  # Named container for permanent sandbox routing
 
     def with_overrides(self, overrides: dict[str, Any]) -> Self:
         """

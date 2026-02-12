@@ -325,7 +325,7 @@ class TestHelperMethods:
     """Test internal helper methods."""
 
     def test_default_concurrency_returns_sensible_default(self):
-        """Test that default_concurrency returns None (defers to Inspect AI's --max-samples)."""
+        """Test that default_concurrency returns None (uses Inspect AI default)."""
         assert SABERSandboxEnvironment.default_concurrency() is None
 
     def test_config_files_returns_empty_list(self):
@@ -379,17 +379,3 @@ class TestResetState:
         assert instance._sample_id is None
         assert instance._mcp_client is None
         # Note: _handler is not reset by _reset_state, it's managed separately
-
-
-class TestSessionManagement:
-    """Test session creation and termination.
-
-    Note: Tests for _create_session_for_task and _terminate_session_sync
-    have been removed as these methods were extracted to SessionLifecycleManager
-    in previous refactoring phases.
-    """
-
-    # TODO: Move these tests to tests/inspect_ai/server/test_session_lifecycle_manager.py
-    # The methods being tested (_create_session_for_task, _terminate_session_sync)
-    # were extracted to SessionLifecycleManager during Phase 3 refactoring.
-    pass

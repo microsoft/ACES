@@ -354,9 +354,6 @@ class PythonExecutor(DockerExecutor):
             CommandResult with execution results
         """
         try:
-            # Get Docker environment
-            environment = self.get_episode_environment(context.episode_id)
-
             # Validate Python code
             code_validation = self.validate_python_code(params.code)
             if not code_validation.valid:
@@ -394,7 +391,7 @@ class PythonExecutor(DockerExecutor):
                 has_template=bool(params.template),
             )
             create_script_cmd = ["sh", "-c", f"cd {working_dir} && cat > {script_path} << 'EOF'\n{script_content}\nEOF"]
-            create_result = await environment.execute_command(command=create_script_cmd, timeout=timeout)
+            create_result = await self._execute_in_container(context.episode_id, create_script_cmd, timeout)
 
             if create_result.exit_code != 0:
                 log_operation_failure(
@@ -418,7 +415,7 @@ class PythonExecutor(DockerExecutor):
 
             # Execute Python script
             python_cmd = ["sh", "-c", f"cd {working_dir} && python3 {script_path}"]
-            result = await environment.execute_command(command=python_cmd, timeout=timeout)
+            result = await self._execute_in_container(context.episode_id, python_cmd, timeout)
 
             log_operation_success(
                 logger,
@@ -432,8 +429,7 @@ class PythonExecutor(DockerExecutor):
             tool_result = self.parse_python_output(result.stdout, result.stderr, result.exit_code, script_path)
 
             # Add execution metadata
-            container = environment.get_execution_container()
-            container_id = container.id[:12] if container else "unknown"
+            container_id = self._get_container_id(context.episode_id)
 
             tool_result.metadata.update(
                 {

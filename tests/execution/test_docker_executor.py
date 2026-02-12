@@ -36,19 +36,20 @@ class MockDockerParams:
         )
 
 
+# Module-level concrete executor for target_container tests
+class ConcreteDockerExecutor(DockerExecutor):
+    """Concrete implementation of DockerExecutor for testing."""
+
+    @classmethod
+    def get_parameters_class(cls) -> type[ExecutorParameters]:
+        return MockDockerParams
+
+    async def execute(self, parameters, context):
+        return CommandResult.success_result(data="test_execution")
+
+
 class TestDockerExecutor:
     """Test cases for DockerExecutor base class."""
-
-    # Create a concrete implementation for testing
-    class ConcreteDockerExecutor(DockerExecutor):
-        """Concrete implementation of DockerExecutor for testing."""
-
-        @classmethod
-        def get_parameters_class(cls) -> type[ExecutorParameters]:
-            return MockDockerParams
-
-        async def execute(self, parameters, context):
-            return CommandResult.success_result(data="test_execution")
 
     @pytest.fixture
     def mock_sandbox_manager(self):
@@ -67,7 +68,7 @@ class TestDockerExecutor:
     def docker_executor(self, mock_sandbox_manager):
         """Create a concrete Docker executor instance for testing."""
         config = ExecutorConfig(timeout=60.0)
-        return self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+        return ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
     @pytest.fixture
     def mock_docker_environment(self):
@@ -79,7 +80,7 @@ class TestDockerExecutor:
     def test_initialization_success(self, mock_sandbox_manager):
         """Test successful initialization with sandbox manager."""
         config = ExecutorConfig(timeout=120.0)
-        executor = self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         assert executor._sandbox_manager == mock_sandbox_manager
         assert executor.get_timeout() == 120.0
@@ -89,14 +90,14 @@ class TestDockerExecutor:
         # Docker-specific configs beyond timeout are not part of ExecutorConfig
         # This test now just verifies basic initialization with timeout
         config = ExecutorConfig(timeout=60.0)
-        executor = self.ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
 
         assert executor._config.timeout == 60.0
 
     def test_initialization_without_sandbox_manager(self):
         """Test that initialization fails without sandbox manager."""
         with pytest.raises(SandboxExecutionError, match="sandbox_manager is required"):
-            self.ConcreteDockerExecutor(sandbox_manager=None)
+            ConcreteDockerExecutor(sandbox_manager=None)
 
     def test_get_episode_environment_existing(self, docker_executor, mock_docker_environment):
         """Test retrieving existing episode environment."""
@@ -118,8 +119,8 @@ class TestDockerExecutor:
 
         docker_executor._sandbox_manager.get_episode_environment.return_value = None
 
-        with pytest.raises(SandboxExecutionError, match="No environment found for episode"):
-            docker_executor.get_episode_environment(episode_id)
+        result = docker_executor.get_episode_environment(episode_id)
+        assert result is None
 
     def test_get_episode_environment_failure(self, docker_executor):
         """Test episode environment retrieval failure."""
@@ -129,22 +130,6 @@ class TestDockerExecutor:
 
         with pytest.raises(SandboxExecutionError, match="Failed to get episode environment"):
             docker_executor.get_episode_environment(episode_id)
-
-    def test_ensure_container_ready_success(self, docker_executor, mock_docker_environment):
-        """Test successful container readiness check."""
-        episode_id = "test_episode_123"
-
-        docker_executor._sandbox_manager.get_episode_environment.return_value = mock_docker_environment
-
-        result = docker_executor.ensure_container_ready(episode_id)
-
-        assert result is True
-
-    def test_ensure_container_ready_failure(self, docker_executor):
-        """Test container readiness check failure."""
-        episode_id = "test_episode_123"
-
-        docker_executor._sandbox_manager.get_episode_environment.side_effect = Exception("Container error")
 
     def test_ensure_container_ready_success(self, docker_executor, mock_docker_environment):
         """Test successful container readiness check."""
@@ -355,3 +340,201 @@ class TestDockerExecutor:
         except Exception:
             # If there are import or other issues, that's also fine
             pass
+
+
+class TestDockerExecutorTargetContainer:
+    """Tests for _get_target_container() on DockerExecutor."""
+
+    @pytest.fixture
+    def mock_sandbox_manager(self) -> MagicMock:
+        """Create a mock SandboxEnvironmentManager."""
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {"image": "saber/sandbox:latest"}
+        return manager
+
+    def test_get_target_container_from_config(self, mock_sandbox_manager: MagicMock) -> None:
+        """Test that _get_target_container returns the configured value."""
+        config = ExecutorConfig(timeout=60.0, target_container="saber-excytin-sandbox")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        assert executor._get_target_container() == "saber-excytin-sandbox"
+
+    def test_get_target_container_none_when_not_configured(self, mock_sandbox_manager: MagicMock) -> None:
+        """Test that _get_target_container returns None when key is absent from config."""
+        config = ExecutorConfig(timeout=60.0)
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        assert executor._get_target_container() is None
+
+    def test_get_target_container_none_when_no_config(self, mock_sandbox_manager: MagicMock) -> None:
+        """Test that _get_target_container returns None when config is None."""
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=None)
+
+        assert executor._get_target_container() is None
+
+    def test_ensure_container_ready_with_target_container(self, mock_sandbox_manager: MagicMock) -> None:
+        """Test ensure_container_ready returns True when target_container is configured but no episode env."""
+        mock_sandbox_manager.get_episode_environment.return_value = None
+        config = ExecutorConfig(timeout=60.0, target_container="saber-excytin-sandbox")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        assert executor.ensure_container_ready("ep_no_env") is True
+
+    def test_ensure_container_ready_no_env_no_target_container(self, mock_sandbox_manager: MagicMock) -> None:
+        """Test ensure_container_ready returns False when neither env nor target_container exist."""
+        mock_sandbox_manager.get_episode_environment.return_value = None
+        config = ExecutorConfig(timeout=60.0)
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        assert executor.ensure_container_ready("ep_nothing") is False
+
+    @pytest.mark.asyncio
+    async def test_execute_on_target_container(self, mock_sandbox_manager: MagicMock) -> None:
+        """Test _execute_on_target_container delegates to ComposeOrchestrator."""
+        config = ExecutorConfig(timeout=60.0, target_container="saber-excytin-sandbox")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        expected_result = CommandResult(exit_code=0, stdout="ok\n", stderr="", execution_time=0.1)
+
+        with patch(
+            "saber.server.execution.sandbox.compose_orchestrator.ComposeOrchestrator"
+        ) as mock_orch_cls:
+            mock_orchestrator = MagicMock()
+            mock_orchestrator.execute_command = AsyncMock(return_value=expected_result)
+            mock_orch_cls.return_value = mock_orchestrator
+
+            result = await executor._execute_on_target_container(
+                ["/bin/sh", "-c", "echo ok"], 30, "saber-excytin-sandbox"
+            )
+
+        assert result.exit_code == 0
+        assert result.stdout == "ok\n"
+        mock_orchestrator.execute_command.assert_called_once_with(
+            command=["/bin/sh", "-c", "echo ok"],
+            timeout=30,
+            target_container="saber-excytin-sandbox",
+        )
+
+
+class TestExecuteInContainer:
+    """Tests for centralized _execute_in_container() routing method."""
+
+    @pytest.fixture
+    def mock_sandbox_manager(self) -> MagicMock:
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {"image": "saber/sandbox:latest"}
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_environment_when_present(self, mock_sandbox_manager: MagicMock) -> None:
+        """When episode has an environment, delegate to environment.execute_command with target_container."""
+        env = MagicMock()
+        expected = CommandResult(exit_code=0, stdout="ok\n", stderr="", execution_time=0.1)
+        env.execute_command = AsyncMock(return_value=expected)
+        mock_sandbox_manager.get_episode_environment.return_value = env
+
+        config = ExecutorConfig(timeout=60.0, target_container="my-container")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        result = await executor._execute_in_container("ep1", ["/bin/sh", "-c", "echo ok"], 30)
+
+        assert result is expected
+        env.execute_command.assert_called_once_with(
+            command=["/bin/sh", "-c", "echo ok"], timeout=30, target_container="my-container"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_target_container_when_no_environment(self, mock_sandbox_manager: MagicMock) -> None:
+        """When no episode environment exists but target_container is set, delegate to _execute_on_target_container."""
+        mock_sandbox_manager.get_episode_environment.return_value = None
+        config = ExecutorConfig(timeout=60.0, target_container="saber-sandbox")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        expected = CommandResult(exit_code=0, stdout="direct\n", stderr="", execution_time=0.2)
+        with patch(
+            "saber.server.execution.sandbox.compose_orchestrator.ComposeOrchestrator"
+        ) as mock_orch_cls:
+            mock_orch = MagicMock()
+            mock_orch.execute_command = AsyncMock(return_value=expected)
+            mock_orch_cls.return_value = mock_orch
+
+            result = await executor._execute_in_container("ep2", ["echo", "hi"], 15)
+
+        assert result is expected
+        mock_orch.execute_command.assert_called_once_with(
+            command=["echo", "hi"], timeout=15, target_container="saber-sandbox"
+        )
+
+    @pytest.mark.asyncio
+    async def test_raises_when_neither_env_nor_target_container(self, mock_sandbox_manager: MagicMock) -> None:
+        """When neither environment nor target_container is available, raise SandboxExecutionError."""
+        mock_sandbox_manager.get_episode_environment.return_value = None
+        config = ExecutorConfig(timeout=60.0)  # no target_container
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        with pytest.raises(SandboxExecutionError, match="No sandbox environment and no target_container configured"):
+            await executor._execute_in_container("ep3", ["echo"], 10)
+
+    @pytest.mark.asyncio
+    async def test_environment_takes_precedence_over_target_container(self, mock_sandbox_manager: MagicMock) -> None:
+        """When environment AND target_container both exist, environment.execute_command is used."""
+        env = MagicMock()
+        expected = CommandResult(exit_code=0, stdout="via env\n", stderr="", execution_time=0.1)
+        env.execute_command = AsyncMock(return_value=expected)
+        mock_sandbox_manager.get_episode_environment.return_value = env
+
+        config = ExecutorConfig(timeout=60.0, target_container="fallback-container")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        result = await executor._execute_in_container("ep4", ["ls"], 5)
+
+        assert result is expected
+        env.execute_command.assert_called_once_with(
+            command=["ls"], timeout=5, target_container="fallback-container"
+        )
+
+
+class TestGetContainerId:
+    """Tests for _get_container_id() display helper."""
+
+    @pytest.fixture
+    def mock_sandbox_manager(self) -> MagicMock:
+        manager = MagicMock(spec=SandboxEnvironmentManager)
+        manager.sandbox_config = {"image": "saber/sandbox:latest"}
+        return manager
+
+    def test_returns_container_id_from_environment(self, mock_sandbox_manager: MagicMock) -> None:
+        """When episode has an environment with a container, return truncated container ID."""
+        env = MagicMock()
+        container = MagicMock()
+        container.id = "abcdef1234567890"
+        env.get_execution_container.return_value = container
+        mock_sandbox_manager.get_episode_environment.return_value = env
+
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager)
+        assert executor._get_container_id("ep1") == "abcdef123456"
+
+    def test_returns_unknown_when_environment_has_no_container(self, mock_sandbox_manager: MagicMock) -> None:
+        """When environment exists but get_execution_container returns None, return 'unknown'."""
+        env = MagicMock()
+        env.get_execution_container.return_value = None
+        mock_sandbox_manager.get_episode_environment.return_value = env
+
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager)
+        assert executor._get_container_id("ep2") == "unknown"
+
+    def test_returns_direct_target_container_when_no_environment(self, mock_sandbox_manager: MagicMock) -> None:
+        """When no environment but target_container is set, return 'direct:<name>'."""
+        mock_sandbox_manager.get_episode_environment.return_value = None
+        config = ExecutorConfig(timeout=60.0, target_container="my-sandbox")
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        assert executor._get_container_id("ep3") == "direct:my-sandbox"
+
+    def test_returns_unknown_when_neither(self, mock_sandbox_manager: MagicMock) -> None:
+        """When no environment and no target_container, return 'unknown'."""
+        mock_sandbox_manager.get_episode_environment.return_value = None
+        config = ExecutorConfig(timeout=60.0)  # no target_container
+        executor = ConcreteDockerExecutor(sandbox_manager=mock_sandbox_manager, config=config)
+
+        assert executor._get_container_id("ep4") == "unknown"

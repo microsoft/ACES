@@ -91,13 +91,11 @@ networks:
         assert len(manager.episode_compose_files) == 0
 
     def test_init_default_domain(self):
-        """Test initialization with domain specified."""
-        # Domain is now required in sandbox config
-        config = {"domain": "excytin_demo"}
+        """Test initialization raises error when domain is not specified."""
+        config = {}
 
-        manager = SandboxEnvironmentManager(config)
-
-        assert manager.domain == "excytin_demo"
+        with pytest.raises(SandboxExecutionError, match="Invalid sandbox configuration"):
+            SandboxEnvironmentManager(config)
 
     def test_is_ready_status(self, manager):
         """Test is_ready status tracking."""

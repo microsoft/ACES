@@ -265,15 +265,13 @@ class GrepExecutor(DockerExecutor):
                 type=params.file_type,
             )
 
-            # Get Docker environment for episode
-            environment = self.get_episode_environment(context.episode_id)
             timeout = int(self.get_timeout())
 
             # Execute the grep command
             command_args = self._build_command(params)
 
             try:
-                result = await environment.execute_command(command=command_args, timeout=timeout)
+                result = await self._execute_in_container(context.episode_id, command_args, timeout)
 
                 # Count results
                 output = result.stdout or ""
