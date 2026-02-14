@@ -9,7 +9,7 @@ Components:
 - MessageSerializer: Protocol for harness-specific message serialization
 - WebSocketConnectionManager: Connection lifecycle management
 - WebSocketEventProcessor: Event listening and processing
-- GenericTranscriptSyncOperations: Push/pull sync operations
+- GenericTranscriptSyncOperations: Push sync operations
 
 Example usage:
     from saber.client.transcript import TranscriptSyncClient, MessageSerializer
@@ -33,14 +33,12 @@ Example usage:
         rest_url="http://localhost:8000",
         serializer=MyMessageSerializer(),
     ) as client:
-        messages = await client.sync_transcript()
         await client.push_message(response_msg)
 """
 
 from .client import TranscriptSyncClient
 from .connection import WebSocketConnectionManager
 from .event_processor import WebSocketEventProcessor
-from .models import SyncResult
 from .protocols import MessageSerializer
 from .sync_operations import GenericTranscriptSyncOperations
 from .utils import is_websocket_closed
@@ -50,8 +48,6 @@ __all__ = [
     "TranscriptSyncClient",
     # Protocol
     "MessageSerializer",
-    # Result model
-    "SyncResult",
     # Components (for advanced usage)
     "WebSocketConnectionManager",
     "WebSocketEventProcessor",

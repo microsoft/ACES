@@ -1,35 +1,32 @@
 """Tests for WebSocketTranscriptSyncingModelWrapper.
 
 Tests cover:
-- Pull enabled/disabled behavior (blue team vs red team)
 - Push enabled/disabled behavior
-- Skip first iteration logic
-- Bidirectional sync scenarios
+- Push-only generate flow
+- Connection establishment
+- WebSocket listener event handling
+- State machine event handling
+- Cleanup
 """
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
 import asyncio
 import json
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from inspect_ai.model import ChatCompletionChoice, ChatMessageAssistant, ModelOutput
 
 from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
-from saber.models.rest.websocket_config import WebSocketConfig, PushConfig, PullConfig
+from saber.models.rest.websocket_config import PullConfig, PushConfig, WebSocketConfig
 from saber.models.rest.websocket_messages import (
-    PushAckData,
-    PushAckMessage,
     StateEventData,
     StateEventMessage,
-    SyncMode,
-    SyncResponseData,
-    SyncResponseMessage,
     TranscriptErrorData,
     TranscriptErrorMessage,
     TranscriptErrorType,
     TranscriptOperation,
-    TranscriptVersion,
 )
-from inspect_ai.model import ChatMessageAssistant, ModelOutput, ChatCompletionChoice
 
 
 def _ts() -> str:
@@ -62,148 +59,12 @@ def mock_websocket():
     return ws
 
 
-class TestPullEnabledBehavior:
-    """Test pull.enabled controls whether wrapper waits for modification events."""
-
-    @pytest.mark.asyncio
-    async def test_pull_enabled_waits_for_events(self, mock_base_model, mock_websocket):
-        """Test that pull.enabled=True causes wrapper to wait for WebSocket events."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)  # Disable push to simplify test
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            # Don't skip, so it should wait
-            ws_config=config,
-        )
-
-        # Mock WebSocket connection
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Put a mock event in the queue (simulate transcript_modified)
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=2,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="WAITING_FOR_USER"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        # Put a mock sync_response in the queue
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
-                full_transcript=[{"role": "user", "content": "Test"}],
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        input_messages = [{"role": "user", "content": "Test"}]
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate(input_messages)
-
-        # Assert - should have sent sync_request because pull is enabled
-        assert mock_websocket.send.called
-        sync_request_calls = [
-            call for call in mock_websocket.send.call_args_list
-            if "sync_request" in str(call)
-        ]
-        assert len(sync_request_calls) > 0, "Should have sent sync_request when pull.enabled=True"
-
-    @pytest.mark.asyncio
-    async def test_pull_disabled_skips_waiting(self, mock_base_model, mock_websocket):
-        """Test that pull.enabled=False skips waiting for WebSocket events (red team mode)."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=False),  # Disabled - should skip
-            push=PushConfig(enabled=False)  # Also disable push to simplify
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            # Don't skip first iteration
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        input_messages = [{"role": "user", "content": "Test"}]
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate(input_messages)
-
-        # Assert - should NOT have sent sync_request because pull is disabled
-        if mock_websocket.send.called:
-            sync_request_calls = [
-                call for call in mock_websocket.send.call_args_list
-                if "sync_request" in str(call)
-            ]
-            assert len(sync_request_calls) == 0, "Should NOT send sync_request when pull.enabled=False"
-
-        # Base model should still be called
-        assert mock_base_model.generate.called
-
-    @pytest.mark.asyncio
-    async def test_pull_disabled_no_sync_on_any_call(self, mock_base_model, mock_websocket):
-        """Test that pull.enabled=False prevents sync on all generate() calls."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=False),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            # Skip first, but pull is disabled anyway
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-
-        # Act - call generate twice
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "user", "content": "First"}])
-            await wrapper.generate([{"role": "user", "content": "Second"}])
-
-        # Assert - no sync requests on either call
-        if mock_websocket.send.called:
-            sync_request_calls = [
-                call for call in mock_websocket.send.call_args_list
-                if "sync_request" in str(call)
-            ]
-            assert len(sync_request_calls) == 0
-
-
 class TestPushEnabledBehavior:
     """Test push.enabled controls whether wrapper pushes messages to server."""
 
     @pytest.mark.asyncio
     async def test_push_enabled_sends_messages(self, mock_base_model, mock_websocket):
-        """Test that push.enabled=True causes wrapper to push messages via WebSocket."""
+        """Test that push.enabled=True causes wrapper to push messages via client API."""
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=False),  # Disable pull to simplify
@@ -215,32 +76,26 @@ class TestPushEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Put a mock push_ack in the queue
-        await wrapper._event_queue.put(PushAckMessage(
-            type="push_ack",
-            data=PushAckData(version=1, checksum="abc123"),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # Act - mock client's public push methods
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=True,
+            ) as mock_push_new,
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ) as mock_push_msg,
+        ):
             await wrapper.generate([{"role": "user", "content": "Test"}])
 
-        # Assert - should have sent push_message
-        assert mock_websocket.send.called
-        push_message_calls = [
-            call for call in mock_websocket.send.call_args_list
-            if "push_message" in str(call)
-        ]
-        assert len(push_message_calls) > 0, "Should send push_message when push.enabled=True"
+        # Assert - should have called push methods
+        mock_push_new.assert_called_once()
+        mock_push_msg.assert_called_once()
+        assert mock_push_msg.call_args.kwargs.get("context") == "output_push"
 
     @pytest.mark.asyncio
     async def test_push_disabled_skips_sending(self, mock_base_model, mock_websocket):
@@ -256,31 +111,32 @@ class TestPushEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # Act - mock client's public push methods
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=False,
+            ) as mock_push_new,
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ) as mock_push_msg,
+        ):
             await wrapper.generate([{"role": "user", "content": "Test"}])
 
-        # Assert - should NOT have sent push_message
-        if mock_websocket.send.called:
-            push_message_calls = [
-                call for call in mock_websocket.send.call_args_list
-                if "push_message" in str(call)
-            ]
-            assert len(push_message_calls) == 0, "Should NOT send push_message when push.enabled=False"
+        # Assert - push methods still called (client handles push.enabled internally)
+        mock_push_new.assert_called_once()
+        mock_push_msg.assert_called_once()
 
         # Base model should still be called
         assert mock_base_model.generate.called
 
     @pytest.mark.asyncio
     async def test_push_disabled_updates_local_state(self, mock_base_model, mock_websocket):
-        """Test that push.enabled=False still updates local state (version, checksum)."""
+        """Test that push.enabled=False still updates local messages via client."""
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=False),
@@ -292,20 +148,16 @@ class TestPushEnabledBehavior:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-        initial_version = wrapper._local_version
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # Act - let push_messages_if_new return False (push disabled), but let
+        # push_message run with real implementation (which tracks locally)
+        with patch.object(wrapper._client, 'push_messages_if_new', new_callable=AsyncMock, return_value=False):
             await wrapper.generate([{"role": "user", "content": "Test"}])
 
-        # Assert - local version should increment even when push disabled
-        assert wrapper._local_version == initial_version + 1
-        assert len(wrapper._local_messages) == 1
+        # Assert - local messages should have the assistant output
+        assert len(wrapper._client.local_messages) == 1
 
 
 class TestRedTeamScenario:
@@ -325,119 +177,29 @@ class TestRedTeamScenario:
             session_id="session-123",
             episode_id="red-episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Mock push_ack
-        await wrapper._event_queue.put(PushAckMessage(
-            type="push_ack",
-            data=PushAckData(version=1, checksum="abc123"),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # Act - mock client's public push methods
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=True,
+            ) as mock_push_new,
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ) as mock_push_msg,
+        ):
             await wrapper.generate([{"role": "user", "content": "Inject this"}])
 
         # Assert
-        # 1. Should NOT wait for sync (no sync_request)
-        sync_request_calls = [
-            call for call in mock_websocket.send.call_args_list
-            if "sync_request" in str(call)
-        ]
-        assert len(sync_request_calls) == 0, "Red team should not send sync_request"
+        # 1. SHOULD call push methods
+        mock_push_new.assert_called_once()
+        mock_push_msg.assert_called_once()
 
-        # 2. SHOULD push message (push_message)
-        push_message_calls = [
-            call for call in mock_websocket.send.call_args_list
-            if "push_message" in str(call)
-        ]
-        assert len(push_message_calls) > 0, "Red team should send push_message"
-
-        # 3. Base model should be called immediately (no blocking)
+        # 2. Base model should be called immediately (no blocking)
         assert mock_base_model.generate.called
-
-
-class TestBlueTeamScenario:
-    """Test blue team scenario: pull enabled, push enabled."""
-
-    @pytest.mark.asyncio
-    async def test_blue_team_config(self, mock_base_model, mock_websocket):
-        """Test blue team configuration (waits for modifications and pushes)."""
-        # Arrange - Blue team config
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=True)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="blue-episode-456",
-            rest_url="http://localhost:8000",
-            # Blue team waits from first iteration
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Mock transcript_modified event
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=2,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="waiting"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        # Mock sync_response with actual transcript (not empty)
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
-                full_transcript=[{"role": "user", "content": "Test message"}],
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        # Mock push_ack
-        await wrapper._event_queue.put(PushAckMessage(
-            type="push_ack",
-            data=PushAckData(version=3, checksum="def456"),
-            id="msg-3",
-            timestamp=_ts(),
-        ))
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "user", "content": "Help me"}])
-
-        # Assert
-        # 1. Should wait for sync (sync_request sent)
-        sync_request_calls = [
-            call for call in mock_websocket.send.call_args_list
-            if "sync_request" in str(call)
-        ]
-        assert len(sync_request_calls) > 0, "Blue team should send sync_request"
-
-        # 2. Should push response (push_message sent)
-        push_message_calls = [
-            call for call in mock_websocket.send.call_args_list
-            if "push_message" in str(call)
-        ]
-        assert len(push_message_calls) > 0, "Blue team should send push_message"
 
 
 class TestBothDisabledScenario:
@@ -457,21 +219,28 @@ class TestBothDisabledScenario:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-
         input_messages = [{"role": "user", "content": "Test"}]
 
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # Act - mock client's public push methods
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=False,
+            ) as mock_push_new,
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ) as mock_push_msg,
+        ):
             result = await wrapper.generate(input_messages)
 
         # Assert
-        # 1. No WebSocket communication at all
-        assert not mock_websocket.send.called, "Should not use WebSocket when both disabled"
+        # 1. Push methods called (client handles disabled check internally)
+        mock_push_new.assert_called_once()
+        mock_push_msg.assert_called_once()
 
         # 2. Base model called with original input
         assert mock_base_model.generate.called
@@ -481,132 +250,12 @@ class TestBothDisabledScenario:
         assert result is not None
 
 
-class TestPullFirstCallBehavior:
-    """Test pull behavior on first vs subsequent calls."""
-
-    @pytest.mark.asyncio
-    async def test_first_call_establishes_connection_then_pulls(self, mock_base_model, mock_websocket):
-        """Test that first call establishes connection, then pull.enabled activates."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Setup events for first call (pull.enabled requires events)
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=1,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="waiting"
-            ),
-            id="msg-0",
-            timestamp=_ts(),
-        ))
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                current_version=TranscriptVersion(sequence=1, checksum="abc123"),
-                full_transcript=[{"role": "user", "content": "First from server"}],
-            ),
-            id="msg-0b",
-            timestamp=_ts(),
-        ))
-
-        # Act - First call
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "user", "content": "First"}])
-
-        first_call_count = mock_websocket.send.call_count
-
-        # Setup for second call
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=2,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="waiting"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
-                full_transcript=[{"role": "user", "content": "From server"}],
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        # Act - Second call
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "user", "content": "Second"}])
-
-        second_call_count = mock_websocket.send.call_count
-
-        # Assert - Both calls should send sync_request when pull is enabled
-        assert first_call_count > 0, "First call should send sync_request"
-        assert second_call_count > first_call_count, "Second call should also send sync_request"
-
-    @pytest.mark.asyncio
-    async def test_pull_disabled_never_syncs(self, mock_base_model, mock_websocket):
-        """Test that pull.disabled prevents sync on all calls."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=False),  # Disabled - should never wait
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-
-        # Act - Multiple calls
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "user", "content": "First"}])
-            await wrapper.generate([{"role": "user", "content": "Second"}])
-            await wrapper.generate([{"role": "user", "content": "Third"}])
-
-        # Assert - no sync requests on any call
-        if mock_websocket.send.called:
-            sync_request_calls = [
-                call for call in mock_websocket.send.call_args_list
-                if "sync_request" in str(call)
-            ]
-            assert len(sync_request_calls) == 0, "Pull disabled should prevent all sync requests"
-
-
 class TestPerformanceImplications:
     """Test that enabled/disabled flags actually avoid blocking/communication."""
 
     @pytest.mark.asyncio
-    async def test_pull_disabled_no_blocking(self, mock_base_model, mock_websocket):
-        """Test that pull.enabled=False actually avoids blocking (fast execution)."""
+    async def test_push_disabled_fast_execution(self, mock_base_model, mock_websocket):
+        """Test that push.enabled=False actually avoids blocking (fast execution)."""
         # Arrange
         config = WebSocketConfig(
             pull=PullConfig(enabled=False),
@@ -618,23 +267,29 @@ class TestPerformanceImplications:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-
-        # Act - Time the execution
+        # Act - Time the execution with client push methods mocked
         import time
         start = time.time()
 
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=False,
+            ),
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ),
+        ):
             await wrapper.generate([{"role": "user", "content": "Test"}])
 
         elapsed = time.time() - start
 
         # Assert - should be very fast (< 0.1s) because no blocking
-        assert elapsed < 0.1, f"Pull disabled should be fast, took {elapsed}s"
+        assert elapsed < 0.1, f"Push disabled should be fast, took {elapsed}s"
 
     @pytest.mark.asyncio
     async def test_push_disabled_no_websocket_communication(self, mock_base_model):
@@ -650,15 +305,20 @@ class TestPerformanceImplications:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        # Don't even set up WebSocket - it shouldn't be needed
-        wrapper._websocket = None
-
-        # Act - Should not crash even without WebSocket
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # Act - mock client push methods (client handles push.enabled internally)
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=False,
+            ),
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ),
+        ):
             result = await wrapper.generate([{"role": "user", "content": "Test"}])
 
         # Assert - worked without WebSocket
@@ -679,7 +339,7 @@ class TestWebSocketConnection:
         )
 
         expected = "ws://localhost:8000/api/v1/episodes/episode-456/ws"
-        assert wrapper._ws_url == expected
+        assert wrapper._client._connection._ws_url == expected
 
     def test_build_websocket_url_https(self):
         """Test WebSocket URL construction from HTTPS URL."""
@@ -691,7 +351,7 @@ class TestWebSocketConnection:
         )
 
         expected = "wss://example.com/api/v1/episodes/episode-789/ws"
-        assert wrapper._ws_url == expected
+        assert wrapper._client._connection._ws_url == expected
 
     def test_build_websocket_url_with_path(self):
         """Test WebSocket URL construction preserves base path (for proxies)."""
@@ -703,7 +363,7 @@ class TestWebSocketConnection:
         )
 
         expected = "ws://proxy.com/saber/api/v1/episodes/episode-abc/ws"
-        assert wrapper._ws_url == expected
+        assert wrapper._client._connection._ws_url == expected
 
     def test_build_websocket_url_with_port(self):
         """Test WebSocket URL construction with custom port."""
@@ -715,7 +375,7 @@ class TestWebSocketConnection:
         )
 
         expected = "ws://localhost:9000/api/v1/episodes/episode-def/ws"
-        assert wrapper._ws_url == expected
+        assert wrapper._client._connection._ws_url == expected
 
     @pytest.mark.asyncio
     async def test_context_manager_entry_exit(self, mock_base_model, mock_websocket):
@@ -727,8 +387,8 @@ class TestWebSocketConnection:
             rest_url="http://localhost:8000",
         )
 
-        # Mock connection
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock) as mock_ensure:
+        # Mock connection via client's public ensure_connected
+        with patch.object(wrapper._client, 'ensure_connected', new_callable=AsyncMock) as mock_ensure:
             async with wrapper as w:
                 assert w is wrapper
                 assert mock_ensure.called
@@ -747,18 +407,18 @@ class TestWebSocketConnection:
         )
 
         # Set up WebSocket and listener (needs to be an actual task)
-        wrapper._websocket = mock_websocket
+        wrapper._client._connection._websocket = mock_websocket
 
         async def dummy_listener():
             await asyncio.sleep(10)  # Long sleep - will be cancelled
 
-        wrapper._listener_task = asyncio.create_task(dummy_listener())
+        wrapper._client._events._listener_task = asyncio.create_task(dummy_listener())
 
         # Act
         await wrapper.cleanup()
 
-        # Assert - task should be cancelled
-        assert wrapper._listener_task.cancelled()
+        # Assert - listener task should be cleared after cancel_listener()
+        assert wrapper._client._events._listener_task is None
         assert mock_websocket.close.called
 
     def test_getattr_delegation(self, mock_base_model):
@@ -787,197 +447,15 @@ class TestWebSocketConnection:
         assert "WebSocketTranscriptSyncingModelWrapper" in repr_str
 
 
-class TestSyncModes:
-    """Test full sync vs delta sync behavior."""
-
-    @pytest.mark.asyncio
-    async def test_delta_sync_appends_messages(self, mock_base_model, mock_websocket):
-        """Test that delta sync appends new messages to local transcript."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-        wrapper._local_messages = []  # Start with empty transcript
-
-        # Simulate WebSocket event + sync response
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=1,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="waiting"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.DELTA,
-                delta=[{"role": "user", "content": "New message"}],
-                current_version=TranscriptVersion(sequence=1, checksum="abc123"),
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "system", "content": "Initial"}])
-
-        # Assert - delta should be appended (1 from sync + 1 from generate output since push disabled updates local)
-        # With push disabled, generate() adds the output message to local_messages
-        assert len(wrapper._local_messages) == 2  # delta message + generated message
-        assert wrapper._local_messages[0].content == "New message"  # From delta
-        assert wrapper._local_messages[1].content == "Response from model"  # From generate
-        assert wrapper._local_version == 2  # Incremented by push disabled local update
-
-    @pytest.mark.asyncio
-    async def test_full_sync_replaces_transcript(self, mock_base_model, mock_websocket):
-        """Test that full sync replaces entire local transcript (rewrite detected)."""
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Start with existing messages (that will be replaced)
-        from inspect_ai.model import ChatMessageUser
-        wrapper._local_messages = [ChatMessageUser(content="Old message")]
-
-        # Simulate WebSocket event + full sync response
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=5,
-                operation=TranscriptOperation.RESTART,  # REWRITE doesn't exist, use RESTART
-                modification_count=0,
-                state="waiting"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                full_transcript=[
-                    {"role": "system", "content": "System prompt"},
-                    {"role": "user", "content": "Completely new transcript"},
-                ],
-                current_version=TranscriptVersion(sequence=5, checksum="xyz789"),
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            await wrapper.generate([{"role": "system", "content": "Ignored"}])
-
-        # Assert - old messages should be replaced (2 from full sync + 1 from generate)
-        assert len(wrapper._local_messages) == 3  # 2 from full_transcript + 1 generated
-        assert wrapper._local_messages[0].content == "System prompt"
-        assert wrapper._local_messages[1].content == "Completely new transcript"
-        assert wrapper._local_messages[2].content == "Response from model"  # From generate
-        assert wrapper._local_version == 6  # 5 from sync + 1 from local update
-
-
 class TestErrorHandling:
     """Test error handling and graceful degradation."""
 
     @pytest.mark.asyncio
-    async def test_websocket_timeout_graceful_degradation(self, mock_base_model, mock_websocket):
-        """Test that WebSocket sync works correctly with proper events.
-
-        Note: With unlimited retries, empty queue would hang forever (by design).
-        This test verifies the happy path works correctly.
-        """
-        # Arrange
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Add proper events to queue (required for sync to complete)
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=1,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="waiting"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                current_version=TranscriptVersion(sequence=1, checksum="abc123"),
-                full_transcript=[{"role": "user", "content": "From server"}],
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        input_messages = [{"role": "user", "content": "Original input"}]
-
-        # Act
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            result = await wrapper.generate(input_messages)
-
-        # Assert - should complete with result
-        assert result is not None
-        assert mock_base_model.generate.called
-
-    @pytest.mark.asyncio
     async def test_push_succeeds_on_second_attempt(self, mock_base_model, mock_websocket):
-        """Test that push retries and succeeds on second attempt.
+        """Test that push retries and succeeds via client's push_message.
 
-        Push now retries indefinitely, so this tests that the retry loop works.
-        We test this by mocking push_message_with_retry directly.
+        Push retry logic is handled by the client's push_message method.
+        We test this by mocking push_message directly.
         """
         # Arrange
         config = WebSocketConfig(
@@ -993,36 +471,36 @@ class TestErrorHandling:
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-        wrapper._local_messages = []
-        wrapper._local_version = 0
-
         # Track push attempts
         push_call_count = 0
-        async def mock_push(*args, **kwargs):
+        async def mock_push(message: object, context: str = "message_push") -> bool:
             nonlocal push_call_count
             push_call_count += 1
-            # Update local state to simulate success
-            wrapper._local_messages.append(args[1])  # args[1] is the message
-            wrapper._local_version = 1
             return True
 
-        # Act - patch push_message_with_retry on the _sync component
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with patch.object(wrapper._sync, 'push_message_with_retry', side_effect=mock_push):
-                result = await wrapper.generate([{"role": "user", "content": "Test"}])
+        # Act - patch push_message on client
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=True,
+            ),
+            patch.object(
+                wrapper._client, 'push_message',
+                side_effect=mock_push,
+            ),
+        ):
+            result = await wrapper.generate([{"role": "user", "content": "Test"}])
 
         # Assert - push was called and succeeded
         assert push_call_count == 1
-        assert len(wrapper._local_messages) == 1
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_non_list_input_warning(self, mock_base_model, mock_websocket):
-        """Test that non-list input generates warning but doesn't crash."""
+    async def test_non_list_input_passes_through(self, mock_base_model, mock_websocket):
+        """Test that non-list input passes through to base model."""
         # Arrange
         config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
+            pull=PullConfig(enabled=False),
             push=PushConfig(enabled=False)
         )
 
@@ -1031,27 +509,36 @@ class TestErrorHandling:
             session_id="session-123",
             episode_id="episode-456",
             rest_url="http://localhost:8000",
-
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
-
         # Act - pass string input instead of list
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
+        # push_messages_if_new should NOT be called for string input
+        with (
+            patch.object(
+                wrapper._client, 'push_messages_if_new',
+                new_callable=AsyncMock, return_value=False,
+            ) as mock_push_new,
+            patch.object(
+                wrapper._client, 'push_message',
+                new_callable=AsyncMock, return_value=True,
+            ),
+        ):
             result = await wrapper.generate("String input instead of list")
 
         # Assert - should still work
         assert result is not None
         assert mock_base_model.generate.called
+        # push_messages_if_new should NOT be called for string input
+        mock_push_new.assert_not_called()
 
 
 class TestWebSocketConnectionEstablishment:
-    """Test _ensure_connected and reconnection logic."""
+    """Test ensure_connected and reconnection logic via client."""
 
     @pytest.mark.asyncio
     async def test_ensure_connected_success(self, mock_base_model):
-        """Test successful WebSocket connection establishment."""
+        """Test successful WebSocket connection establishment via client."""
         wrapper = WebSocketTranscriptSyncingModelWrapper(
             base_model=mock_base_model,
             session_id="session-123",
@@ -1064,7 +551,11 @@ class TestWebSocketConnectionEstablishment:
         mock_ws.closed = False
 
         # Mock recv() to return connection confirmation
-        mock_ws.recv = AsyncMock(return_value=json.dumps({"type": "connected", "episode_id": "episode-456", "timestamp": _ts()}))
+        mock_ws.recv = AsyncMock(
+            return_value=json.dumps(
+                {"type": "connected", "episode_id": "episode-456", "timestamp": _ts()}
+            )
+        )
 
         # Mock iteration for listener (empty generator that completes immediately)
         async def mock_messages():
@@ -1074,15 +565,15 @@ class TestWebSocketConnectionEstablishment:
 
         # Use AsyncMock with return_value instead of side_effect
         with patch('websockets.connect', new=AsyncMock(return_value=mock_ws)):
-            await wrapper._ensure_connected()
+            await wrapper._client.ensure_connected()
 
         # Assert - connection established
-        assert wrapper._websocket is not None
-        assert wrapper._listener_task is not None
+        assert wrapper._client._connection._websocket is not None
+        assert wrapper._client._events._listener_task is not None
 
     @pytest.mark.asyncio
     async def test_ensure_connected_already_connected(self, mock_base_model, mock_websocket):
-        """Test that _ensure_connected skips if already connected."""
+        """Test that ensure_connected skips if already connected."""
         wrapper = WebSocketTranscriptSyncingModelWrapper(
             base_model=mock_base_model,
             session_id="session-123",
@@ -1092,11 +583,11 @@ class TestWebSocketConnectionEstablishment:
 
         # Already connected
         mock_websocket.closed = False
-        wrapper._websocket = mock_websocket
+        wrapper._client._connection._websocket = mock_websocket
 
         # Act
         with patch('websockets.connect') as mock_connect:
-            await wrapper._ensure_connected()
+            await wrapper._client.ensure_connected()
 
         # Assert - should not attempt new connection
         assert not mock_connect.called
@@ -1119,7 +610,7 @@ class TestWebSocketConnectionEstablishment:
         # Mock websockets.connect to fail
         with patch('websockets.connect', side_effect=Exception("Connection failed")):
             with pytest.raises(Exception, match="Connection failed"):
-                await wrapper._ensure_connected()
+                await wrapper._client.ensure_connected()
 
     @pytest.mark.asyncio
     async def test_ensure_connected_exponential_backoff(self, mock_base_model):
@@ -1148,8 +639,8 @@ class TestWebSocketConnectionEstablishment:
 
         # All attempts fail
         with patch('websockets.connect', side_effect=failing_connect):
-            with pytest.raises(Exception):
-                await wrapper._ensure_connected()
+            with pytest.raises(Exception):  # noqa: B017
+                await wrapper._client.ensure_connected()
 
         # Assert - all 3 attempts were made
         assert attempt_count == 3
@@ -1182,7 +673,7 @@ class TestWebSocketConnectionEstablishment:
         # Use AsyncMock with return_value instead of side_effect
         with patch('websockets.connect', new=AsyncMock(return_value=mock_ws)):
             with pytest.raises(ConnectionError, match="handshake failed"):
-                await wrapper._ensure_connected()
+                await wrapper._client.ensure_connected()
 
 
 class TestWebSocketListener:
@@ -1212,7 +703,7 @@ class TestWebSocketListener:
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Act - start listener via _events component
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)  # Let it process
         listener_task.cancel()
 
@@ -1222,51 +713,10 @@ class TestWebSocketListener:
             pass
 
         # Assert - event should be in queue (as Pydantic model)
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        assert not wrapper._client._events.state_queue.empty()
+        event = await wrapper._client._events.state_queue.get()
         assert event.type == "transcript_modified"
         assert event.data.version == 2
-
-    @pytest.mark.asyncio
-    async def test_listener_sync_response_event(self, mock_base_model):
-        """Test listener queues sync_response events."""
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-        )
-
-        # Mock websocket with sync_response (complete message)
-        mock_ws = AsyncMock()
-
-        async def mock_messages():
-            yield json.dumps({
-                "type": "sync_response",
-                "data": {
-                    "sync_mode": "delta",
-                    "current_version": {"sequence": 3, "checksum": "abc123"},
-                },
-                "id": "msg-1",
-                "timestamp": _ts()
-            })
-
-        mock_ws.__aiter__ = lambda self: mock_messages()
-
-        # Act
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
-        await asyncio.sleep(0.1)
-        listener_task.cancel()
-
-        try:
-            await listener_task
-        except asyncio.CancelledError:
-            pass
-
-        # Assert - event should be in queue (as Pydantic model)
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
-        assert event.type == "sync_response"
 
     @pytest.mark.asyncio
     async def test_listener_push_ack_event(self, mock_base_model):
@@ -1284,7 +734,7 @@ class TestWebSocketListener:
         async def mock_messages():
             yield json.dumps({
                 "type": "push_ack",
-                "data": {"version": 4, "checksum": "abc123"},
+                "data": {"sequence": 4},
                 "id": "msg-1",
                 "timestamp": _ts()
             })
@@ -1292,7 +742,7 @@ class TestWebSocketListener:
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Act
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)
         listener_task.cancel()
 
@@ -1301,9 +751,9 @@ class TestWebSocketListener:
         except asyncio.CancelledError:
             pass
 
-        # Assert - event should be in queue (as Pydantic model)
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        # Assert - event should be in ack queue (as Pydantic model)
+        assert not wrapper._client._events.ack_queue.empty()
+        event = await wrapper._client._events.ack_queue.get()
         assert event.type == "push_ack"
 
     @pytest.mark.asyncio
@@ -1325,7 +775,7 @@ class TestWebSocketListener:
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Act
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)
         listener_task.cancel()
 
@@ -1334,9 +784,9 @@ class TestWebSocketListener:
         except asyncio.CancelledError:
             pass
 
-        # Assert - event should be in queue (as Pydantic model)
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        # Assert - event should be in ack queue (as Pydantic model)
+        assert not wrapper._client._events.ack_queue.empty()
+        event = await wrapper._client._events.ack_queue.get()
         assert event.type == "pong"
 
     @pytest.mark.asyncio
@@ -1358,7 +808,7 @@ class TestWebSocketListener:
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Act - should not crash
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)
         listener_task.cancel()
 
@@ -1393,7 +843,7 @@ class TestWebSocketListener:
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Act - should handle gracefully
-        await wrapper._events._listen_for_events(mock_ws)
+        await wrapper._client._events._listen_for_events(mock_ws)
 
         # Assert - completed without crashing
         assert True
@@ -1419,7 +869,7 @@ class TestStateMachineEventHandling:
                 "type": "is_waiting_on_user",
                 "data": {"state": "WAITING_FOR_USER", "version": 1, "operation": "append", "modification_count": 0},
                 "id": "msg-1",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         ]
 
@@ -1430,7 +880,7 @@ class TestStateMachineEventHandling:
         mock_ws.__aiter__ = lambda self: mock_messages()
 
         # Act
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)  # Let it process
         listener_task.cancel()
 
@@ -1440,8 +890,8 @@ class TestStateMachineEventHandling:
             pass
 
         # Assert - event should be in queue
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        assert not wrapper._client._events.state_queue.empty()
+        event = await wrapper._client._events.state_queue.get()
         assert event.type == "is_waiting_on_user"
 
     @pytest.mark.asyncio
@@ -1458,9 +908,14 @@ class TestStateMachineEventHandling:
         events_emitted = [
             json.dumps({
                 "type": "is_waiting_on_assistant",
-                "data": {"state": "WAITING_FOR_ASSISTANT", "version": 1, "operation": "append", "modification_count": 0},
+                "data": {
+                    "state": "WAITING_FOR_ASSISTANT",
+                    "version": 1,
+                    "operation": "append",
+                    "modification_count": 0,
+                },
                 "id": "msg-1",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         ]
 
@@ -1470,7 +925,7 @@ class TestStateMachineEventHandling:
 
         mock_ws.__aiter__ = lambda self: mock_messages()
 
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)
         listener_task.cancel()
 
@@ -1479,8 +934,8 @@ class TestStateMachineEventHandling:
         except asyncio.CancelledError:
             pass
 
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        assert not wrapper._client._events.state_queue.empty()
+        event = await wrapper._client._events.state_queue.get()
         assert event.type == "is_waiting_on_assistant"
 
     @pytest.mark.asyncio
@@ -1499,7 +954,7 @@ class TestStateMachineEventHandling:
                 "type": "is_waiting_on_tools",
                 "data": {"state": "WAITING_FOR_TOOLS", "version": 1, "operation": "append", "modification_count": 0},
                 "id": "msg-1",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         ]
 
@@ -1509,7 +964,7 @@ class TestStateMachineEventHandling:
 
         mock_ws.__aiter__ = lambda self: mock_messages()
 
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)
         listener_task.cancel()
 
@@ -1518,8 +973,8 @@ class TestStateMachineEventHandling:
         except asyncio.CancelledError:
             pass
 
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        assert not wrapper._client._events.state_queue.empty()
+        event = await wrapper._client._events.state_queue.get()
         assert event.type == "is_waiting_on_tools"
 
     @pytest.mark.asyncio
@@ -1542,7 +997,7 @@ class TestStateMachineEventHandling:
                     "duration_seconds": 320.5,
                     "threshold_seconds": 300.0,
                 },
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         ]
 
@@ -1552,7 +1007,7 @@ class TestStateMachineEventHandling:
 
         mock_ws.__aiter__ = lambda self: mock_messages()
 
-        listener_task = asyncio.create_task(wrapper._events._listen_for_events(mock_ws))
+        listener_task = asyncio.create_task(wrapper._client._events._listen_for_events(mock_ws))
         await asyncio.sleep(0.1)
         listener_task.cancel()
 
@@ -1562,8 +1017,8 @@ class TestStateMachineEventHandling:
             pass
 
         # Assert - stuck_state error should be in queue
-        assert not wrapper._event_queue.empty()
-        event = await wrapper._event_queue.get()
+        assert not wrapper._client._events.state_queue.empty()
+        event = await wrapper._client._events.state_queue.get()
         assert event.type == "transcript_error"
         assert event.data.error == TranscriptErrorType.STUCK_STATE
 
@@ -1578,18 +1033,18 @@ class TestStateMachineEventHandling:
         )
 
         # Add stuck_state error to queue
-        await wrapper._event_queue.put(TranscriptErrorMessage(
+        await wrapper._client._events.state_queue.put(TranscriptErrorMessage(
             type="transcript_error",
             data=TranscriptErrorData(error=TranscriptErrorType.STUCK_STATE),
             timestamp=_ts(),
         ))
 
         # Check for stuck state
-        is_stuck = await wrapper._events.check_for_stuck_state()
+        is_stuck = await wrapper._client._events.check_for_stuck_state()
 
         assert is_stuck is True
         # Event should still be in queue (check doesn't consume)
-        assert not wrapper._event_queue.empty()
+        assert not wrapper._client._events.state_queue.empty()
 
     @pytest.mark.asyncio
     async def test_check_for_stuck_state_no_error(self, mock_base_model):
@@ -1602,7 +1057,7 @@ class TestStateMachineEventHandling:
         )
 
         # Add normal event to queue
-        await wrapper._event_queue.put(StateEventMessage(
+        await wrapper._client._events.state_queue.put(StateEventMessage(
             type="transcript_modified",
             data=StateEventData(
                 version=2,
@@ -1615,7 +1070,7 @@ class TestStateMachineEventHandling:
         ))
 
         # Check for stuck state
-        is_stuck = await wrapper._events.check_for_stuck_state()
+        is_stuck = await wrapper._client._events.check_for_stuck_state()
 
         assert is_stuck is False
 
@@ -1636,7 +1091,7 @@ class TestStateMachineEventHandling:
             ws_config=config,
         )
 
-        wrapper._websocket = mock_websocket
+        wrapper._client._connection._websocket = mock_websocket
 
         # Simulate stuck state followed by successful event
         events_to_queue = [
@@ -1645,230 +1100,16 @@ class TestStateMachineEventHandling:
                 data=TranscriptErrorData(error=TranscriptErrorType.STUCK_STATE),
                 timestamp=_ts(),
             ),
-            {"type": "transcript_modified", "data": {"version": 2, "operation": "append", "modification_count": 0, "state": "waiting"}},
-            {"type": "sync_response", "data": {"sync_mode": "full", "current_version": {"sequence": 2, "checksum": "abc"}, "full_transcript": []}},
+            {
+                "type": "transcript_modified",
+                "data": {"version": 2, "operation": "append", "modification_count": 0, "state": "waiting"},
+            },
         ]
 
         for event in events_to_queue:
-            await wrapper._event_queue.put(event)
+            await wrapper._client._events.state_queue.put(event)
 
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            # Should retry and eventually succeed (unlimited retries, but events are queued)
-            result = await wrapper._events.wait_for_state_event_with_retry()
+        # Should retry and eventually succeed (unlimited retries, but events are queued)
+        result = await wrapper._client._events.wait_for_state_event_with_retry()
 
-            assert result is True
-
-
-class TestWaitAndSyncTranscript:
-    """Test cases for wait_and_sync_transcript method used by AgentContinue callback."""
-
-    @pytest.mark.asyncio
-    async def test_waits_for_modification_and_syncs(self, mock_base_model, mock_websocket):
-        """Test that wait_and_sync_transcript waits for event and syncs transcript."""
-        from inspect_ai.model import ChatMessageUser, ChatMessageAssistant
-
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Server-injected transcript with continue message
-        server_transcript = [
-            {"role": "user", "content": "Original query"},
-            {"role": "assistant", "content": "I'll help you"},
-            {"role": "user", "content": "Server-injected continue prompt"},
-        ]
-
-        # Queue events: modification event, then sync response
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(
-                version=2,
-                operation=TranscriptOperation.APPEND,
-                modification_count=1,
-                state="WAITING_FOR_ASSISTANT"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-        await wrapper._event_queue.put(SyncResponseMessage(
-            type="sync_response",
-            data=SyncResponseData(
-                sync_mode=SyncMode.FULL,
-                full_transcript=server_transcript,
-                current_version=TranscriptVersion(sequence=2, checksum="abc123"),
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            result = await wrapper.wait_and_sync_transcript()
-
-        # Should return the synced messages
-        assert len(result) == 3
-        assert result[2].content == "Server-injected continue prompt"
-
-    @pytest.mark.asyncio
-    async def test_returns_current_messages_on_timeout(self, mock_base_model, mock_websocket):
-        """Test that timeout returns current local messages."""
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),  # Very short timeout
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()  # Empty queue - will timeout
-
-        # Pre-populate local messages
-        from inspect_ai.model import ChatMessageUser
-        wrapper._local_messages = [ChatMessageUser(content="Existing message")]
-
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with patch.object(wrapper._events, 'wait_for_state_event_with_retry', new_callable=AsyncMock, return_value=False):
-                result = await wrapper.wait_and_sync_transcript()
-
-        # Should return existing local messages
-        assert len(result) == 1
-        assert result[0].content == "Existing message"
-
-    @pytest.mark.asyncio
-    async def test_raises_on_websocket_not_connected(self, mock_base_model):
-        """Test that method raises when WebSocket is not connected."""
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        wrapper._websocket = None  # Not connected
-        wrapper._event_queue = asyncio.Queue()
-
-        # Queue a modification event
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(version=1, operation=TranscriptOperation.APPEND, modification_count=0, state="WAITING"),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with patch.object(wrapper._events, 'wait_for_state_event_with_retry', new_callable=AsyncMock, return_value=True):
-                with pytest.raises(RuntimeError, match="WebSocket not connected"):
-                    await wrapper.wait_and_sync_transcript()
-
-    @pytest.mark.asyncio
-    async def test_handles_transcript_error_response(self, mock_base_model, mock_websocket):
-        """Test that transcript_error response raises RuntimeError."""
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        wrapper._websocket = mock_websocket
-        wrapper._event_queue = asyncio.Queue()
-
-        # Queue events: modification event, then error response
-        await wrapper._event_queue.put(StateEventMessage(
-            type="transcript_modified",
-            data=StateEventData(version=1, operation=TranscriptOperation.APPEND, modification_count=0, state="WAITING"),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-        await wrapper._event_queue.put(TranscriptErrorMessage(
-            type="transcript_error",
-            data=TranscriptErrorData(
-                error=TranscriptErrorType.CHECKSUM_MISMATCH,
-                message="Checksum mismatch during sync"
-            ),
-            id="msg-2",
-            timestamp=_ts(),
-        ))
-
-        with patch.object(wrapper, '_ensure_connected', new_callable=AsyncMock):
-            with pytest.raises(RuntimeError, match="Transcript sync error"):
-                await wrapper.wait_and_sync_transcript()
-
-
-class TestPullEnabledProperty:
-    """Test cases for pull_enabled property."""
-
-    def test_pull_enabled_returns_true_when_enabled(self, mock_base_model):
-        """Test that pull_enabled returns True when pull is enabled."""
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=True, _event_timeout=0.1),
-            push=PushConfig(enabled=False)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        assert wrapper.pull_enabled is True
-
-    def test_pull_enabled_returns_false_when_disabled(self, mock_base_model):
-        """Test that pull_enabled returns False when pull is disabled."""
-        config = WebSocketConfig(
-            pull=PullConfig(enabled=False),
-            push=PushConfig(enabled=True)
-        )
-
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            ws_config=config,
-        )
-
-        assert wrapper.pull_enabled is False
-
-    def test_pull_enabled_default_is_true(self, mock_base_model):
-        """Test that pull_enabled defaults to True with default config."""
-        wrapper = WebSocketTranscriptSyncingModelWrapper(
-            base_model=mock_base_model,
-            session_id="session-123",
-            episode_id="episode-456",
-            rest_url="http://localhost:8000",
-            # No explicit config - uses defaults
-        )
-
-        assert wrapper.pull_enabled is True
+        assert result is True

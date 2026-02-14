@@ -40,7 +40,6 @@ class TestWebSocketConfigDefaults:
         # Pull configuration - only enabled is configurable
         assert config.pull.enabled is True
         assert config.pull.event_timeout == 300.0  # Internal default
-        assert config.pull.sync_timeout == 5.0  # Internal default
         assert config.pull.event_queue_max_size == 100  # Internal default
 
     def test_custom_enabled_values(self):

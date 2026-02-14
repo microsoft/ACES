@@ -1,62 +1,34 @@
-"""WebSocket message handlers for transcript synchronization.
+"""WebSocket message handlers for transcript push-only protocol.
 
 This module extracts WebSocket message handling logic from session_rest_api.py
 into dedicated handler classes for better separation of concerns.
 
-Each handler implements a single message type (PING, SYNC_REQUEST, PUSH_MESSAGE)
+Each handler implements a single message type (PING, PUSH_MESSAGE)
 and encapsulates the business logic for that operation.
 """
 
-import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket
 
 from ...logging_config import get_api_logger
-from ...models.constants import MetadataKeys
-from ...models.rest.websocket_constants import WebSocketMessageType
 from ...models.rest.websocket_messages import (
     PongMessage,
     PushAckData,
     PushAckMessage,
-    StateEventData,
-    StateEventMessage,
-    SyncMode,
-    SyncRequestData,
-    SyncResponseData,
-    SyncResponseMessage,
-    TranscriptOperation,
-    TranscriptVersion,
+    PushMessageRequestData,
+    TranscriptErrorData,
+    TranscriptErrorMessage,
+    TranscriptErrorType,
+    WebSocketMessageType,
 )
-from ...models.transcript import TranscriptSyncRequest
 
 if TYPE_CHECKING:
-    from ..episodes.transcript_coordinator import TranscriptCoordinator
+    from ..episodes.transcript.coordinator import TranscriptCoordinator
 
 logger = get_api_logger(__name__)
-
-
-class WebSocketHandlerProtocol(Protocol):
-    """Protocol for WebSocket message handlers."""
-
-    async def handle(
-        self,
-        data: dict[str, Any],
-        websocket: WebSocket,
-        episode_id: str,
-        coordinator: "TranscriptCoordinator",
-    ) -> None:
-        """Handle a WebSocket message.
-
-        Args:
-            data: Parsed JSON message data
-            websocket: WebSocket connection
-            episode_id: Current episode ID (connection owner)
-            coordinator: TranscriptCoordinator instance
-        """
-        ...
 
 
 class BaseWebSocketHandler(ABC):
@@ -85,82 +57,15 @@ class PingHandler(BaseWebSocketHandler):
         coordinator: "TranscriptCoordinator",
     ) -> None:
         """Respond to ping with pong."""
-        pong = PongMessage(timestamp=datetime.utcnow().isoformat())
+        pong = PongMessage(timestamp=datetime.now(UTC).isoformat())
         await websocket.send_json(pong.model_dump())
-
-
-class SyncRequestHandler(BaseWebSocketHandler):
-    """Handler for SYNC_REQUEST messages.
-
-    Supports both same-episode sync and cross-episode observer access.
-    The coordinator handles the distinction internally.
-    """
-
-    async def handle(
-        self,
-        data: dict[str, Any],
-        websocket: WebSocket,
-        episode_id: str,
-        coordinator: "TranscriptCoordinator",
-    ) -> None:
-        """Handle transcript sync request.
-
-        Two modes (handled by coordinator):
-        - Same-episode (is_observer=False): Full bidirectional sync with checksum validation
-        - Cross-episode (is_observer=True): Read-only observer access with security filtering
-        """
-        request_data = SyncRequestData(**data.get("data", {}))
-
-        # Determine target episode and observer mode
-        target_episode_id = request_data.target_episode_id or episode_id
-        is_observer = target_episode_id != episode_id
-
-        # Build unified sync request - coordinator handles observer mode internally
-        sync_request = TranscriptSyncRequest(
-            episode_id=target_episode_id,
-            since_version=request_data.since_version or 0,
-            client_checksum=request_data.client_checksum,
-            is_observer=is_observer,
-            hide_system_prompt=request_data.hide_system_prompt,  # None = use default
-            retrieval_mode=request_data.retrieval_mode or "full",
-            tail_count=request_data.tail_count or 10,
-        )
-
-        # Single code path - coordinator handles owner vs observer mode
-        sync_response = await coordinator.sync(sync_request)
-
-        # Build response from sync response
-        # sync_mode is guaranteed to be SyncMode after TranscriptSyncResponse.__post_init__
-        sync_mode = (
-            sync_response.sync_mode
-            if isinstance(sync_response.sync_mode, SyncMode)
-            else SyncMode(sync_response.sync_mode)
-        )
-        response_data = SyncResponseData(
-            current_version=TranscriptVersion(
-                sequence=sync_response.current_version.sequence,
-                checksum=sync_response.current_version.checksum,
-                message_count=sync_response.current_version.message_count,
-                last_operation=sync_response.current_version.last_operation,
-            ),
-            delta=sync_response.delta,
-            full_transcript=sync_response.full_transcript,
-            sync_mode=sync_mode,
-            modified=sync_response.modified,
-        )
-
-        message = SyncResponseMessage(
-            data=response_data,
-            id=data.get("id", ""),
-            timestamp=datetime.utcnow().isoformat(),
-        )
-        await websocket.send_json(message.model_dump())
 
 
 class PushMessageHandler(BaseWebSocketHandler):
     """Handler for PUSH_MESSAGE messages.
 
     Supports both normal pushes and cross-episode injection.
+    The coordinator handles DB storage and state broadcasting internally.
     """
 
     async def handle(
@@ -170,145 +75,90 @@ class PushMessageHandler(BaseWebSocketHandler):
         episode_id: str,
         coordinator: "TranscriptCoordinator",
     ) -> None:
-        """Handle message push (normal or injection mode).
+        """Handle message push (normal or cross-episode).
 
-        For cross-episode pushes (injections), broadcasts state event
-        to the target episode after successful push.
+        Flow:
+        1. Parse push data
+        2. Look up target episode to get session_id
+        3. Call coordinator.push_message() (handles DB + broadcast)
+        4. Send PushAckMessage back to pusher
         """
-        from ...models.rest.websocket_messages import PushMessageRequestData
-
         push_data = PushMessageRequestData(**data.get("data", {}))
-
-        # Support cross-episode pushes (red team targeting blue team)
         target_episode_id = push_data.target_episode_id or episode_id
+
+        # Get session_id from episode
+        episode = coordinator.episode_manager.get_episode_by_id(target_episode_id)
+        if not episode:
+            logger.warning(
+                "Push target episode not found",
+                extra={"target_episode_id": target_episode_id},
+            )
+            error_msg = TranscriptErrorMessage(
+                data=TranscriptErrorData(
+                    error=TranscriptErrorType.PUSH_FAILED,
+                    message=f"Episode {target_episode_id} not found",
+                ),
+                timestamp=datetime.now(UTC).isoformat(),
+            )
+            await websocket.send_json(error_msg.model_dump())
+            return
+
+        try:
+            # Push via coordinator (handles DB storage + state broadcast)
+            sequence = await coordinator.push_message(
+                episode_id=target_episode_id,
+                session_id=episode.session_id,
+                message=push_data.message,
+                operation=push_data.strategy,
+            )
+        except (ValueError, RuntimeError) as e:
+            logger.error(
+                "Push message failed",
+                extra={
+                    "target_episode_id": target_episode_id,
+                    "error": str(e),
+                },
+            )
+            error_msg = TranscriptErrorMessage(
+                data=TranscriptErrorData(
+                    error=TranscriptErrorType.PUSH_FAILED,
+                    message=str(e),
+                ),
+                timestamp=datetime.now(UTC).isoformat(),
+            )
+            await websocket.send_json(error_msg.model_dump())
+            return
+        except Exception as e:
+            logger.error(
+                "Unexpected error during push message",
+                extra={
+                    "target_episode_id": target_episode_id,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            error_msg = TranscriptErrorMessage(
+                data=TranscriptErrorData(
+                    error=TranscriptErrorType.PUSH_FAILED,
+                    message="Internal error during push",
+                ),
+                timestamp=datetime.now(UTC).isoformat(),
+            )
+            await websocket.send_json(error_msg.model_dump())
+            return
+
+        # Send ack to pusher
         is_cross_episode = target_episode_id != episode_id
-
-        logger.debug(
-            "PushMessageHandler.handle() called",
-            extra={
-                "target_episode_id": target_episode_id,
-                "is_cross_episode": is_cross_episode,
-                "strategy": push_data.strategy,
-            },
+        ack_data = PushAckData(
+            sequence=sequence,
+            target_episode_id=target_episode_id if is_cross_episode else None,
         )
-
-        # Execute the push via coordinator
-        sync_request = TranscriptSyncRequest(
-            episode_id=target_episode_id,
-            since_version=push_data.since_version,
-            client_checksum=push_data.client_checksum,
-            messages_to_push=[push_data.message],
-            operation=push_data.strategy,
-        )
-
-        sync_response = await coordinator.sync(sync_request)
-
-        logger.debug(
-            "Push sync completed",
-            extra={
-                "target_episode_id": target_episode_id,
-                "new_version": sync_response.current_version.sequence,
-            },
-        )
-
-        # Build response
-        ack_data, state_event = await self._build_push_response(
-            coordinator=coordinator,
-            sync_response=sync_response,
-            episode_id=episode_id,
-            target_episode_id=target_episode_id,
-            is_cross_episode=is_cross_episode,
-            strategy=push_data.strategy,
-        )
-
-        # Send push acknowledgment to the pusher
         ack_message = PushAckMessage(
             data=ack_data,
             id=data.get("id", ""),
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
         )
         await websocket.send_json(ack_message.model_dump())
-
-        logger.debug(
-            "Push ack sent to pusher",
-            extra={
-                "target_episode_id": target_episode_id,
-                "ack_version": ack_data.version,
-            },
-        )
-
-        # Broadcast state event to target episode (for cross-episode injections)
-        if state_event:
-            logger.debug(
-                "Broadcasting state event to target episode",
-                extra={"target_episode_id": target_episode_id},
-            )
-            await coordinator.connection_manager.broadcast_to_episode(
-                episode_id=target_episode_id,
-                message=state_event,
-            )
-
-    async def _build_push_response(
-        self,
-        coordinator: "TranscriptCoordinator",
-        sync_response: Any,
-        episode_id: str,
-        target_episode_id: str,
-        is_cross_episode: bool,
-        strategy: str,
-    ) -> tuple[PushAckData, StateEventMessage | None]:
-        """Build push acknowledgment and optional state event.
-
-        Returns:
-            Tuple of (PushAckData, Optional[StateEventMessage])
-        """
-        target_episode = coordinator.episode_manager.get_episode_by_id(target_episode_id)
-
-        modification_count: int | None = None
-        state_event: StateEventMessage | None = None
-
-        if is_cross_episode and target_episode:
-            # Cross-episode push (injection): update modification count
-            modification_count = target_episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0) + 1
-
-            await target_episode.update_context_atomic({MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: modification_count})
-
-            # Get current state for the event
-            state_machine = coordinator._state_machine
-            target_state = state_machine.get_state(target_episode)
-
-            # Convert strategy to TranscriptOperation
-            try:
-                operation = TranscriptOperation(strategy)
-            except ValueError:
-                operation = TranscriptOperation.APPEND
-
-            # Build state event for broadcast
-            from ..episodes.transcript_state_machine import TranscriptStateMachine
-
-            event_type = TranscriptStateMachine.state_to_event_type(target_state)
-
-            state_event = StateEventMessage(
-                type=event_type,
-                data=StateEventData(
-                    version=sync_response.current_version.sequence,
-                    operation=operation,
-                    modification_count=modification_count,
-                    injected_by=episode_id,
-                    state=target_state.value,
-                ),
-                id=str(uuid.uuid4()),
-                timestamp=datetime.utcnow().isoformat(),
-            )
-
-        ack_data = PushAckData(
-            version=sync_response.current_version.sequence,
-            checksum=sync_response.current_version.checksum,
-            modification_count=modification_count,
-            target_episode_id=target_episode_id if is_cross_episode else None,
-        )
-
-        return ack_data, state_event
 
 
 class WebSocketMessageRouter:
@@ -322,7 +172,6 @@ class WebSocketMessageRouter:
         """Initialize the router with default handlers."""
         self._handlers: dict[str, BaseWebSocketHandler] = {
             WebSocketMessageType.PING: PingHandler(),
-            WebSocketMessageType.SYNC_REQUEST: SyncRequestHandler(),
             WebSocketMessageType.PUSH_MESSAGE: PushMessageHandler(),
         }
 
@@ -377,7 +226,6 @@ def get_message_router() -> WebSocketMessageRouter:
 __all__ = [
     "BaseWebSocketHandler",
     "PingHandler",
-    "SyncRequestHandler",
     "PushMessageHandler",
     "WebSocketMessageRouter",
     "get_message_router",

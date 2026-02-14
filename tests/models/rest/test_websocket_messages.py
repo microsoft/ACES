@@ -1,5 +1,5 @@
 """Tests for WebSocket message Pydantic models (injection extensions)."""
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from saber.models.rest.websocket_messages import (
     PushMessageData,
@@ -13,8 +13,7 @@ def test_push_message_with_injection_fields():
     """Test push_message with optional injection fields for red team."""
     data = PushMessageData(
         message={"role": "system", "content": "Injected prompt"},
-        since_version=10,
-        client_checksum="abc123",
+        since_sequence=10,
         # Injection fields
         target_episode_id="ep-blue-123",
         strategy="append",
@@ -32,7 +31,7 @@ def test_push_message_with_restart_strategy():
     """
     data = PushMessageData(
         message={"role": "user", "content": "Fresh start"},
-        since_version=10,
+        since_sequence=10,
         target_episode_id="ep-blue-123",
         strategy="restart",
     )
@@ -44,8 +43,7 @@ def test_push_message_with_restart_strategy():
 def test_push_ack_with_injection_response():
     """Test push_ack response includes injection metadata."""
     ack_data = PushAckData(
-        version=11,
-        checksum="def456",
+        sequence=11,
         # Injection response fields
         modification_count=3,
         target_episode_id="ep-blue-123",
@@ -58,7 +56,7 @@ def test_push_ack_with_injection_response():
     msg = PushAckMessage(
         data=ack_data,
         id=str(uuid.uuid4()),
-        timestamp=datetime.utcnow().isoformat(),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
     assert msg.type == WebSocketMessageType.PUSH_ACK.value
@@ -69,8 +67,7 @@ def test_push_message_normal_blue_team():
     """Test push_message without injection fields (blue team normal use)."""
     data = PushMessageData(
         message={"role": "assistant", "content": "Normal response"},
-        since_version=5,
-        client_checksum="xyz789",
+        since_sequence=5,
         # No injection fields - normal blue team push
     )
 

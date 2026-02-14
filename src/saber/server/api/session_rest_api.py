@@ -8,6 +8,7 @@ Logging category: REST_API.
 """
 
 # Forward declaration to avoid circular imports
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,6 +36,8 @@ from ...models import (
     SessionTerminateResponse,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
+    TranscriptCountResponse,
+    TranscriptGetResponse,
     TranscriptPushRequest,
     TranscriptPushResponse,
     TranscriptSyncConfig,
@@ -729,112 +732,6 @@ class SessionRestAPI:
                 log_operation_failure(logger, "get_episode_steps", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to get episode steps: {exc}") from exc
 
-        # NOTE: File upload endpoint disabled - agent directory upload no longer used
-        # @self.app.post(APIEndpoints.EPISODE_FILES, response_model=FileUploadResponse)
-        # async def upload_file_to_episode_endpoint(
-        #     session_id: str, episode_id: str, upload_request: FileUploadRequest
-        # ) -> FileUploadResponse:
-        #     """Upload a tar archive to the episode's sandbox container.
-        #
-        #     This endpoint accepts a base64-encoded tar archive and extracts it
-        #     to the specified destination path in the episode container.
-        #
-        #     Args:
-        #         session_id: The session identifier.
-        #         episode_id: The episode identifier.
-        #         upload_request: The file upload request with tar_data, destination_path,
-        #                        and optional container_name override.
-        #
-        #     Returns:
-        #         FileUploadResponse with upload details including bytes copied.
-        #
-        #     Raises:
-        #         404: Episode not found or container not found.
-        #         422: Episode not ready, invalid paths, or invalid tar data.
-        #         500: Docker API error or internal failure.
-        #     """
-        #     from docker.errors import APIError as DockerAPIError
-        #     from docker.errors import NotFound as DockerNotFound
-        #
-        #     log_operation_start(
-        #         logger,
-        #         "upload_file_to_episode",
-        #         session_id=session_id,
-        #         episode_id=episode_id,
-        #         tar_size_bytes=len(upload_request.tar_data),
-        #         destination_path=upload_request.destination_path,
-        #         container_name=upload_request.container_name,
-        #     )
-        #
-        #     try:
-        #         # Check episode exists
-        #         episode = self.session_manager.get_episode_by_id(episode_id)
-        #         if not episode:
-        #             raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
-        #
-        #         # Check episode is ready (has running container)
-        #         if not episode.is_ready:
-        #             raise HTTPException(
-        #                 status_code=422,
-        #                 detail=f"Episode {episode_id} is not ready. Current state: {episode.state.value}",
-        #             )
-        #
-        #         # Decode tar data and call execution manager
-        #         tar_bytes = upload_request.get_tar_bytes()
-        #         result = await self.session_manager.execution_manager.upload_tar_to_episode(
-        #             episode_id=episode_id,
-        #             tar_data=tar_bytes,
-        #             destination_path=upload_request.destination_path,
-        #             container_name=upload_request.container_name,
-        #         )
-        #
-        #         # Check if the upload failed
-        #         if not result.success:
-        #             raise HTTPException(
-        #                 status_code=500,
-        #                 detail=f"File upload failed: {result.error_message}",
-        #             )
-        #
-        #         log_operation_success(
-        #             logger,
-        #             "upload_file_to_episode",
-        #             session_id=session_id,
-        #             episode_id=episode_id,
-        #             destination_path=result.destination_path,
-        #             bytes_copied=result.bytes_copied,
-        #         )
-        #
-        #         return FileUploadResponse(
-        #             message="File uploaded successfully",
-        #             session_id=session_id,
-        #             episode_id=episode_id,
-        #             destination_path=result.destination_path,
-        #             bytes_copied=result.bytes_copied,
-        #         )
-        #
-        #     except HTTPException:
-        #         raise
-        #     except DockerNotFound as exc:
-        #         log_operation_failure(
-        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
-        #         )
-        #         raise HTTPException(status_code=404, detail=f"Container not found: {exc}") from exc
-        #     except ValueError as exc:
-        #         log_operation_failure(
-        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
-        #         )
-        #         raise HTTPException(status_code=422, detail=str(exc)) from exc
-        #     except (RuntimeError, DockerAPIError) as exc:
-        #         log_operation_failure(
-        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
-        #         )
-        #         raise HTTPException(status_code=500, detail=f"File upload failed: {exc}") from exc
-        #     except Exception as exc:
-        #         log_operation_failure(
-        #             logger, "upload_file_to_episode", exc, session_id=session_id, episode_id=episode_id
-        #         )
-        #         raise HTTPException(status_code=500, detail=f"Failed to upload file: {exc}") from exc
-
         @self.app.get(APIEndpoints.EPISODE_SANDBOX_FILE_READ)
         async def read_sandbox_file_endpoint(
             session_id: str,
@@ -993,25 +890,28 @@ class SessionRestAPI:
                     )
 
                 # Store transcript in episode context atomically (thread-safe)
-                timestamp = datetime.utcnow().isoformat()
+                timestamp = datetime.now(UTC).isoformat()
 
-                # Handle append vs replace mode
-                if mode == "append":
-                    # Append new messages to existing transcript
-                    existing_messages = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-                    updated_messages = existing_messages + [msg.model_dump() for msg in transcript_request.messages]
-                else:
-                    # Replace entire transcript
-                    updated_messages = [msg.model_dump() for msg in transcript_request.messages]
+                # Push messages through coordinator (persists to Redis)
+                coordinator = self.session_manager.episode_manager.transcript_coordinator
+                for msg in transcript_request.messages:
+                    await coordinator.push_message(
+                        episode_id=episode_id,
+                        session_id=session_id,
+                        message=msg.model_dump(),
+                    )
 
-                context_updates: dict[str, Any] = {
-                    MetadataKeys.CLIENT_TRANSCRIPT.value: updated_messages,
-                    MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT.value: timestamp,  # Auto-set on push
+                # Update lightweight metadata in episode context (NOT transcript data)
+                metadata_updates: dict[str, Any] = {
+                    MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT.value: timestamp,
                 }
                 if transcript_request.metadata:
-                    context_updates[MetadataKeys.TRANSCRIPT_METADATA.value] = transcript_request.metadata
+                    metadata_updates[MetadataKeys.TRANSCRIPT_METADATA.value] = transcript_request.metadata
 
-                await episode.update_context_atomic(context_updates)
+                await episode.update_context_atomic(metadata_updates)
+
+                # Get total count from Redis
+                total_messages = await coordinator.get_message_count(episode_id)
 
                 log_operation_success(
                     logger,
@@ -1020,7 +920,7 @@ class SessionRestAPI:
                     episode_id=episode_id,
                     mode=mode,
                     message_count=len(transcript_request.messages),
-                    total_messages=len(updated_messages),
+                    total_messages=total_messages,
                 )
 
                 return TranscriptPushResponse(
@@ -1050,8 +950,98 @@ class SessionRestAPI:
                 log_operation_failure(logger, "push_transcript", exc, session_id=session_id, episode_id=episode_id)
                 raise HTTPException(status_code=500, detail=f"Failed to push transcript: {exc}") from exc
 
-        # NOTE: GET /transcript endpoint REMOVED - transcript retrieval now uses WebSocket sync_request
-        # The daemon and other observers use WebSocket sync with is_observer=True for cross-episode access
+        @self.app.get(APIEndpoints.EPISODE_TRANSCRIPT, response_model=TranscriptGetResponse)
+        async def get_transcript_endpoint(
+            session_id: str,
+            episode_id: str,
+            since_sequence: int = 0,
+        ) -> TranscriptGetResponse:
+            """Get conversation transcript for an episode from the database.
+
+            Args:
+                session_id: Session ID (path).
+                episode_id: Episode ID (path).
+                since_sequence: Only return messages after this sequence number (query, default 0 = all).
+
+            Returns:
+                TranscriptGetResponse with messages list and count.
+            """
+            log_operation_start(
+                logger,
+                "get_transcript",
+                session_id=session_id,
+                episode_id=episode_id,
+                since_sequence=since_sequence,
+            )
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                coordinator = self.session_manager.episode_manager.transcript_coordinator
+                messages = await coordinator.get_transcript(episode_id, since_sequence)
+
+                log_operation_success(
+                    logger,
+                    "get_transcript",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    message_count=len(messages),
+                )
+                from ...models.rest import ChatMessage
+
+                chat_messages = [ChatMessage(**m) for m in messages]
+                return TranscriptGetResponse(
+                    episode_id=episode_id,
+                    messages=chat_messages,
+                    message_count=len(chat_messages),
+                    last_updated=None,
+                    metadata=None,
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_transcript", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get transcript: {exc}") from exc
+
+        @self.app.get(APIEndpoints.EPISODE_TRANSCRIPT_COUNT, response_model=TranscriptCountResponse)
+        async def get_transcript_count_endpoint(
+            session_id: str,
+            episode_id: str,
+        ) -> TranscriptCountResponse:
+            """Get message count for an episode transcript.
+
+            Lightweight endpoint for polling without fetching full transcript.
+
+            Args:
+                session_id: Session ID (path).
+                episode_id: Episode ID (path).
+
+            Returns:
+                TranscriptCountResponse with count.
+            """
+            log_operation_start(logger, "get_transcript_count", session_id=session_id, episode_id=episode_id)
+            try:
+                episode = self.session_manager.get_episode_by_id(episode_id)
+                if not episode:
+                    raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+
+                coordinator = self.session_manager.episode_manager.transcript_coordinator
+                count = await coordinator.get_message_count(episode_id)
+
+                log_operation_success(
+                    logger,
+                    "get_transcript_count",
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    count=count,
+                )
+                return TranscriptCountResponse(count=count)
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_operation_failure(logger, "get_transcript_count", exc, session_id=session_id, episode_id=episode_id)
+                raise HTTPException(status_code=500, detail=f"Failed to get transcript count: {exc}") from exc
 
         @self.app.post(APIEndpoints.EPISODE_MESSAGES_INJECT)
         async def inject_message_endpoint(
@@ -1063,7 +1053,6 @@ class SessionRestAPI:
             on the next pull. This enables server-side message injection for adversarial testing.
             """
             import uuid
-            from datetime import datetime
 
             log_operation_start(logger, "inject_message", session_id=session_id, episode_id=episode_id)
             try:
@@ -1074,7 +1063,7 @@ class SessionRestAPI:
 
                 # Create injection record
                 injection_id = str(uuid.uuid4())
-                injected_at = datetime.utcnow().isoformat()
+                injected_at = datetime.now(UTC).isoformat()
 
                 injection_record = {
                     "injection_id": injection_id,
@@ -1155,7 +1144,7 @@ class SessionRestAPI:
                 ]
 
                 # Move pending to history and clear pending list
-                retrieved_at = datetime.utcnow().isoformat()
+                retrieved_at = datetime.now(UTC).isoformat()
                 for record in pending_injections:
                     record["retrieved_at"] = retrieved_at
                     injection_history.append(record)
@@ -1212,13 +1201,14 @@ class SessionRestAPI:
                 if not episode:
                     raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
 
-                transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+                coordinator = self.session_manager.episode_manager.transcript_coordinator
+                message_count = await coordinator.get_message_count(episode_id)
 
                 metadata = {
                     "last_pushed_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT),
                     "last_modified_at": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_MODIFIED_AT),
                     "modification_count": episode.context.get(MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT, 0),
-                    "message_count": len(transcript),
+                    "message_count": message_count,
                     "last_updated": episode.context.get(MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT),
                 }
 
@@ -1461,22 +1451,21 @@ class SessionRestAPI:
         @self.app.websocket("/api/v1/episodes/{episode_id}/ws")
         async def websocket_endpoint(websocket: WebSocket, episode_id: str) -> None:
             """
-            WebSocket endpoint for bidirectional transcript synchronization.
+            WebSocket endpoint for push-only transcript protocol.
 
             Protocol (Server → Client):
             - Client connects → server sends initial state event
-            - Red team injects → server broadcasts {"type": "transcript_modified", "data": {...}}
+            - State changes → server broadcasts state events (is_waiting_on_*)
 
             Protocol (Client → Server):
             - {"type": "ping"} → server responds {"type": "pong"}
-            - {"type": "sync_request", "data": {version, checksum}} → server responds {"type": "sync_response"}
-            - {"type": "push_message", "data": {message, version, checksum}} → server responds {"type": "push_ack"}
+            - {"type": "push_message", "data": {message, strategy}} → server responds {"type": "push_ack"}
 
             Flow:
             1. Agent connects on first generate() call
-            2. Connection persists for entire episode (bidirectional)
-            3. Agent pushes messages via WebSocket (replaces REST sync API)
-            4. Red team injects → server broadcasts event → Blue agent pulls delta via WebSocket
+            2. Connection persists for entire episode
+            3. Agent pushes messages via WebSocket, server stores in DB
+            4. Observers/readers retrieve transcript via REST GET /transcript
             """
             from .websocket_handlers import get_message_router
 
@@ -1502,7 +1491,7 @@ class SessionRestAPI:
             # Send initial state event after connection
             # This unblocks the client's first generate() call which waits for a state event
             try:
-                initial_state_event = coordinator.get_initial_state_event(episode_id)
+                initial_state_event = await coordinator.get_initial_state_event(episode_id)
                 if initial_state_event:
                     await websocket.send_json(initial_state_event.model_dump())
 
@@ -1527,7 +1516,7 @@ class SessionRestAPI:
             router = get_message_router()
 
             try:
-                # Handle bidirectional WebSocket messages
+                # Handle WebSocket messages
                 while True:
                     data = await websocket.receive_json()
 

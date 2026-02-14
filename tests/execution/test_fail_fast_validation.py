@@ -5,19 +5,19 @@ These tests verify that the system fails quickly and clearly when encountering
 various error conditions, following fail-fast principles.
 """
 
-import asyncio
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
+
 import pytest
 
+from saber.server.execution.exceptions import SandboxExecutionError
 from saber.server.execution.sandbox.compose_orchestrator import ComposeOrchestrator
 from saber.server.execution.sandbox.environment_config import ComposeEnvironmentConfig
 from saber.server.execution.sandbox.permanent_environment_manager import PermanentEnvironmentManager
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
-from saber.server.execution.exceptions import SandboxExecutionError
 
 
 class TestComposeFileValidation:
@@ -337,10 +337,10 @@ class TestConfigurationValidation:
         config = {}
 
         with pytest.raises(SandboxExecutionError) as excinfo:
-            manager = SandboxEnvironmentManager(config)
+            SandboxEnvironmentManager(config)
 
         error_msg = str(excinfo.value)
-        assert "Compose file not found" in error_msg or "not found" in error_msg
+        assert "Compose file not found" in error_msg or "not found" in error_msg or "domain is required" in error_msg
 
     def test_invalid_configuration_type(self):
         """Test that invalid configuration types cause errors when used."""

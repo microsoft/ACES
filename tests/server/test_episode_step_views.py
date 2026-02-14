@@ -1,7 +1,7 @@
 """Tests for Episode.with_step_range() method for chunked evaluation."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from saber.server.base import Episode, EpisodeState, Step, Action
 
 
@@ -19,7 +19,7 @@ def create_test_episode(num_steps: int = 10) -> Episode:
     for i in range(num_steps):
         step = Step(
             step_number=i + 1,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             action=Action(
                 tool_name="bash",
                 parameters={"arguments": f"echo 'step {i + 1}'"},

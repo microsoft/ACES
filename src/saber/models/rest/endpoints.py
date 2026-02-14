@@ -19,6 +19,7 @@ class APIEndpoints:
     EPISODE_POLICY = "/api/v1/session/{session_id}/episodes/{episode_id}/policy"
     EPISODE_STEPS = "/api/v1/session/{session_id}/episodes/{episode_id}/steps"
     EPISODE_TRANSCRIPT = "/api/v1/session/{session_id}/episodes/{episode_id}/transcript"
+    EPISODE_TRANSCRIPT_COUNT = "/api/v1/session/{session_id}/episodes/{episode_id}/transcript/count"
     EPISODE_SUBMISSION = "/api/v1/session/{session_id}/episodes/{episode_id}/submission"
     EPISODE_MESSAGES_INJECT = "/api/v1/session/{session_id}/episodes/{episode_id}/messages/inject"
     EPISODE_SUBMISSION_EVALUATION_CRITERIA = (

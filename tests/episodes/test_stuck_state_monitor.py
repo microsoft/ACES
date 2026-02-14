@@ -1,12 +1,14 @@
 """Tests for stuck state monitor."""
 
 import asyncio
+
 import pytest
+
 from saber.models.constants import MetadataKeys
-from saber.server.episodes.episode_manager import EpisodeManager
 from saber.server.episodes.connection_manager import ConnectionManager
-from saber.server.episodes.transcript_coordinator import TranscriptCoordinator
-from saber.server.episodes.stuck_state_monitor import StuckStateMonitor
+from saber.server.episodes.episode_manager import EpisodeManager
+from saber.server.episodes.transcript.coordinator import TranscriptCoordinator
+from saber.server.episodes.transcript.stuck_state_monitor import StuckStateMonitor
 
 
 @pytest.mark.asyncio
@@ -42,10 +44,7 @@ class TestStuckStateMonitor:
         coordinator = TranscriptCoordinator(episode_manager, connection_manager)
 
         # Create episode
-        episode = episode_manager.start_episode("session-1", "task-1")
-        episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "user", "content": "Hello"}
-        ]
+        episode_manager.start_episode("session-1", "task-1")
 
         # Wait for lifecycle hook
         await asyncio.sleep(0.01)
@@ -83,9 +82,6 @@ class TestStuckStateMonitor:
         coordinator = TranscriptCoordinator(episode_manager, connection_manager)
 
         episode = episode_manager.start_episode("session-1", "task-1")
-        episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "user", "content": "Hello"}
-        ]
 
         await asyncio.sleep(0.01)
 
@@ -105,17 +101,10 @@ class TestStuckStateMonitor:
 
         await monitor.start()
 
-        # Keep updating transcript (simulating activity)
-        for i in range(3):
+        # Keep updating state timestamps (simulating activity)
+        for _i in range(3):
             await asyncio.sleep(0.15)
-            await coordinator.notify_modification(
-                episode_id=episode.episode_id,
-                modified_transcript=[
-                    {"role": "user", "content": f"Message {i}"}
-                ],
-                operation="append",
-                injected_by="test",
-            )
+            coordinator._state_machine.update_state_timestamp(episode.episode_id)
 
         # Should not have error events
         error_events = [e for e in events_captured if e.type == "transcript_error"]
@@ -131,7 +120,6 @@ class TestStuckStateMonitor:
 
         # Episode with custom threshold
         episode = episode_manager.start_episode("session-1", "task-1")
-        episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = []
         episode.context[MetadataKeys.STUCK_STATE_THRESHOLD] = 0.5  # 500ms
 
         await asyncio.sleep(0.01)
@@ -169,9 +157,6 @@ class TestStuckStateMonitor:
 
         # Create and immediately end episode
         episode = episode_manager.start_episode("session-1", "task-1")
-        episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "user", "content": "Hello"}
-        ]
 
         await asyncio.sleep(0.01)
 
@@ -207,10 +192,7 @@ class TestStuckStateMonitor:
         connection_manager = ConnectionManager(episode_manager)
         coordinator = TranscriptCoordinator(episode_manager, connection_manager)
 
-        episode = episode_manager.start_episode("session-1", "task-1")
-        episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "user", "content": "Hello"}
-        ]
+        episode_manager.start_episode("session-1", "task-1")
 
         await asyncio.sleep(0.01)
 

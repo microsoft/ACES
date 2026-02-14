@@ -7,10 +7,17 @@ Protocols enable duck typing with type checking - any object that implements
 the required methods can be used, without requiring inheritance.
 """
 
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from ...models.rest.websocket_messages import WebSocketServerMessage
 from ..base import Episode
+
+# Type aliases for lifecycle callbacks
+EpisodeCreatedCallback = Callable[[str], Awaitable[None]]  # (episode_id) -> None
+EpisodeEndedCallback = Callable[[str], Awaitable[None]]  # (episode_id) -> None
 
 
 class EpisodeManagerProtocol(Protocol):
@@ -21,6 +28,11 @@ class EpisodeManagerProtocol(Protocol):
     concrete class (avoiding circular imports).
     """
 
+    @property
+    def episodes(self) -> dict[str, Episode]:
+        """Active episodes dictionary (episode_id -> Episode)."""
+        ...
+
     def get_episode_by_id(self, episode_id: str) -> Episode | None:
         """Get episode by ID.
 
@@ -29,6 +41,22 @@ class EpisodeManagerProtocol(Protocol):
 
         Returns:
             Episode instance if found, None otherwise
+        """
+        ...
+
+    def register_on_episode_created(self, callback: EpisodeCreatedCallback) -> None:
+        """Register a callback for episode creation events.
+
+        Args:
+            callback: Async callable invoked with episode_id after creation
+        """
+        ...
+
+    def register_on_episode_ended(self, callback: EpisodeEndedCallback) -> None:
+        """Register a callback for episode termination events.
+
+        Args:
+            callback: Async callable invoked with episode_id before termination
         """
         ...
 
@@ -63,4 +91,9 @@ class ConnectionManagerProtocol(Protocol):
         ...
 
 
-__all__ = ["EpisodeManagerProtocol", "ConnectionManagerProtocol"]
+__all__ = [
+    "ConnectionManagerProtocol",
+    "EpisodeCreatedCallback",
+    "EpisodeEndedCallback",
+    "EpisodeManagerProtocol",
+]

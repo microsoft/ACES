@@ -441,6 +441,7 @@ class SABERSandboxEnvironment:
                     session_manager=self._session_manager,
                     sample_id=self._sample_id,
                 )
+                assert self._handler_state is not None, "init_orchestrated_sub_task returned None"
                 # Extract episode information from handler state
                 self._episode_ids = self._handler_state.episode_ids
                 self._primary_episode_id = self._handler_state.primary_episode_id

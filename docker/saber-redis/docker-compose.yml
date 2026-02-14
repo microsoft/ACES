@@ -1,0 +1,17 @@
+# DEPRECATED: Redis is now auto-managed by the SABER server.
+# See src/saber/domain/package_resources/redis-compose.yml
+# This file is kept for manual/standalone Redis usage only.
+version: '3.8'
+
+services:
+  saber-redis:
+    image: redis:7-alpine
+    container_name: saber-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # NO VOLUMES - ephemeral storage, cleared on container removal

@@ -5,9 +5,10 @@ Tests that session_manager flows from SessionManager → ExecutionManager →
 ExecutorFactory → InjectPromptExecutor properly.
 """
 
+from datetime import datetime, timezone
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, MagicMock
-from datetime import datetime
 
 from saber.models.constants import MetadataKeys
 from saber.server.base import Episode, EpisodeState
@@ -43,10 +44,7 @@ class TestSessionManagerInjectionE2E:
             session_id="session-e2e",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful..."},
-                ],
-                MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT: datetime.utcnow().isoformat(),
+                MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT: datetime.now(timezone.utc).isoformat(),
                 MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: 0,
             },
         )

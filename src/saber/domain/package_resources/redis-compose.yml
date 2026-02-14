@@ -1,0 +1,14 @@
+# SABER Redis Infrastructure
+# Managed by SessionManager — started/stopped with the SABER server.
+# Opt out: SABER_REDIS_AUTO_START=false (for external Redis)
+
+services:
+  saber-redis:
+    image: redis:7-alpine
+    ports:
+      - "${SABER_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

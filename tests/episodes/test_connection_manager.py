@@ -9,7 +9,7 @@ Tests cover:
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -202,7 +202,7 @@ class TestConnectionManagerBroadcast:
                 state="WAITING_FOR_USER"
             ),
             id="test-id",
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
         await manager.connect(episode_id, mock_ws1)
@@ -227,7 +227,7 @@ class TestConnectionManagerBroadcast:
         episode_id1 = "episode_123"
         episode_id2 = "episode_456"
 
-        message = PongMessage(timestamp=datetime.utcnow().isoformat())
+        message = PongMessage(timestamp=datetime.now(timezone.utc).isoformat())
 
         await manager.connect(episode_id1, mock_ws1)
         await manager.connect(episode_id2, mock_ws2)
@@ -247,7 +247,7 @@ class TestConnectionManagerBroadcast:
     async def test_broadcast_to_nonexistent_episode(self):
         """Test broadcast to episode with no connections."""
         manager = ConnectionManager()
-        message = PongMessage(timestamp=datetime.utcnow().isoformat())
+        message = PongMessage(timestamp=datetime.now(timezone.utc).isoformat())
 
         # Should not raise exception
         await manager.broadcast_to_episode("nonexistent_episode", message)
@@ -259,7 +259,7 @@ class TestConnectionManagerBroadcast:
         mock_ws_good = AsyncMock(spec=WebSocket)
         mock_ws_bad = AsyncMock(spec=WebSocket)
         episode_id = "episode_123"
-        message = PongMessage(timestamp=datetime.utcnow().isoformat())
+        message = PongMessage(timestamp=datetime.now(timezone.utc).isoformat())
 
         await manager.connect(episode_id, mock_ws_good)
         await manager.connect(episode_id, mock_ws_bad)
@@ -431,7 +431,7 @@ class TestConnectionManagerConcurrency:
                     state="WAITING_FOR_USER"
                 ),
                 id=f"test-{i}",
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
             for i in range(10)
         ]
@@ -551,7 +551,6 @@ class TestOrphanedEpisodeDetection:
     async def test_disconnect_detects_orphaned_active_episode(self):
         """Test that disconnect detects when last connection lost for ACTIVE episode."""
         from saber.server.base import Episode, EpisodeState
-        from saber.server.episodes.episode_manager import EpisodeManager
 
         # Create mock episode manager with active episode
         episode_manager = Mock()

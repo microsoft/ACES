@@ -98,15 +98,13 @@ from .rest import (
     SessionTerminateResponse,
     StepResponse,
     TaskOrchestrationResponse,
+    TranscriptCountResponse,
     TranscriptGetResponse,
     TranscriptPushRequest,
     TranscriptPushResponse,
     TranscriptSyncConfig,
 )
 from .rest.websocket_constants import WebSocketCloseCode, WebSocketDefaults
-
-# Transcript coordination models (Phase 2: WebSocket)
-from .transcript import SyncStrategy, TranscriptSyncRequest, TranscriptSyncResponse, TranscriptVersion
 
 __all__ = [
     # Benchmark task models
@@ -158,10 +156,7 @@ __all__ = [
     "TranscriptPushRequest",
     "TranscriptPushResponse",
     "TranscriptGetResponse",
-    "TranscriptSyncRequest",
-    "TranscriptSyncResponse",
-    "TranscriptVersion",
-    "SyncStrategy",
+    "TranscriptCountResponse",
     # Message injection models
     "MessageInjectRequest",
     "MessageInjectResponse",

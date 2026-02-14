@@ -6,14 +6,11 @@ Tests follow TDD - written before implementation.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pytest
-
 if TYPE_CHECKING:
-    from inspect_ai.model import ChatMessage
+    pass
 
 
 class TestCopilotEventModels:
@@ -189,13 +186,13 @@ class TestCopilotEventModels:
         event_json = {
             "type": "tool.execution_start",
             "timestamp": "2026-01-28T10:00:08Z",
-            "data": {"toolCallId": "call-789", "name": "bash"},
+            "data": {"toolCallId": "call-789", "toolName": "bash"},
         }
         event = parse_event(event_json)
 
         assert event.type == "tool.execution_start"
         assert event.data.toolCallId == "call-789"
-        assert event.data.name == "bash"
+        assert event.data.toolName == "bash"
 
 
 class TestSessionEventLog:

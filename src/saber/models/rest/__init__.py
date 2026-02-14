@@ -27,13 +27,9 @@ from .websocket_messages import (
     PushMessageData,
     StateEventData,
     StateEventMessage,
-    SyncRequestData,
-    SyncResponseData,
-    SyncResponseMessage,
     TranscriptErrorData,
     TranscriptErrorMessage,
     TranscriptErrorType,
-    TranscriptVersion,
     WebSocketMessageType,
     WebSocketServerMessage,
 )
@@ -49,9 +45,6 @@ __all__ = [
     # WebSocket message types and enums
     "WebSocketMessageType",
     "TranscriptErrorType",
-    "TranscriptVersion",
-    "SyncRequestData",
-    "SyncResponseData",
     "PushMessageData",
     "PushAckData",
     "StateEventData",
@@ -60,7 +53,6 @@ __all__ = [
     "ConnectionMetadata",
     "ConnectedMessage",
     "PongMessage",
-    "SyncResponseMessage",
     "PushAckMessage",
     "StateEventMessage",
     "TranscriptErrorMessage",
@@ -91,6 +83,7 @@ __all__ = [
     "TranscriptPushRequest",
     "TranscriptPushResponse",
     "TranscriptGetResponse",
+    "TranscriptCountResponse",
     "MessageInjectRequest",
     "MessageInjectResponse",
     "PendingMessagesResponse",
@@ -369,6 +362,12 @@ class TranscriptGetResponse(BaseModel):
     message_count: int = Field(description="Number of messages in transcript")
     last_updated: str | None = Field(None, description="Last update timestamp (ISO format)")
     metadata: dict[str, Any] | None = Field(None, description="Transcript metadata if available")
+
+
+class TranscriptCountResponse(BaseModel, frozen=True):
+    """Response model for transcript message count."""
+
+    count: int = Field(description="Number of messages in transcript")
 
 
 # Message injection models (Phase 4: Red Team message injection)

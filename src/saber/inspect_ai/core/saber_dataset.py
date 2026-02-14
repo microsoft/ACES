@@ -20,7 +20,9 @@ Following SABER's philosophy:
 - No silent data loss during conversion
 """
 
-from typing import Any, Union
+from __future__ import annotations
+
+from typing import Any
 
 from inspect_ai.dataset import MemoryDataset, Sample
 
@@ -59,7 +61,7 @@ class SABERDataset(MemoryDataset):
     - Non-orchestrated samples are sliced normally
     """
 
-    def __getitem__(self, index: int | slice) -> Union[Sample, "MemoryDataset"]:
+    def __getitem__(self, index: int | slice) -> Sample | MemoryDataset:
         """Override slicing to preserve orchestration boundaries."""
         if isinstance(index, int):
             # Single sample access - use parent implementation

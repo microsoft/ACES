@@ -8,11 +8,11 @@ Tests cover:
 - Error handling
 """
 
-import pytest
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
-from saber.inspect_ai.agents import SABERAgentRegistry, AgentNotFoundError
+import pytest
+
+from saber.inspect_ai.agents import AgentNotFoundError, SABERAgentRegistry
 
 
 class TestSABERAgentRegistry:
@@ -88,8 +88,9 @@ class TestAgentAutoDiscovery:
 
     def test_register_core_agents_skips_private_files(self):
         """Test that auto-discovery skips private files (starting with _)."""
-        from saber.inspect_ai.agents import _register_core_agents
         import importlib
+
+        from saber.inspect_ai.agents import _register_core_agents
 
         # Clear registry
         SABERAgentRegistry._agents.clear()
@@ -97,6 +98,7 @@ class TestAgentAutoDiscovery:
         with patch('saber.inspect_ai.agents.Path') as mock_path_class:
             mock_registry_dir = Mock()
             mock_registry_dir.exists.return_value = True
+            mock_registry_dir.iterdir.return_value = []  # No subdirectories
 
             # Create mock files including private ones
             private_file = Mock()
@@ -130,14 +132,16 @@ class TestAgentAutoDiscovery:
 
     def test_register_core_agents_missing_create_agent(self):
         """Test auto-discovery handles modules without create_agent function."""
-        from saber.inspect_ai.agents import _register_core_agents
         import importlib
+
+        from saber.inspect_ai.agents import _register_core_agents
 
         SABERAgentRegistry._agents.clear()
 
         with patch('saber.inspect_ai.agents.Path') as mock_path_class:
             mock_registry_dir = Mock()
             mock_registry_dir.exists.return_value = True
+            mock_registry_dir.iterdir.return_value = []  # No subdirectories
 
             mock_file = Mock()
             mock_file.name = "invalid_agent.py"
@@ -165,14 +169,16 @@ class TestAgentAutoDiscovery:
 
     def test_register_core_agents_import_error(self):
         """Test auto-discovery handles import errors gracefully."""
-        from saber.inspect_ai.agents import _register_core_agents
         import importlib
+
+        from saber.inspect_ai.agents import _register_core_agents
 
         SABERAgentRegistry._agents.clear()
 
         with patch('saber.inspect_ai.agents.Path') as mock_path_class:
             mock_registry_dir = Mock()
             mock_registry_dir.exists.return_value = True
+            mock_registry_dir.iterdir.return_value = []  # No subdirectories
 
             mock_file = Mock()
             mock_file.name = "broken_agent.py"

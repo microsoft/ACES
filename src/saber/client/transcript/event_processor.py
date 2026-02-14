@@ -2,8 +2,8 @@
 
 This module provides event listening and processing capabilities:
 - Background listener task for WebSocket events
-- Event queue management
-- State event waiting with filtering
+- Dual-queue event management (ack queue + state queue)
+- State event waiting
 - Stuck state detection
 
 Logging category: AGENT.
@@ -33,17 +33,32 @@ logger = get_saber_logger(LogCategory.AGENT, __name__)
 # Type alias for messages that can be either Pydantic models or dicts (for test compatibility)
 WebSocketMessageOrDict = WebSocketServerMessage | dict[str, Any]
 
+# Message types routed to the ack queue (responses to client requests)
+_ACK_EVENT_TYPES = {
+    WebSocketMessageType.PUSH_ACK.value,
+    WebSocketMessageType.PONG.value,
+}
+
+# Message types routed to the state queue (server-initiated events)
+_STATE_EVENT_TYPES = {
+    WebSocketMessageType.IS_WAITING_ON_USER.value,
+    WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
+    WebSocketMessageType.IS_WAITING_ON_TOOLS.value,
+    WebSocketMessageType.TRANSCRIPT_MODIFIED.value,
+    WebSocketMessageType.TRANSCRIPT_ERROR.value,
+}
+
 
 class WebSocketEventProcessor:
     """Processes WebSocket events from the server.
 
-    Handles:
-    - Background listener task that queues events
-    - Waiting for specific event types
-    - State event filtering
-    - Stuck state detection
+    Uses two dedicated queues to separate concerns:
+    - ``_ack_queue``: push_ack and pong responses (consumed by wait_for_message_type)
+    - ``_state_queue``: state events and transcript notifications (consumed by wait_for_state_event)
 
-    Thread-safety: Event queue is asyncio.Queue which is thread-safe.
+    This eliminates cross-contamination between ack waits and state waits.
+
+    Thread-safety: asyncio.Queue is safe for single-loop concurrent access.
     """
 
     def __init__(
@@ -60,10 +75,13 @@ class WebSocketEventProcessor:
         self._episode_id = episode_id
         self._ws_config = ws_config or WebSocketConfig()
 
-        # Event queue - populated by listener, consumed by sync operations
-        self._event_queue: asyncio.Queue[WebSocketMessageOrDict] = asyncio.Queue(
-            maxsize=self._ws_config.pull.event_queue_max_size
-        )
+        max_size = self._ws_config.pull.event_queue_max_size
+
+        # Ack queue — push_ack and pong (responses to client requests)
+        self._ack_queue: asyncio.Queue[WebSocketMessageOrDict] = asyncio.Queue(maxsize=max_size)
+
+        # State queue — is_waiting_on_*, transcript_modified, transcript_error
+        self._state_queue: asyncio.Queue[WebSocketMessageOrDict] = asyncio.Queue(maxsize=max_size)
 
         # Listener task - tracks background WebSocket listener
         self._listener_task: asyncio.Task[None] | None = None
@@ -76,14 +94,19 @@ class WebSocketEventProcessor:
             extra={
                 "episode_id": episode_id,
                 "event_timeout": self._ws_config.pull.event_timeout,
-                "queue_max_size": self._ws_config.pull.event_queue_max_size,
+                "queue_max_size": max_size,
             },
         )
 
     @property
-    def event_queue(self) -> asyncio.Queue[WebSocketMessageOrDict]:
-        """Get the event queue for direct access (e.g., testing)."""
-        return self._event_queue
+    def ack_queue(self) -> asyncio.Queue[WebSocketMessageOrDict]:
+        """Get the ack queue (push_ack, pong) for direct access (e.g., testing)."""
+        return self._ack_queue
+
+    @property
+    def state_queue(self) -> asyncio.Queue[WebSocketMessageOrDict]:
+        """Get the state queue (state events, transcript notifications) for direct access."""
+        return self._state_queue
 
     @property
     def config(self) -> WebSocketConfig:
@@ -110,11 +133,10 @@ class WebSocketEventProcessor:
     async def _listen_for_events(self, websocket: "ClientConnection") -> None:
         """Background task that listens for WebSocket events.
 
-        Receives transcript_modified events and queues them for processing.
-
-        Handles both push (server events) and pull (response to client requests).
-        Server-initiated events are queued for generate() to consume.
-        Client-response messages are consumed directly by awaiting code.
+        Routes incoming messages to the appropriate queue:
+        - push_ack, pong → ``_ack_queue``
+        - is_waiting_on_*, transcript_modified, transcript_error → ``_state_queue``
+        - connected → discarded (consumed during handshake)
 
         Args:
             websocket: WebSocket connection to listen on
@@ -123,7 +145,6 @@ class WebSocketEventProcessor:
 
         try:
             async for message in websocket:
-                # Parse JSON directly into Pydantic model using discriminated union
                 try:
                     parsed_message = WebSocketServerMessageAdapter.validate_json(message)
                 except ValidationError as e:
@@ -135,54 +156,17 @@ class WebSocketEventProcessor:
 
                 event_type = parsed_message.type
 
-                logger.debug(
-                    "WebSocket listener received message",
-                    extra={
-                        "episode_id": self._episode_id,
-                        "event_type": event_type,
-                        "queue_size_before": self._event_queue.qsize(),
-                    },
-                )
-
-                if event_type == WebSocketMessageType.TRANSCRIPT_MODIFIED.value:
-                    # Server-initiated notification - queue for generate()
-                    await self._event_queue.put(parsed_message)
-
+                if event_type in _ACK_EVENT_TYPES:
+                    await self._ack_queue.put(parsed_message)
                     logger.debug(
-                        "Received transcript modification event - QUEUED",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "version": (
-                                parsed_message.data.version if isinstance(parsed_message, StateEventMessage) else None
-                            ),
-                            "queue_size_after": self._event_queue.qsize(),
-                        },
+                        "Queued ack event",
+                        extra={"episode_id": self._episode_id, "type": event_type},
                     )
 
-                elif event_type in (
-                    WebSocketMessageType.IS_WAITING_ON_USER.value,
-                    WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
-                    WebSocketMessageType.IS_WAITING_ON_TOOLS.value,
-                ):
-                    # State machine events - log and queue
-                    await self._event_queue.put(parsed_message)
+                elif event_type in _STATE_EVENT_TYPES:
+                    await self._state_queue.put(parsed_message)
 
-                    logger.debug(
-                        "Received state machine event - QUEUED",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "event_type": event_type,
-                            "state": (
-                                parsed_message.data.state if isinstance(parsed_message, StateEventMessage) else None
-                            ),
-                            "queue_size_after": self._event_queue.qsize(),
-                        },
-                    )
-
-                elif event_type == WebSocketMessageType.TRANSCRIPT_ERROR.value:
-                    # Error events (stuck_state, etc.) - queue for handling
-                    await self._event_queue.put(parsed_message)
-
+                    # Extra logging for stuck_state errors
                     if isinstance(parsed_message, TranscriptErrorMessage):
                         error_type = parsed_message.data.error
                         if error_type.value == "stuck_state":
@@ -195,34 +179,13 @@ class WebSocketEventProcessor:
                                     "threshold_seconds": parsed_message.data.threshold_seconds,
                                 },
                             )
-                        else:
-                            logger.error(
-                                "Received transcript error event",
-                                extra={
-                                    "episode_id": self._episode_id,
-                                    "error": error_type.value,
-                                },
-                            )
-
-                elif event_type in (
-                    WebSocketMessageType.SYNC_RESPONSE.value,
-                    WebSocketMessageType.PUSH_ACK.value,
-                    WebSocketMessageType.PONG.value,
-                ):
-                    # Response to client request - queue for awaiting code
-                    await self._event_queue.put(parsed_message)
-
-                    logger.debug(
-                        "Received WebSocket response",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "type": event_type,
-                        },
-                    )
+                    else:
+                        logger.debug(
+                            "Queued state event",
+                            extra={"episode_id": self._episode_id, "type": event_type},
+                        )
 
                 elif event_type == WebSocketMessageType.CONNECTED.value:
-                    # Connection handshake message - should be consumed during connection
-                    # but handle it gracefully if it somehow reaches the listener
                     logger.debug(
                         "Received 'connected' message in listener (unexpected but harmless)",
                         extra={"episode_id": self._episode_id},
@@ -231,10 +194,7 @@ class WebSocketEventProcessor:
                 else:
                     logger.warning(
                         "Received unknown WebSocket message type",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "type": event_type,
-                        },
+                        extra={"episode_id": self._episode_id, "type": event_type},
                     )
 
         except websockets.exceptions.ConnectionClosed:
@@ -243,101 +203,40 @@ class WebSocketEventProcessor:
             logger.error("WebSocket listener error", extra={"episode_id": self._episode_id, "error": str(e)})
 
     async def wait_for_state_event(self) -> bool:
-        """Wait for WebSocket event indicating transcript modification.
+        """Wait for a state event from the server.
 
-        Only accepts state events (is_waiting_on_*, transcript_modified).
-        Other events (push_ack, sync_response) are discarded as they're
-        stale responses from previous operations.
+        Reads from ``_state_queue`` which only contains state events, so no
+        discard loop is needed.
 
         Returns:
             True if state event received, False on timeout
         """
-        logger.debug(
-            "wait_for_state_event() called",
-            extra={
-                "episode_id": self._episode_id,
-                "event_timeout": self._ws_config.pull.event_timeout,
-                "queue_size": self._event_queue.qsize(),
-            },
-        )
         try:
-            # Loop until we get a state event, discarding other events
-            for iteration in range(WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS):
-                logger.debug(
-                    f"Waiting for event from queue (iteration {iteration + 1})",
-                    extra={
-                        "episode_id": self._episode_id,
-                        "timeout": self._ws_config.pull.event_timeout,
-                    },
-                )
-                # Wait for event from queue (populated by background listener)
-                event_data: WebSocketMessageOrDict = await asyncio.wait_for(
-                    self._event_queue.get(), timeout=self._ws_config.pull.event_timeout
-                )
+            event_data: WebSocketMessageOrDict = await asyncio.wait_for(
+                self._state_queue.get(), timeout=self._ws_config.pull.event_timeout
+            )
 
-                # Check event type
-                event_type = event_data.type if hasattr(event_data, "type") else None
+            event_type = event_data.type if hasattr(event_data, "type") else None
+            version = None
+            state = None
+            if isinstance(event_data, StateEventMessage):
+                version = event_data.data.version
+                state = event_data.data.state
 
-                logger.debug(
-                    "Event received from queue",
-                    extra={
-                        "episode_id": self._episode_id,
-                        "event_type": event_type,
-                        "event_class": type(event_data).__name__,
-                    },
-                )
-
-                # Accept state events
-                state_event_types = [
-                    WebSocketMessageType.IS_WAITING_ON_USER.value,
-                    WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
-                    WebSocketMessageType.IS_WAITING_ON_TOOLS.value,
-                    WebSocketMessageType.TRANSCRIPT_MODIFIED.value,
-                    WebSocketMessageType.TRANSCRIPT_ERROR.value,
-                ]
-
-                if event_type in state_event_types:
-                    # Extract version from Pydantic model (StateEventMessage has .data.version)
-                    version = None
-                    state = None
-                    if isinstance(event_data, StateEventMessage):
-                        version = event_data.data.version
-                        state = event_data.data.state
-
-                    logger.debug(
-                        "Received state event - returning True",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "version": version,
-                            "event_type": event_type,
-                            "state": state,
-                        },
-                    )
-                    return True
-                else:
-                    # Discard non-state events (push_ack, sync_response from prior operations)
-                    logger.info(
-                        f"Discarding non-state event: {event_type}",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "event_type": event_type,
-                        },
-                    )
-                    # Continue to next iteration
-
-            # Exhausted iterations
-            logger.warning(
-                "Exhausted iterations waiting for state event",
+            logger.debug(
+                "Received state event",
                 extra={
                     "episode_id": self._episode_id,
-                    "max_iterations": WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
+                    "event_type": event_type,
+                    "version": version,
+                    "state": state,
                 },
             )
-            return False
+            return True
 
         except asyncio.TimeoutError:
             logger.warning(
-                f"Timeout ({self._ws_config.pull.event_timeout}s) waiting for modification event",
+                f"Timeout ({self._ws_config.pull.event_timeout}s) waiting for state event",
                 extra={"episode_id": self._episode_id},
             )
             return False
@@ -358,7 +257,7 @@ class WebSocketEventProcessor:
             "wait_for_injection_event() STARTING",
             extra={
                 "episode_id": self._episode_id,
-                "queue_size": self._event_queue.qsize(),
+                "queue_size": self._state_queue.qsize(),
                 "shutdown_set": self._shutdown_event.is_set(),
             },
         )
@@ -373,18 +272,9 @@ class WebSocketEventProcessor:
                 )
                 raise asyncio.CancelledError("Event processor shutdown")
 
-            logger.debug(
-                f"Loop iteration {iteration}: waiting for event from queue (timeout=1s)",
-                extra={
-                    "episode_id": self._episode_id,
-                    "iteration": iteration,
-                    "queue_size": self._event_queue.qsize(),
-                },
-            )
-
-            # Wait for event from queue with short timeout to check shutdown periodically
+            # Wait for event from state queue with short timeout to check shutdown periodically
             try:
-                event_data: WebSocketMessageOrDict = await asyncio.wait_for(self._event_queue.get(), timeout=1.0)
+                event_data: WebSocketMessageOrDict = await asyncio.wait_for(self._state_queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 # Check shutdown and continue waiting
                 logger.debug(
@@ -442,27 +332,37 @@ class WebSocketEventProcessor:
             extra={"episode_id": self._episode_id},
         )
 
-    async def check_for_stuck_state(self) -> bool:
-        """Check event queue for stuck_state errors without blocking.
+    async def cancel_listener(self) -> None:
+        """Cancel the background listener task if running.
 
-        Scans the event queue for transcript_error events with stuck_state.
+        Awaits the task to ensure clean cancellation before returning.
+        """
+        if self._listener_task:
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+            self._listener_task = None
+
+    async def check_for_stuck_state(self) -> bool:
+        """Check state queue for stuck_state errors without blocking.
+
+        Scans the state queue for transcript_error events with stuck_state.
         This allows proactive detection of stuck episodes.
 
         Returns:
             True if stuck_state error detected, False otherwise
         """
-        # Non-blocking check of event queue
         try:
-            # Peek at events in queue without blocking
             events_to_requeue: list[WebSocketMessageOrDict] = []
             stuck_detected = False
 
-            while not self._event_queue.empty():
+            while not self._state_queue.empty():
                 try:
-                    event: WebSocketMessageOrDict = self._event_queue.get_nowait()
+                    event: WebSocketMessageOrDict = self._state_queue.get_nowait()
                     events_to_requeue.append(event)
 
-                    # Check for transcript_error with stuck_state using Pydantic model attributes
                     if isinstance(event, TranscriptErrorMessage):
                         if event.data.error.value == "stuck_state":
                             stuck_detected = True
@@ -471,7 +371,7 @@ class WebSocketEventProcessor:
 
             # Re-queue all events
             for event in events_to_requeue:
-                await self._event_queue.put(event)
+                await self._state_queue.put(event)
 
             return stuck_detected
 
@@ -504,7 +404,7 @@ class WebSocketEventProcessor:
                 extra={
                     "episode_id": self._episode_id,
                     "attempt": attempt,
-                    "queue_size": self._event_queue.qsize(),
+                    "queue_size": self._state_queue.qsize(),
                 },
             )
             # Check for stuck state before waiting (after first attempt)
@@ -552,36 +452,28 @@ class WebSocketEventProcessor:
         timeout: float,
         max_iterations: int = WebSocketDefaults.MAX_EVENT_DISCARD_ITERATIONS,
         context: str = "",
-        preserve_state_events: bool = True,
     ) -> WebSocketMessageOrDict | None:
-        """Wait for a specific WebSocket message type.
+        """Wait for a specific message type from the ack queue.
+
+        Reads from ``_ack_queue`` which only contains push_ack and pong messages,
+        so no state-event buffering is needed. Only non-matching messages
+        count against ``max_iterations``.
 
         Args:
             expected_type: The WebSocketMessageType to wait for
             timeout: Timeout in seconds for each queue get
             max_iterations: Maximum iterations to discard non-matching events
             context: Context string for logging (e.g., "tool_result_push")
-            preserve_state_events: If True (default), re-queue state events so they
-                can be consumed later by wait_for_state_event(). Set to False for
-                push-only contexts (like Copilot agent) that don't need to process
-                state events - this avoids queue buildup and iteration limits.
 
         Returns:
             The matching message, or None if max_iterations exceeded or timeout
         """
-        # State event types that should be preserved (re-queued) when preserve_state_events=True
-        state_event_types = {
-            WebSocketMessageType.IS_WAITING_ON_USER.value,
-            WebSocketMessageType.IS_WAITING_ON_ASSISTANT.value,
-            WebSocketMessageType.IS_WAITING_ON_TOOLS.value,
-            WebSocketMessageType.TRANSCRIPT_MODIFIED.value,
-            WebSocketMessageType.TRANSCRIPT_ERROR.value,
-        }
+        discarded_count = 0
 
-        for iteration in range(max_iterations):
+        while discarded_count < max_iterations:
             try:
                 response = await asyncio.wait_for(
-                    self._event_queue.get(),
+                    self._ack_queue.get(),
                     timeout=timeout,
                 )
 
@@ -590,40 +482,18 @@ class WebSocketEventProcessor:
 
                 if response_type == expected_type.value:
                     return response
-                elif preserve_state_events and response_type in state_event_types:
-                    # Re-queue state events for later consumption by wait_for_state_event()
-                    try:
-                        self._event_queue.put_nowait(response)
-                        logger.debug(
-                            f"Re-queued state event while waiting for {expected_type.value}",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "response_type": response_type,
-                                "expected_type": expected_type.value,
-                                "iteration": iteration,
-                                "context": context,
-                            },
-                        )
-                    except asyncio.QueueFull:
-                        logger.warning(
-                            "Event queue full, dropping state event",
-                            extra={
-                                "episode_id": self._episode_id,
-                                "response_type": response_type,
-                            },
-                        )
-                else:
-                    # Discard non-matching event (or state event when preserve_state_events=False)
-                    logger.debug(
-                        f"Discarding event while waiting for {expected_type.value}",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "response_type": response_type,
-                            "expected_type": expected_type.value,
-                            "iteration": iteration,
-                            "context": context,
-                        },
-                    )
+
+                discarded_count += 1
+                logger.debug(
+                    f"Discarding event while waiting for {expected_type.value}",
+                    extra={
+                        "episode_id": self._episode_id,
+                        "response_type": response_type,
+                        "expected_type": expected_type.value,
+                        "discarded_count": discarded_count,
+                        "context": context,
+                    },
+                )
 
             except asyncio.TimeoutError:
                 logger.warning(
@@ -647,12 +517,13 @@ class WebSocketEventProcessor:
         return None
 
     def drain_queue(self) -> None:
-        """Drain the event queue to release message references."""
-        while not self._event_queue.empty():
-            try:
-                self._event_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        """Drain both queues to release message references."""
+        for queue in (self._ack_queue, self._state_queue):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
 
 __all__ = ["WebSocketEventProcessor", "WebSocketMessageOrDict"]

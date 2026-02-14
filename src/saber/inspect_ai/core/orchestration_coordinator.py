@@ -11,10 +11,12 @@ The coordinator handles:
 - Cascade termination of entire orchestration groups
 """
 
+from __future__ import annotations
+
 import asyncio
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 
 from ...logging_config import LogCategory, get_saber_logger
 from ..constants import SandboxTimeouts
@@ -61,7 +63,7 @@ class OrchestrationCoordinator:
     Thread-safe for registration operations.
     """
 
-    _instance: Optional["OrchestrationCoordinator"] = None
+    _instance: OrchestrationCoordinator | None = None
     _lock = Lock()
 
     def __init__(self) -> None:
@@ -72,7 +74,7 @@ class OrchestrationCoordinator:
             self._init_lock = Lock()
             self._initialized = True
 
-    def __new__(cls) -> "OrchestrationCoordinator":
+    def __new__(cls) -> OrchestrationCoordinator:
         """Ensure singleton instance."""
         if cls._instance is None:
             with cls._lock:
@@ -273,7 +275,7 @@ class OrchestrationCoordinator:
 
         try:
             await asyncio.wait_for(dependency.ready_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error(
                 f"Timeout waiting for dependency {sample.depends_on_role}",
                 extra={
@@ -427,7 +429,7 @@ class OrchestrationCoordinator:
 
                     wrapper = WebSocketTranscriptSyncingModelWrapper.get_wrapper_for_episode(sample.episode_id)
                     if wrapper:
-                        wrapper._events.signal_shutdown()
+                        wrapper._client._events.signal_shutdown()
                         logger.info(
                             f"Signaled shutdown to wrapper for {role} in orchestration {orchestration_id}",
                             extra={
@@ -633,7 +635,7 @@ class OrchestrationCoordinator:
                     "event": "orchestration_coordination_complete",
                 },
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             missing_roles = set(group.samples.keys()) - group.scored_samples
             logger.error(
                 f"Orchestration timeout after {timeout}s - proceeding with partial results",

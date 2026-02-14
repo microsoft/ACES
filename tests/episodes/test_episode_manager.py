@@ -5,7 +5,6 @@ Tests episode lifecycle management, RL interfaces, and state transitions.
 Simplified after removing subtask progression tracking.
 """
 
-from datetime import datetime
 
 import pytest
 
@@ -269,7 +268,7 @@ class TestEpisodeManager:
 
         # Verify all episodes are tracked under the same session
         assert len(episodes) == 4
-        assert len(set(ep.episode_id for ep in episodes)) == 4  # All unique
+        assert len({ep.episode_id for ep in episodes}) == 4  # All unique
         assert session_id in manager.session_episodes
         assert len(manager.session_episodes[session_id]) == 4
 
@@ -384,7 +383,7 @@ class TestEpisodeManager:
             session_episode_ids = set(manager.session_episodes[session_id])
             for other_session_id, other_episodes in all_episodes.items():
                 if other_session_id != session_id:
-                    other_episode_ids = set(ep.episode_id for ep in other_episodes)
+                    other_episode_ids = {ep.episode_id for ep in other_episodes}
                     assert session_episode_ids.isdisjoint(other_episode_ids)
 
         # Test concurrent episode operations across sessions
@@ -394,7 +393,7 @@ class TestEpisodeManager:
 
         # Configure and execute steps across all episodes
         for session_id, episodes in all_episodes.items():
-            for i, episode in enumerate(episodes):
+            for _i, episode in enumerate(episodes):
                 # Configure with session-specific settings
                 mock_task = MagicMock()
                 mock_task.task_id = episode.task_id
@@ -402,7 +401,7 @@ class TestEpisodeManager:
                 await manager.configure_for_task(episode.episode_id, mock_task)
 
                 # Execute step
-                step_result = manager.step(episode.episode_id, action, command_result)
+                manager.step(episode.episode_id, action, command_result)
                 assert len(episode.steps) == 1
 
         # Test selective session cleanup - end all episodes for blue team
@@ -553,9 +552,9 @@ class TestTranscriptInitialization:
         context = {}
         manager._initialize_transcript(context, task)
 
-        # Should have transcript
-        assert MetadataKeys.CLIENT_TRANSCRIPT in context
-        transcript = context[MetadataKeys.CLIENT_TRANSCRIPT]
+        # Should have initial transcript (stored as INITIAL_TRANSCRIPT, not CLIENT_TRANSCRIPT)
+        assert MetadataKeys.INITIAL_TRANSCRIPT in context
+        transcript = context[MetadataKeys.INITIAL_TRANSCRIPT]
         assert len(transcript) == 2
 
         # System message combines prompts

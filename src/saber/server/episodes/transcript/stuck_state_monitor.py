@@ -1,11 +1,18 @@
 """Background monitor for detecting stuck episode states."""
 
+from __future__ import annotations
+
 import asyncio
 import time
-from typing import Any
+from typing import TYPE_CHECKING
 
-from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys
+from ....logging_config import LogCategory, get_saber_logger
+from ....models.constants import MetadataKeys
+
+if TYPE_CHECKING:
+    from ...base import Episode
+    from ..protocols import EpisodeManagerProtocol
+    from .coordinator import TranscriptCoordinator
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -20,8 +27,8 @@ class StuckStateMonitor:
 
     def __init__(
         self,
-        coordinator: Any,
-        episode_manager: Any,
+        coordinator: TranscriptCoordinator,
+        episode_manager: EpisodeManagerProtocol,
         check_interval: float = 30.0,
         stuck_threshold: float = 300.0,
     ) -> None:
@@ -106,7 +113,7 @@ class StuckStateMonitor:
             if self.coordinator._state_machine.is_episode_stuck(episode.episode_id, threshold):
                 await self._handle_stuck_episode(episode, threshold)
 
-    async def _handle_stuck_episode(self, episode: Any, threshold: float) -> None:
+    async def _handle_stuck_episode(self, episode: Episode, threshold: float) -> None:
         """Handle detection of stuck episode.
 
         Args:
@@ -131,7 +138,7 @@ class StuckStateMonitor:
         )
 
         # Broadcast error event
-        from ...models.rest.websocket_messages import TranscriptErrorData, TranscriptErrorMessage, TranscriptErrorType
+        from ....models.rest.websocket_messages import TranscriptErrorData, TranscriptErrorMessage, TranscriptErrorType
 
         error_message = TranscriptErrorMessage(
             data=TranscriptErrorData(

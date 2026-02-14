@@ -1,10 +1,16 @@
 """Auto-continue manager for transcript coordination."""
 
-from typing import Any
+from __future__ import annotations
 
-from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys
-from .transcript_state_machine import TranscriptState
+from typing import TYPE_CHECKING
+
+from ....logging_config import LogCategory, get_saber_logger
+from ....models.constants import MetadataKeys
+from ..protocols import EpisodeManagerProtocol
+from .state_machine import TranscriptState
+
+if TYPE_CHECKING:
+    from .coordinator import TranscriptCoordinator
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -18,12 +24,12 @@ class AutoContinueManager:
 
     DEFAULT_CONTINUE_PROMPT = "Continue solving the task."
 
-    def __init__(self, episode_manager: Any, transcript_coordinator: Any):
+    def __init__(self, episode_manager: EpisodeManagerProtocol, transcript_coordinator: TranscriptCoordinator) -> None:
         """Initialize auto-continue manager.
 
         Args:
             episode_manager: Episode manager for retrieving episodes
-            transcript_coordinator: Transcript coordinator for injecting messages
+            transcript_coordinator: Transcript coordinator for pushing messages
         """
         self.episode_manager = episode_manager
         self.transcript_coordinator = transcript_coordinator
@@ -64,22 +70,22 @@ class AutoContinueManager:
         # Get continue prompt (custom or default)
         continue_prompt = episode.context.get(MetadataKeys.CONTINUE_PROMPT, self.DEFAULT_CONTINUE_PROMPT)
 
-        # Inject continue message
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-        modified_transcript = transcript + [{"role": "user", "content": continue_prompt}]
-
         logger.info(
             "Injecting auto-continue message",
             extra={"episode_id": episode_id, "version": current_version, "prompt": continue_prompt},
         )
 
-        # Notify coordinator of modification
-        await self.transcript_coordinator.notify_modification(
+        # Push continue message via coordinator
+        continue_message: dict[str, str | list[str] | None] = {"role": "user", "content": continue_prompt}
+        await self.transcript_coordinator.push_message(
             episode_id=episode_id,
-            modified_transcript=modified_transcript,
+            session_id=episode.session_id,
+            message=continue_message,
             operation="auto_continue",
-            injected_by="system",
         )
+
+        # Update idempotency guard - mark this version as auto-continued
+        await episode.update_context_atomic({MetadataKeys.LAST_AUTO_CONTINUE_VERSION: current_version})
 
 
 __all__ = ["AutoContinueManager"]

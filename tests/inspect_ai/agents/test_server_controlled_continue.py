@@ -18,20 +18,17 @@ class TestServerControlledOnContinue:
     """Test cases for _server_controlled_on_continue callback."""
 
     @pytest.mark.asyncio
-    async def test_calls_wait_for_injection_and_sync_on_wrapper(self):
-        """Test that callback calls wait_for_injection_and_sync on the model wrapper."""
+    async def test_calls_wait_for_state_event_on_wrapper_client(self):
+        """Test that callback calls wait_for_state_event_with_retry on the wrapper's client."""
         from inspect_ai.agent._agent import AgentState
         from inspect_ai.model import ChatMessageUser, ChatMessageAssistant
         from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 
-        # Create mock wrapper
+        # Create mock wrapper with _client
         mock_wrapper = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
-        synced_messages = [
-            ChatMessageUser(content="Initial user message"),
-            ChatMessageAssistant(content="Assistant response"),
-            ChatMessageUser(content="Server-injected continue prompt"),
-        ]
-        mock_wrapper.wait_for_injection_and_sync = AsyncMock(return_value=synced_messages)
+        mock_client = MagicMock()
+        mock_client.wait_for_state_event_with_retry = AsyncMock(return_value=True)
+        mock_wrapper._client = mock_client
 
         # Create initial state
         initial_messages = [
@@ -44,13 +41,12 @@ class TestServerControlledOnContinue:
         with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_wrapper):
             result = await _server_controlled_on_continue(state)
 
-        # Verify wait_for_injection_and_sync was called
-        mock_wrapper.wait_for_injection_and_sync.assert_called_once()
+        # Verify wait_for_state_event_with_retry was called on the client
+        mock_client.wait_for_state_event_with_retry.assert_called_once()
 
-        # Verify result is an AgentState with synced messages
+        # Verify result is the original state (continue the loop)
         assert isinstance(result, AgentState)
-        assert len(result.messages) == 3
-        assert result.messages[-1].content == "Server-injected continue prompt"
+        assert result is state
 
     @pytest.mark.asyncio
     async def test_returns_false_when_not_wrapper_and_no_tool_calls(self):
@@ -116,42 +112,35 @@ class TestServerControlledOnContinue:
         assert result is state
 
     @pytest.mark.asyncio
-    async def test_preserves_output_from_original_state(self):
-        """Test that callback preserves the output from original state."""
-        from inspect_ai.agent._agent import AgentState
-        from inspect_ai.model import ChatMessageUser, ChatMessageAssistant, ModelOutput, ChatCompletionChoice
-        from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
-
-        mock_wrapper = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
-        synced_messages = [ChatMessageUser(content="Synced")]
-        mock_wrapper.wait_for_injection_and_sync = AsyncMock(return_value=synced_messages)
-
-        # Create state with explicit output
-        state = AgentState(messages=[ChatMessageUser(content="Original")])
-        mock_output = ModelOutput(
-            model="test-model",
-            choices=[ChatCompletionChoice(
-                message=ChatMessageAssistant(content="Original output"),
-                stop_reason="stop"
-            )]
-        )
-        state.output = mock_output
-
-        with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_wrapper):
-            result = await _server_controlled_on_continue(state)
-
-        # Output should be preserved
-        assert result.output.model == "test-model"
-
-    @pytest.mark.asyncio
-    async def test_handles_sync_error_gracefully(self):
-        """Test that callback handles errors from sync and returns False to stop loop."""
+    async def test_returns_false_when_state_event_not_received(self):
+        """Test that callback returns False when wait_for_state_event_with_retry returns False."""
         from inspect_ai.agent._agent import AgentState
         from inspect_ai.model import ChatMessageUser
         from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
 
         mock_wrapper = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
-        mock_wrapper.wait_for_injection_and_sync = AsyncMock(side_effect=RuntimeError("Sync failed"))
+        mock_client = MagicMock()
+        mock_client.wait_for_state_event_with_retry = AsyncMock(return_value=False)
+        mock_wrapper._client = mock_client
+
+        state = AgentState(messages=[ChatMessageUser(content="Test")])
+
+        with patch("saber.inspect_ai.agents.registry.react.active_model", return_value=mock_wrapper):
+            result = await _server_controlled_on_continue(state)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_handles_sync_error_gracefully(self):
+        """Test that callback handles errors from wait and returns False to stop loop."""
+        from inspect_ai.agent._agent import AgentState
+        from inspect_ai.model import ChatMessageUser
+        from saber.inspect_ai.integration.model_wrapper import WebSocketTranscriptSyncingModelWrapper
+
+        mock_wrapper = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
+        mock_client = MagicMock()
+        mock_client.wait_for_state_event_with_retry = AsyncMock(side_effect=RuntimeError("Sync failed"))
+        mock_wrapper._client = mock_client
 
         state = AgentState(messages=[ChatMessageUser(content="Test")])
 

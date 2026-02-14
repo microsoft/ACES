@@ -393,7 +393,7 @@ class SABERRestClient:
                 )
                 raise Exception(f"Failed to get episode metadata: {response.status} - {error_text}")
 
-    # NOTE: pull_episode_transcript() REMOVED - transcript retrieval now uses WebSocket sync_request
+    # NOTE: pull_episode_transcript() REMOVED - transcript retrieval now uses REST GET endpoint
 
     async def push_episode_transcript(
         self,

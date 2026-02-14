@@ -3,10 +3,9 @@
 TDD tests for the Copilot solver that uses GitHub Copilot CLI.
 """
 
+from unittest.mock import AsyncMock, Mock, PropertyMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, Mock, MagicMock, patch, PropertyMock
-from typing import Any
-import asyncio
 
 # Import the tools module to ensure it's loaded before patching
 import saber.inspect_ai.agents.registry.tools  # noqa: F401
@@ -191,6 +190,7 @@ class TestCopilotSolver:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
@@ -206,7 +206,7 @@ class TestCopilotSolver:
             continue_prompt="Continue analysis",
         )
 
-        result = await solver(mock_task_state)
+        await solver(mock_task_state)
 
         # Verify client lifecycle
         mock_client_wrapper_class.assert_called_once()
@@ -240,6 +240,7 @@ class TestCopilotSolver:
         mock_session_tracker.wait_for_idle = AsyncMock()
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
 
         # Use a list to track call count
         turn_count = [0]
@@ -296,6 +297,7 @@ class TestCopilotSolver:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
@@ -357,6 +359,7 @@ class TestCopilotSolver:
         mock_session_tracker.submitted = False  # Never submit - should hit max_turns
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
@@ -405,6 +408,7 @@ class TestCopilotSolver:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client_wrapper_class.return_value = mock_copilot_client
@@ -453,6 +457,7 @@ class TestCopilotSolverConfiguration:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client = AsyncMock()
@@ -507,6 +512,7 @@ class TestCopilotSolverConfiguration:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client = AsyncMock()
@@ -575,6 +581,7 @@ class TestCopilotSolverTranscriptHandling:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         mock_client = AsyncMock()
@@ -606,7 +613,7 @@ class TestCopilotSolverTranscriptHandling:
             continue_prompt="Continue",
         )
 
-        result = await solver(state)
+        await solver(state)
 
         # State messages should have been updated
         assert len(state.messages) >= 1
@@ -701,6 +708,7 @@ class TestCopilotSolverBYOK:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         # Setup mocks
@@ -777,6 +785,7 @@ class TestCopilotSolverBYOK:
         mock_session_tracker.submitted = True  # End loop immediately
         mock_session_tracker.submit_answer = None
         mock_session_tracker.session_id = None
+        mock_session_tracker.watcher_ctx.stop = AsyncMock()
         mock_session_tracker_class.return_value = mock_session_tracker
 
         # Setup mocks

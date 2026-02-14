@@ -22,7 +22,7 @@ Transcript synchronization:
 
     # Implement MessageSerializer for your harness
     async with TranscriptSyncClient(...) as client:
-        messages = await client.sync_transcript()
+        await client.push_message(msg)
 """
 
 from ..models import BenchmarkInfo, PolicyInfo, SessionInfo, StepResponse, TaskInfo
@@ -33,7 +33,6 @@ from .models import SABERConfig
 from .transcript import (
     GenericTranscriptSyncOperations,
     MessageSerializer,
-    SyncResult,
     TranscriptSyncClient,
     WebSocketConnectionManager,
     WebSocketEventProcessor,
@@ -54,7 +53,6 @@ __all__ = [
     # Transcript sync
     "TranscriptSyncClient",
     "MessageSerializer",
-    "SyncResult",
     "WebSocketConnectionManager",
     "WebSocketEventProcessor",
     "GenericTranscriptSyncOperations",

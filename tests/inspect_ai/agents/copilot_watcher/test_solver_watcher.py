@@ -238,6 +238,8 @@ class TestSolverWatcherIntegration:
     @pytest.mark.asyncio
     async def test_watcher_updates_messages_during_session(self, tmp_path: Path) -> None:
         """Watcher should update state.messages when new events arrive."""
+        from unittest.mock import patch
+
         from saber.inspect_ai.agents.registry.copilot.solver import (
             SessionTracker,
             is_duplicate_message,
@@ -268,27 +270,54 @@ class TestSolverWatcherIntegration:
                 if not is_duplicate_message(msg, received_messages):
                     received_messages.append(msg)
 
-        # Start the watcher
-        start_watcher(
-            tracker=tracker,
-            events_base_path=tmp_path,
-            on_new_messages=on_new_messages,
-            system_content="You are a helpful assistant.",
-        )
+        # Force poll mode by making watchfiles import fail (more deterministic in tests)
+        with patch(
+            "saber.inspect_ai.agents.registry.copilot.events_watcher.EventsFileWatcher.start",
+            wraps=None,
+        ) as _:
+            # Undo the patch - we actually want to call start, but in poll mode
+            pass
 
-        await asyncio.sleep(0.2)
-        assert tracker.watcher_ctx.is_running
+        # Patch watchfiles import to force reliable poll mode
+        import saber.inspect_ai.agents.registry.copilot.events_watcher as ew_mod
 
-        # Write new events to file (simulating Copilot SDK activity)
-        with events_file.open("a") as f:
-            f.write(f"{SAMPLE_USER_MESSAGE}\n")
-            f.write(f"{SAMPLE_ASSISTANT_MESSAGE}\n")
+        async def poll_start(self_watcher: ew_mod.EventsFileWatcher) -> None:
+            """Force poll mode for deterministic testing."""
+            self_watcher._is_running = True
+            self_watcher._stop_event.clear()
+            try:
+                await self_watcher._read_and_emit_events()
+                await self_watcher._poll_mode()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self_watcher._is_running = False
 
-        # Wait for watcher to process
-        await asyncio.sleep(0.5)
+        with patch.object(ew_mod.EventsFileWatcher, "start", poll_start):
+            # Start the watcher (will use poll mode)
+            start_watcher(
+                tracker=tracker,
+                events_base_path=tmp_path,
+                on_new_messages=on_new_messages,
+                system_content="You are a helpful assistant.",
+            )
 
-        # Stop watcher
-        await stop_watcher(tracker)
+            await asyncio.sleep(0.2)
+            assert tracker.watcher_ctx.is_running
+
+            # Write new events to file (simulating Copilot SDK activity)
+            with events_file.open("a") as f:
+                f.write(f"{SAMPLE_USER_MESSAGE}\n")
+                f.write(f"{SAMPLE_ASSISTANT_MESSAGE}\n")
+
+            # Poll for watcher to process (more reliable than fixed sleep)
+            for _ in range(30):  # Up to 3 seconds
+                if len(received_messages) >= 2:
+                    break
+                await asyncio.sleep(0.1)
+
+            # Stop watcher
+            await stop_watcher(tracker)
 
         # Should have received messages
         # The events include: user message and assistant message

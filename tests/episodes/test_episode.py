@@ -6,8 +6,6 @@ Tests meaningful episode functionality - pruned basic data structure tests.
 
 from datetime import datetime, timezone
 
-import pytest
-
 from saber.server.base import Action, Episode, EpisodeState, Step
 
 

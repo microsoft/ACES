@@ -65,29 +65,29 @@ async def _server_controlled_on_continue(state: AgentState) -> AgentState | bool
                 return False
         return state
 
-    # Wait for red team to inject a user message (wait indefinitely)
-    # The evaluation's task timeout or red team submission will terminate if needed
+    # Wait for server to signal that injection happened
+    # In the push-only model, the red team pushes messages to the server,
+    # and this callback waits for a state event indicating the server state changed.
+    # The agent continues with its current messages.
     try:
         logger.debug(
-            "Calling model.wait_for_injection_and_sync() - waiting indefinitely",
+            "Calling model._client.wait_for_state_event_with_retry() - waiting for server signal",
         )
-        synced_messages = await model.wait_for_injection_and_sync()
+        received = await model._client.wait_for_state_event_with_retry()
+
+        if received:
+            logger.info(
+                "Server state change received, continuing agent loop",
+                extra={
+                    "message_count": len(state.messages),
+                },
+            )
+            return state
 
         logger.info(
-            "Injection received, continuing with synced transcript",
-            extra={
-                "message_count": len(synced_messages),
-                "last_message_role": synced_messages[-1].role if synced_messages else "none",
-            },
+            "No state event received, stopping loop",
         )
-
-        # Return new AgentState with server-provided messages
-        new_state = AgentState(messages=synced_messages)
-        # Preserve output from current state
-        if state._output is not None:
-            new_state.output = state.output
-
-        return new_state
+        return False
 
     except asyncio.CancelledError:
         logger.info(

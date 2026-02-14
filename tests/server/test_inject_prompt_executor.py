@@ -6,13 +6,13 @@ through the WebSocket daemon in the Docker container.
 """
 
 import json
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime
-from typing import Dict, Any
-from unittest.mock import MagicMock, AsyncMock
 
 from saber.models.constants import MetadataKeys
-from saber.server.base import Episode, EpisodeState, CommandResult
+from saber.server.base import Episode, EpisodeState
 from saber.server.execution.executors.standard_registry.inject_prompt_executor import InjectPromptExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
@@ -72,17 +72,13 @@ class TestInjectPromptExecutorExecution:
     @pytest.fixture
     def blue_episode(self) -> Episode:
         """Create a blue team episode with initial transcript."""
-        push_time = datetime.utcnow().isoformat()
+        push_time = datetime.now(timezone.utc).isoformat()
         return Episode(
             episode_id="ep-blue-123",
             task_id="blue-task",
             session_id="session-789",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful..."},
-                    {"role": "assistant", "content": "Hello! How can I help?"},
-                ],
                 MetadataKeys.TRANSCRIPT_LAST_PUSHED_AT: push_time,
                 MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: 0,
             },
@@ -496,7 +492,7 @@ class TestInjectPromptExecutorNoResponse:
             task_id="blue-task",
             session_id="session-789",
             state=EpisodeState.ACTIVE,
-            context={MetadataKeys.CLIENT_TRANSCRIPT: []},
+            context={},
         )
 
     @pytest.fixture

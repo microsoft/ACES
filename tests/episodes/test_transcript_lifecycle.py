@@ -1,31 +1,22 @@
 """Unit tests for TranscriptStateMachine lifecycle management."""
 
 import asyncio
+import time
+
 import pytest
-from saber.server.episodes.transcript_state_machine import TranscriptStateMachine
+
+from saber.server.episodes.transcript.state_machine import TranscriptStateMachine
 
 
 @pytest.mark.asyncio
 class TestLifecycleManagement:
     """Test episode lifecycle hooks."""
 
-    async def test_episode_created_initializes_lock(self):
-        """on_episode_created should initialize episode lock."""
-        state_machine = TranscriptStateMachine()
-        episode_id = "ep-test-1"
-
-        await state_machine.on_episode_created(episode_id)
-
-        # Lock should exist
-        assert episode_id in state_machine._episode_locks
-        assert isinstance(state_machine._episode_locks[episode_id], asyncio.Lock)
-
     async def test_episode_created_initializes_timestamp(self):
         """on_episode_created should initialize state timestamp."""
         state_machine = TranscriptStateMachine()
         episode_id = "ep-test-1"
 
-        import time
         before = time.time()
         await state_machine.on_episode_created(episode_id)
         after = time.time()
@@ -34,17 +25,6 @@ class TestLifecycleManagement:
         assert episode_id in state_machine._state_timestamps
         timestamp = state_machine._state_timestamps[episode_id]
         assert before <= timestamp <= after
-
-    async def test_episode_terminated_cleans_up_lock(self):
-        """on_episode_terminated should remove episode lock."""
-        state_machine = TranscriptStateMachine()
-        episode_id = "ep-test-1"
-
-        await state_machine.on_episode_created(episode_id)
-        assert episode_id in state_machine._episode_locks
-
-        await state_machine.on_episode_terminated(episode_id)
-        assert episode_id not in state_machine._episode_locks
 
     async def test_episode_terminated_cleans_up_timestamp(self):
         """on_episode_terminated should remove state timestamp."""
@@ -58,17 +38,12 @@ class TestLifecycleManagement:
         assert episode_id not in state_machine._state_timestamps
 
     async def test_multiple_episodes_isolated(self):
-        """Multiple episodes should have isolated locks and timestamps."""
+        """Multiple episodes should have isolated timestamps."""
         state_machine = TranscriptStateMachine()
 
         await state_machine.on_episode_created("ep-1")
         await state_machine.on_episode_created("ep-2")
         await state_machine.on_episode_created("ep-3")
-
-        # All should have locks
-        assert "ep-1" in state_machine._episode_locks
-        assert "ep-2" in state_machine._episode_locks
-        assert "ep-3" in state_machine._episode_locks
 
         # All should have timestamps
         assert "ep-1" in state_machine._state_timestamps
@@ -78,9 +53,9 @@ class TestLifecycleManagement:
         # Terminate one shouldn't affect others
         await state_machine.on_episode_terminated("ep-2")
 
-        assert "ep-1" in state_machine._episode_locks
-        assert "ep-2" not in state_machine._episode_locks
-        assert "ep-3" in state_machine._episode_locks
+        assert "ep-1" in state_machine._state_timestamps
+        assert "ep-2" not in state_machine._state_timestamps
+        assert "ep-3" in state_machine._state_timestamps
 
     async def test_terminate_nonexistent_episode_is_safe(self):
         """Terminating non-existent episode should not raise."""
@@ -104,23 +79,22 @@ class TestLifecycleManagement:
 
 @pytest.mark.asyncio
 class TestConcurrentStateAccess:
-    """Test concurrent access with episode locks."""
+    """Test concurrent access to state timestamps."""
 
-    async def test_state_transitions_are_atomic(self):
-        """Multiple concurrent state transitions should be atomic."""
+    async def test_state_transitions_are_serializable(self):
+        """Multiple concurrent state updates should all complete."""
         state_machine = TranscriptStateMachine()
         episode_id = "ep-test-1"
 
         await state_machine.on_episode_created(episode_id)
 
-        # Simulate concurrent modifications
-        results = []
+        # Simulate concurrent timestamp updates
+        results: list[int] = []
 
-        async def modify_state(value: int):
-            async with state_machine._episode_locks[episode_id]:
-                # Critical section - should be atomic
-                await asyncio.sleep(0.01)  # Simulate work
-                results.append(value)
+        async def modify_state(value: int) -> None:
+            await asyncio.sleep(0.01)  # Simulate work
+            state_machine.update_state_timestamp(episode_id)
+            results.append(value)
 
         # Launch concurrent tasks
         await asyncio.gather(
@@ -133,8 +107,8 @@ class TestConcurrentStateAccess:
         assert len(results) == 3
         assert set(results) == {1, 2, 3}
 
-    async def test_lock_prevents_race_condition(self):
-        """Lock should prevent race conditions in shared state."""
+    async def test_concurrent_updates_all_complete(self):
+        """Concurrent timestamp updates should all succeed."""
         state_machine = TranscriptStateMachine()
         episode_id = "ep-test-1"
 
@@ -142,15 +116,16 @@ class TestConcurrentStateAccess:
 
         counter = {"value": 0}
 
-        async def increment():
-            async with state_machine._episode_locks[episode_id]:
-                # Read-modify-write should be atomic
-                current = counter["value"]
-                await asyncio.sleep(0.01)  # Simulate processing
-                counter["value"] = current + 1
+        async def increment() -> None:
+            current = counter["value"]
+            await asyncio.sleep(0.001)  # Simulate processing
+            counter["value"] = current + 1
+            state_machine.update_state_timestamp(episode_id)
 
         # Launch 10 concurrent increments
+        # Note: without a lock, increments are NOT atomic — this verifies
+        # the state machine still tracks timestamps without locks
         await asyncio.gather(*[increment() for _ in range(10)])
 
-        # All increments should succeed
-        assert counter["value"] == 10
+        # Timestamp should still be tracked
+        assert episode_id in state_machine._state_timestamps

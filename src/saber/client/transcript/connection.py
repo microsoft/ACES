@@ -11,7 +11,8 @@ Logging category: AGENT.
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Any, Optional
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ class WebSocketConnectionManager:
         )
 
     @property
-    def websocket(self) -> Optional["ClientConnection"]:
+    def websocket(self) -> "ClientConnection | None":
         """Get the current WebSocket connection (may be None or closed)."""
         return self._websocket
 
@@ -138,7 +139,7 @@ class WebSocketConnectionManager:
 
     async def ensure_connected(
         self,
-        on_connected_callback: Any | None = None,
+        on_connected_callback: Callable[..., Awaitable[asyncio.Task[None]]] | None = None,
     ) -> "ClientConnection":
         """Establish WebSocket connection with reconnection support.
 
@@ -265,7 +266,7 @@ class WebSocketConnectionManager:
                             await asyncio.wait_for(
                                 temp_listener, timeout=WebSocketDefaults.LISTENER_TASK_CANCEL_TIMEOUT_SECONDS
                             )
-                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                        except (TimeoutError, asyncio.CancelledError):
                             logger.debug("Listener task cancelled during cleanup")
                         except Exception as e:
                             logger.warning(f"Error cancelling listener task: {e}")
@@ -276,7 +277,7 @@ class WebSocketConnectionManager:
                             await asyncio.wait_for(
                                 temp_websocket.close(), timeout=WebSocketDefaults.WEBSOCKET_CLOSE_TIMEOUT_SECONDS
                             )
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             logger.warning("WebSocket close timed out during cleanup")
                         except Exception as e:
                             logger.warning(f"Error closing WebSocket during cleanup: {e}")
@@ -302,7 +303,9 @@ class WebSocketConnectionManager:
 
         self._websocket = None
 
-    async def force_reconnect(self, on_connected_callback: Any | None = None) -> "ClientConnection":
+    async def force_reconnect(
+        self, on_connected_callback: Callable[..., Awaitable[asyncio.Task[None]]] | None = None
+    ) -> "ClientConnection":
         """Force close and reconnect.
 
         Useful when connection is in bad state and needs reset.

@@ -25,6 +25,10 @@ class TestSessionMCPAPI:
         mock_manager.execution_manager = MagicMock()
         mock_manager.execute_action = AsyncMock()
         mock_manager._get_session = MagicMock()
+        # Coordinator mock for transcript access (Redis is single source of truth)
+        mock_coordinator = MagicMock()
+        mock_coordinator.get_transcript = AsyncMock(return_value=[])
+        mock_manager.episode_manager.transcript_coordinator = mock_coordinator
         return mock_manager
 
     @pytest.fixture
@@ -204,7 +208,9 @@ class TestSessionMCPAPI:
         mcp_api.session_manager.end_episode = AsyncMock()
 
         # Test end_episode tool call with proper session_id, episode_id, and orchestration_env
-        result = await mcp_api._handle_end_episode_call({}, "session_123", "episode_456", OrchestrationEnvironment.STANDALONE)
+        result = await mcp_api._handle_end_episode_call(
+            {}, "session_123", "episode_456", OrchestrationEnvironment.STANDALONE
+        )
 
         # Verify successful result
         assert result.isError is False
@@ -225,7 +231,10 @@ class TestSessionMCPAPI:
 
         # Test end_episode tool call with result - provide session_id, episode_id, and orchestration_env
         result = await mcp_api._handle_end_episode_call(
-            {"parameters": {"submission": "flag{test_flag_found}"}}, "session_123", "episode_456", OrchestrationEnvironment.STANDALONE
+            {"parameters": {"submission": "flag{test_flag_found}"}},
+            "session_123",
+            "episode_456",
+            OrchestrationEnvironment.STANDALONE,
         )
 
         # Verify successful result with flag
@@ -262,7 +271,9 @@ class TestSessionMCPAPI:
     async def test_handle_end_episode_call_missing_session(self, mcp_api):
         """Test end_episode tool call without session_id."""
         # Test end_episode call without session_id but with orchestration_env
-        result = await mcp_api._handle_end_episode_call({"result": "some_flag"}, None, None, OrchestrationEnvironment.STANDALONE)
+        result = await mcp_api._handle_end_episode_call(
+            {"result": "some_flag"}, None, None, OrchestrationEnvironment.STANDALONE
+        )
 
         # Verify error result
         assert result.isError is True
@@ -309,13 +320,13 @@ class TestSessionMCPAPI:
         action = call_args[0][2]  # action
         assert action.tool_name == "end_episode"
 
-    def test_convert_to_action(self, mcp_api):
+    async def test_convert_to_action(self, mcp_api):
         """Test conversion from MCP tool call to Action."""
         # Create a mock episode
         mock_episode = MagicMock()
         mock_episode.id = "episode_123"
 
-        action = mcp_api._convert_to_action(
+        action = await mcp_api._convert_to_action(
             tool_name="bash",
             arguments={
                 "session_id": "session_123",
@@ -712,9 +723,8 @@ class TestCustomListToolsHandler:
     async def test_custom_list_tools_handler_compatibility(self, mcp_api_with_tools):
         """Test that custom list_tools handler returns objects identical to FastMCP's default."""
         from fastmcp import FastMCP
-        from fastmcp.tools.tool import Tool as FastMCPTool
         from mcp.types import Tool as MCPTool
-        from saber.models.mcp import MCPToolSchema
+
 
         # Setup FastMCP server for comparison
         fastmcp_server = FastMCP("test-server")
@@ -763,7 +773,9 @@ class TestCustomListToolsHandler:
         custom_executor_tools = [tool for tool in custom_tools if tool.name != "end_episode"]
         custom_tool_names = {tool.name for tool in custom_executor_tools}
 
-        assert fastmcp_tool_names == custom_tool_names, f"Executor tool names should match: {fastmcp_tool_names} vs {custom_tool_names}"
+        assert fastmcp_tool_names == custom_tool_names, (
+            f"Executor tool names should match: {fastmcp_tool_names} vs {custom_tool_names}"
+        )
 
         # Verify hardcoded tool is present
         hardcoded_tools = [tool for tool in custom_tools if tool.name == "end_episode"]
@@ -856,7 +868,8 @@ class TestCustomListToolsHandler:
             red_executor_tools = [tool for tool in red_tools if tool.name != "end_episode"]
             assert len(red_executor_tools) == 3
             red_tool_names = {tool.name for tool in red_executor_tools}
-            assert red_tool_names == {"bash", "curl", "nmap"}        # Verify that execution_manager.to_mcp_tools was called with episode_id
+            assert red_tool_names == {"bash", "curl", "nmap"}
+        # Verify that execution_manager.to_mcp_tools was called with episode_id
         assert mcp_api_with_tools.session_manager.execution_manager.to_mcp_tools.call_count == 2
 
         # Check the calls were made with correct episode IDs

@@ -1,17 +1,15 @@
-"""Model wrapper for transcript synchronization.
+"""Model wrapper for transcript push.
 
 This module provides a transparent wrapper around inspect_ai Model objects that
-automatically synchronizes transcripts with the SABER server via WebSocket.
+automatically pushes transcripts to the SABER server via WebSocket.
 
 The wrapper intercepts model.generate() calls at the lowest level, ensuring that
-transcripts are synchronized BEFORE tools execute, solving the race condition where
-the server needs assistant messages for context extraction.
+transcripts are pushed to the server for evaluation and context extraction.
 
 Key features:
 - Works with ANY agent type (react, basic_agent, custom agents, etc.)
 - Transparent delegation - behaves exactly like the wrapped model
-- Bidirectional WebSocket sync - both push and pull over single persistent connection
-- Differential sync - only transfers deltas for bandwidth efficiency
+- WebSocket push for transcript messages
 - Graceful error handling - failures don't crash agent execution
 - Unified coordination - all agents use WebSocketTranscriptSyncingModelWrapper
 
@@ -23,8 +21,7 @@ Architecture:
 Logging category: AGENT.
 """
 
-import asyncio
-from typing import Any, ClassVar, Optional, cast
+from typing import Any, ClassVar, cast
 
 from inspect_ai.model import (
     ChatMessage,
@@ -161,22 +158,19 @@ class InspectAIMessageSerializer(MessageSerializer[ChatMessage]):
 
 
 class WebSocketTranscriptSyncingModelWrapper:
-    """Model wrapper with WebSocket notifications + differential sync.
+    """Model wrapper with WebSocket transcript push.
 
     Provides:
     - Persistent WebSocket connection (established on first generate())
-    - Instant notifications (<100ms when red team injects)
-    - Differential sync (only pull deltas)
-    - Local version tracking (checksum validation)
+    - Push messages to server with retry logic
     - Automatic reconnection on connection loss
 
     Flow:
     1. First generate() → establish WebSocket connection
-    2. Server sends initial state event (is_waiting_on_assistant)
-    3. Client waits for state event, then syncs transcript
-    4. Background listener task receives subsequent events
-    5. Events queued for generate() to consume
-    6. Connection reused for entire episode
+    2. Push tool results before generate
+    3. Call base model generate
+    4. Push assistant output after generate
+    5. Connection reused for entire episode
 
     Uses the generic TranscriptSyncClient with InspectAIMessageSerializer.
     """
@@ -185,7 +179,7 @@ class WebSocketTranscriptSyncingModelWrapper:
     _wrappers_by_episode: ClassVar[dict[str, "WebSocketTranscriptSyncingModelWrapper"]] = {}
 
     @classmethod
-    def get_wrapper_for_episode(cls, episode_id: str) -> Optional["WebSocketTranscriptSyncingModelWrapper"]:
+    def get_wrapper_for_episode(cls, episode_id: str) -> "WebSocketTranscriptSyncingModelWrapper | None":
         """Get the wrapper instance for a given episode_id.
 
         Used by sandbox cleanup to find and cleanup the wrapper.
@@ -238,7 +232,6 @@ class WebSocketTranscriptSyncingModelWrapper:
         self._session_id = session_id
         self._episode_id = episode_id
         self._rest_url = rest_url
-        self._first_call = True
         self._ws_config = ws_config or WebSocketConfig()
 
         # Create the generic transcript sync client with Inspect AI serializer
@@ -267,137 +260,18 @@ class WebSocketTranscriptSyncingModelWrapper:
         )
 
     # =========================================================================
-    # Properties for backward compatibility (delegate to _client)
-    # =========================================================================
-
-    @property
-    def _websocket(self) -> Any:
-        """Get WebSocket (for backward compatibility with tests)."""
-        return self._client.websocket
-
-    @_websocket.setter
-    def _websocket(self, value: Any) -> None:
-        """Set WebSocket (for backward compatibility with tests)."""
-        self._client._connection._websocket = value
-
-    @property
-    def _event_queue(self) -> asyncio.Queue:
-        """Get event queue (for backward compatibility with tests)."""
-        return self._client.event_queue
-
-    @_event_queue.setter
-    def _event_queue(self, value: Any) -> None:
-        """Set event queue (for backward compatibility with tests)."""
-        self._client._events._event_queue = value
-
-    @property
-    def _local_version(self) -> int:
-        """Get local version (for backward compatibility)."""
-        return self._client.local_version
-
-    @_local_version.setter
-    def _local_version(self, value: int) -> None:
-        """Set local version (for backward compatibility)."""
-        self._client._sync.local_version = value
-
-    @property
-    def _local_checksum(self) -> str:
-        """Get local checksum (for backward compatibility)."""
-        return self._client.local_checksum
-
-    @_local_checksum.setter
-    def _local_checksum(self, value: str) -> None:
-        """Set local checksum (for backward compatibility)."""
-        self._client._sync.local_checksum = value
-
-    @property
-    def _local_messages(self) -> list[ChatMessage]:
-        """Get local messages (for backward compatibility)."""
-        return self._client.local_messages
-
-    @_local_messages.setter
-    def _local_messages(self, value: list[ChatMessage]) -> None:
-        """Set local messages (for backward compatibility)."""
-        self._client._sync.local_messages = value
-
-    @property
-    def pull_enabled(self) -> bool:
-        """Check if pull (server-controlled transcript) is enabled."""
-        return self._client.pull_enabled
-
-    @property
-    def _ws_url(self) -> str:
-        """Get WebSocket URL (for backward compatibility with tests)."""
-        return self._client._connection._ws_url
-
-    @property
-    def _listener_task(self) -> asyncio.Task | None:
-        """Get listener task (for backward compatibility with tests)."""
-        return self._client._events._listener_task
-
-    @_listener_task.setter
-    def _listener_task(self, value: asyncio.Task | None) -> None:
-        """Set listener task (for backward compatibility with tests)."""
-        self._client._events._listener_task = value
-
-    # Expose internal components for backward compatibility
-    @property
-    def _connection(self) -> Any:
-        """Get connection manager (for backward compatibility)."""
-        return self._client._connection
-
-    @property
-    def _events(self) -> Any:
-        """Get event processor (for backward compatibility)."""
-        return self._client._events
-
-    @property
-    def _sync(self) -> Any:
-        """Get sync operations (for backward compatibility)."""
-        return self._client._sync
-
-    @property
-    def _skip_next_wait(self) -> bool:
-        """Get skip_next_wait flag (for backward compatibility)."""
-        return self._client._skip_next_wait
-
-    @_skip_next_wait.setter
-    def _skip_next_wait(self, value: bool) -> None:
-        """Set skip_next_wait flag (for backward compatibility)."""
-        self._client._skip_next_wait = value
-
-    # =========================================================================
     # Connection lifecycle
     # =========================================================================
 
     async def __aenter__(self) -> "WebSocketTranscriptSyncingModelWrapper":
         """Context manager entry - establish WebSocket connection."""
-        await self._ensure_connected()
+        await self._client.ensure_connected()
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         """Context manager exit - cleanup WebSocket connection."""
         await self.cleanup()
         return False  # Don't suppress exceptions
-
-    async def _ensure_connected(self) -> None:
-        """Establish WebSocket connection."""
-
-        async def _start_listener(websocket: Any) -> asyncio.Task[Any]:
-            """Callback to start listener after connection."""
-            return cast(asyncio.Task[Any], await self._events.start_listener(websocket))
-
-        await self._connection.ensure_connected(on_connected_callback=_start_listener)
-
-    async def _get_reconnect_callback(self) -> Any:
-        """Get a callback for reconnection."""
-
-        async def reconnect() -> Any:
-            return await self._connection.force_reconnect(
-                on_connected_callback=lambda ws: self._events.start_listener(ws)
-            )
-
-        return reconnect
 
     # =========================================================================
     # Main generate method
@@ -409,15 +283,12 @@ class WebSocketTranscriptSyncingModelWrapper:
         tools: list | None = None,
         **kwargs: Any,
     ) -> ModelOutput:
-        """Generate with WebSocket-based bidirectional sync.
+        """Generate with WebSocket-based push.
 
-        All coordination happens via WebSocket:
-        - Pull: Receive state events (is_waiting_on_assistant, etc.), request sync
-        - Push: Send push_message with new content
-
-        Server initializes transcript with [system, user] messages, which triggers
-        WAITING_FOR_ASSISTANT state → is_waiting_on_assistant event.
-        Client treats this like any other modification event.
+        Pushes tool results before generation and assistant output after.
+        All push/connection logic is delegated to the TranscriptSyncClient
+        public API, which handles push.enabled checks and connection management
+        internally.
 
         Args:
             input: Messages or text input to the model
@@ -427,204 +298,25 @@ class WebSocketTranscriptSyncingModelWrapper:
         Returns:
             ModelOutput from the base model
         """
-        # Ensure WebSocket connected on first call
-        if self._first_call:
-            self._first_call = False
-            await self._ensure_connected()
-
         # Push any tool results that Inspect AI added to input
-        pushed_tool_results = False
-        if self._ws_config.push.enabled and isinstance(input, list):
-            websocket = self._connection.websocket
-            if websocket:
-                pushed_tool_results = await self._sync.push_tool_results_if_needed(
-                    websocket,
-                    input,
-                    reconnect_callback=await self._get_reconnect_callback(),
-                )
+        if isinstance(input, list):
+            await self._client.push_messages_if_new(input)
 
-        # Wait for state event, then pull (unified flow for all calls)
-        if self._ws_config.pull.enabled:
-            if isinstance(input, list):
-                # If wait_and_sync_transcript() just synced, skip waiting
-                if self._skip_next_wait:
-                    event_received = True
-                    self._skip_next_wait = False
-                    logger.debug(
-                        "Skipping wait - already synced",
-                        extra={"episode_id": self._episode_id},
-                    )
-                # If we just pushed tool results, skip waiting
-                elif pushed_tool_results:
-                    event_received = True
-                    logger.debug(
-                        "Skipping wait - just pushed tool results",
-                        extra={"episode_id": self._episode_id},
-                    )
-                else:
-                    event_received = await self._events.wait_for_state_event_with_retry()
-
-                if event_received:
-                    websocket = self._connection.websocket
-                    if websocket:
-                        # Request and apply sync
-                        sync_data = await self._sync.request_sync(websocket)
-                        if sync_data:
-                            input = self._sync.apply_sync_response(sync_data)
-                        else:
-                            logger.warning(
-                                "No sync_data received from server",
-                                extra={"episode_id": self._episode_id},
-                            )
-                    else:
-                        logger.warning(
-                            "No websocket available for sync",
-                            extra={"episode_id": self._episode_id},
-                        )
-            else:
-                logger.warning(
-                    "WebSocket wrapper received non-list input, cannot replace with modified transcript",
-                    extra={
-                        "input_type": type(input).__name__,
-                        "episode_id": self._episode_id,
-                    },
-                )
-        else:
-            # Pull disabled - skip waiting for modifications (red team mode)
-            logger.debug(
-                "Pull disabled, skipping modification sync",
-                extra={"episode_id": self._episode_id},
-            )
-
-        # Generate with (possibly modified) input
+        # Generate with base model
         output = await self._base_model.generate(input, tools, **kwargs)
 
-        # Push new message via WebSocket (if push enabled)
-        if self._ws_config.push.enabled:
-            websocket = self._connection.websocket
-            if websocket:
-                success = await self._sync.push_message_with_retry(
-                    websocket,
-                    output.message,
-                    context="output_push",
-                    reconnect_callback=await self._get_reconnect_callback(),
-                )
-                if not success:
-                    logger.error(
-                        "Failed to push assistant output to server after retries",
-                        extra={
-                            "episode_id": self._episode_id,
-                            "message_role": output.message.role,
-                        },
-                    )
-        else:
-            # Push disabled - update local state only
-            logger.debug(
-                "Push disabled, updating local state only",
-                extra={"episode_id": self._episode_id},
+        # Push assistant output (client handles push.enabled check and local tracking)
+        success = await self._client.push_message(output.message, context="output_push")
+        if not success:
+            logger.warning(
+                "Failed to push assistant output to server",
+                extra={
+                    "episode_id": self._episode_id,
+                    "message_role": output.message.role,
+                },
             )
-            self._sync.update_local_state_without_push(output.message)
 
         return output
-
-    # =========================================================================
-    # Transcript sync helpers
-    # =========================================================================
-
-    async def wait_and_sync_transcript(self) -> list[ChatMessage]:
-        """Wait for server transcript modification and sync, returning updated messages.
-
-        This method is used by the AgentContinue callback to get server-injected
-        messages (e.g., continue prompts, red team injections) without the client
-        adding its own continue messages.
-
-        Returns:
-            List of ChatMessage with server-provided transcript
-
-        Raises:
-            RuntimeError: If sync fails or times out
-        """
-        logger.debug(
-            "wait_and_sync_transcript called",
-            extra={"episode_id": self._episode_id},
-        )
-
-        # Ensure WebSocket is connected
-        await self._ensure_connected()
-
-        # Wait for modification event
-        event_received = await self._events.wait_for_state_event_with_retry()
-
-        if not event_received:
-            logger.warning(
-                "No modification event received, returning current messages",
-                extra={"episode_id": self._episode_id},
-            )
-            return cast(list[Any], self._sync.local_messages.copy())
-
-        # Request sync
-        websocket = self._connection.websocket
-        if not websocket:
-            raise RuntimeError("WebSocket not connected")
-
-        sync_data = await self._sync.request_sync(websocket)
-
-        if sync_data:
-            self._sync.apply_sync_response(sync_data)
-            # Signal generate() to skip waiting
-            self._skip_next_wait = True
-        else:
-            logger.warning(
-                "No sync_data received",
-                extra={"episode_id": self._episode_id},
-            )
-
-        return cast(list[Any], self._sync.local_messages.copy())
-
-    async def wait_for_injection_and_sync(self) -> list[ChatMessage]:
-        """Wait for red team injection, then sync transcript.
-
-        This method is used by the AgentContinue callback to wait for red team
-        to inject a user message. It specifically waits for is_waiting_on_assistant
-        event which indicates a new user message was added.
-
-        Waits indefinitely - the evaluation's task timeout or red team submission
-        will terminate the session if needed.
-
-        Returns:
-            List of ChatMessage with server-provided transcript after injection
-        """
-        logger.debug(
-            "wait_for_injection_and_sync called",
-            extra={"episode_id": self._episode_id},
-        )
-
-        # Ensure WebSocket is connected
-        await self._ensure_connected()
-
-        # Wait for injection event (is_waiting_on_assistant) - no timeout
-        await self._events.wait_for_injection_event()
-
-        # Injection received - sync transcript to get the new user message
-        websocket = self._connection.websocket
-        if not websocket:
-            raise RuntimeError("WebSocket not connected")
-
-        sync_data = await self._sync.request_sync(websocket)
-
-        if sync_data:
-            self._sync.apply_sync_response(sync_data)
-            # Signal generate() to skip waiting
-            self._skip_next_wait = True
-
-        logger.debug(
-            "Injection received and synced",
-            extra={
-                "episode_id": self._episode_id,
-                "message_count": len(self._sync.local_messages),
-            },
-        )
-        return cast(list[Any], self._sync.local_messages.copy())
 
     # =========================================================================
     # Cleanup
@@ -637,49 +329,8 @@ class WebSocketTranscriptSyncingModelWrapper:
             extra={"episode_id": self._episode_id},
         )
 
-        # Signal shutdown to unblock any waiting operations (e.g., wait_for_injection_event)
-        logger.info(
-            "[CLEANUP] Signaling shutdown to event processor",
-            extra={"episode_id": self._episode_id},
-        )
-        self._events.signal_shutdown()
-
-        # Cancel listener task (may be set via backward-compat property)
-        if self._events._listener_task:
-            logger.info(
-                "[CLEANUP] Cancelling listener task",
-                extra={"episode_id": self._episode_id},
-            )
-            self._events._listener_task.cancel()
-            try:
-                await self._events._listener_task
-            except asyncio.CancelledError:
-                pass
-            logger.info(
-                "[CLEANUP] Listener task cancelled",
-                extra={"episode_id": self._episode_id},
-            )
-
-        # Close connection (handles its own listener task if started via ensure_connected)
-        logger.info(
-            "[CLEANUP] Closing WebSocket connection",
-            extra={"episode_id": self._episode_id},
-        )
-        await self._connection.close()
-
-        # Drain event queue
-        logger.info(
-            "[CLEANUP] Draining event queue",
-            extra={"episode_id": self._episode_id},
-        )
-        self._events.drain_queue()
-
-        # Clear sync state
-        logger.info(
-            "[CLEANUP] Clearing sync state",
-            extra={"episode_id": self._episode_id},
-        )
-        self._sync.clear_state()
+        # Delegate cleanup to the client
+        await self._client.cleanup()
 
         # Unregister from class-level registry
         self._unregister_wrapper(self._episode_id)

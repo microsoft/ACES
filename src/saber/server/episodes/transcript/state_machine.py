@@ -1,13 +1,10 @@
 """Transcript state machine for coordinating agent execution."""
 
-import asyncio
 import time
 from enum import Enum
 from typing import Any, Literal
 
-from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys
-from ..base import Episode
+from ....logging_config import LogCategory, get_saber_logger
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -52,7 +49,6 @@ class TranscriptStateMachine:
 
     def __init__(self) -> None:
         """Initialize state machine with lifecycle management."""
-        self._episode_locks: dict[str, asyncio.Lock] = {}
         self._state_timestamps: dict[str, float] = {}
 
     async def on_episode_created(self, episode_id: str) -> None:
@@ -63,7 +59,6 @@ class TranscriptStateMachine:
         Args:
             episode_id: Episode identifier
         """
-        self._episode_locks[episode_id] = asyncio.Lock()
         self._state_timestamps[episode_id] = time.time()
 
         logger.debug("Episode lifecycle initialized", extra={"episode_id": episode_id})
@@ -76,7 +71,6 @@ class TranscriptStateMachine:
         Args:
             episode_id: Episode identifier
         """
-        self._episode_locks.pop(episode_id, None)
         self._state_timestamps.pop(episode_id, None)
 
         logger.debug("Episode lifecycle cleaned up", extra={"episode_id": episode_id})
@@ -121,22 +115,18 @@ class TranscriptStateMachine:
 
         return time.time() - self._state_timestamps[episode_id]
 
-    def get_state(self, episode: Episode) -> TranscriptState:
-        """Detect current state from episode transcript.
+    def compute_state_from_transcript(self, transcript: list[dict[str, Any]]) -> TranscriptState:
+        """Compute state from a list of transcript messages.
+
+        Accepts a raw transcript list. Used when transcript is fetched
+        from Redis via the coordinator/repository layer.
 
         Args:
-            episode: Episode to analyze
+            transcript: List of message dicts with at least a 'role' key
 
         Returns:
-            Current transcript state
+            Computed transcript state
         """
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
-
-        # Validate transcript structure
-        if transcript and not self._is_valid_transcript(transcript):
-            logger.error("Malformed transcript detected", extra={"episode_id": episode.episode_id})
-            return TranscriptState.ERROR_MALFORMED
-
         return self._compute_state(transcript)
 
     def _compute_state(self, transcript: list[dict[str, Any]]) -> TranscriptState:

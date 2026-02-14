@@ -12,14 +12,11 @@ Critical Test Coverage:
 5. Edge cases (empty append, append to empty)
 """
 
-import json
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from saber.models.constants import MetadataKeys
 from saber.server.base import Episode, EpisodeState
 from saber.server.session_manager import SessionManager
 
@@ -53,6 +50,12 @@ class TestTranscriptAppendMode:
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
 
+        # Coordinator mock — Redis is the single source of truth for transcript data
+        mock_coordinator = MagicMock()
+        mock_coordinator.push_message = AsyncMock(return_value=1)
+        mock_coordinator.get_message_count = AsyncMock(return_value=0)
+        mock_episode_manager.transcript_coordinator = mock_coordinator
+
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
             patch("saber.server.session_manager.ExecutionManager", return_value=mock_execution_manager),
@@ -79,16 +82,13 @@ class TestTranscriptAppendMode:
     # ========================================================================
 
     def test_append_mode_adds_to_existing_transcript(self, session_manager_app, sample_episode):
-        """Test append mode adds new messages to existing transcript."""
+        """Test append mode pushes messages through coordinator."""
         manager, client = session_manager_app
 
-        # Setup: Episode with existing transcript
-        existing_messages = [
-            {"role": "system", "content": "You are a helper"},
-            {"role": "user", "content": "What is 2+2?"},
-        ]
-        sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = existing_messages
+        # Setup: Episode exists (transcript lives in Redis, not in context)
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 3  # 2 existing + 1 new
 
         # New messages to append
         new_messages = [
@@ -111,22 +111,24 @@ class TestTranscriptAppendMode:
         assert data["success"] is True
         assert data["message_count"] == 1  # Count of NEW messages pushed
 
-        # Assert: Transcript has all messages (existing + new)
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored_transcript) == 3
-        assert stored_transcript[0]["role"] == "system"
-        assert stored_transcript[1]["role"] == "user"
-        assert stored_transcript[2]["role"] == "assistant"
-        assert stored_transcript[2]["content"] == "The answer is 4"
+        # Assert: coordinator.push_message called once with correct args
+        assert coordinator.push_message.call_count == 1
+        call_kwargs = coordinator.push_message.call_args[1]
+        assert call_kwargs["episode_id"] == sample_episode.episode_id
+        assert call_kwargs["session_id"] == sample_episode.session_id
+        assert call_kwargs["message"]["role"] == "assistant"
+        assert call_kwargs["message"]["content"] == "The answer is 4"
 
     def test_append_mode_multiple_pushes(self, session_manager_app, sample_episode):
-        """Test multiple append operations accumulate messages."""
+        """Test multiple append operations push messages through coordinator."""
         manager, client = session_manager_app
 
         # Setup: Episode starts empty
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
 
         # Push 1: System message
+        coordinator.get_message_count.return_value = 1
         response1 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -138,6 +140,7 @@ class TestTranscriptAppendMode:
         assert response1.status_code == 200
 
         # Push 2: User message
+        coordinator.get_message_count.return_value = 2
         response2 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -149,6 +152,7 @@ class TestTranscriptAppendMode:
         assert response2.status_code == 200
 
         # Push 3: Assistant message
+        coordinator.get_message_count.return_value = 3
         response3 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -159,26 +163,25 @@ class TestTranscriptAppendMode:
         )
         assert response3.status_code == 200
 
-        # Assert: All 3 messages accumulated
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored_transcript) == 3
-        assert stored_transcript[0]["content"] == "System"
-        assert stored_transcript[1]["content"] == "User"
-        assert stored_transcript[2]["content"] == "Assistant"
+        # Assert: push_message called 3 times total (1 per push)
+        assert coordinator.push_message.call_count == 3
+
+        # Verify messages pushed in correct order
+        calls = coordinator.push_message.call_args_list
+        assert calls[0][1]["message"]["content"] == "System"
+        assert calls[1][1]["message"]["content"] == "User"
+        assert calls[2][1]["message"]["content"] == "Assistant"
 
     def test_append_mode_preserves_order(self, session_manager_app, sample_episode):
-        """Test append mode preserves message order."""
+        """Test append mode pushes messages in order to coordinator."""
         manager, client = session_manager_app
 
-        # Setup: Episode with existing messages
-        existing = [
-            {"role": "system", "content": "Msg 1"},
-            {"role": "user", "content": "Msg 2"},
-        ]
-        sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = existing
+        # Setup: Episode exists (existing messages live in Redis)
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 5
 
-        # Append multiple messages
+        # Append multiple messages at once
         new_messages = [
             {"role": "assistant", "content": "Msg 3"},
             {"role": "user", "content": "Msg 4"},
@@ -196,32 +199,27 @@ class TestTranscriptAppendMode:
 
         assert response.status_code == 200
 
-        # Assert: Order preserved
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored) == 5
-        assert stored[0]["content"] == "Msg 1"
-        assert stored[1]["content"] == "Msg 2"
-        assert stored[2]["content"] == "Msg 3"
-        assert stored[3]["content"] == "Msg 4"
-        assert stored[4]["content"] == "Msg 5"
+        # Assert: push_message called 3 times in order
+        assert coordinator.push_message.call_count == 3
+        calls = coordinator.push_message.call_args_list
+        assert calls[0][1]["message"]["content"] == "Msg 3"
+        assert calls[1][1]["message"]["content"] == "Msg 4"
+        assert calls[2][1]["message"]["content"] == "Msg 5"
 
     # ========================================================================
     # Test: Replace Mode - Backward Compatibility
     # ========================================================================
 
     def test_replace_mode_replaces_entire_transcript(self, session_manager_app, sample_episode):
-        """Test replace mode replaces entire transcript (default behavior)."""
+        """Test replace mode pushes all provided messages through coordinator."""
         manager, client = session_manager_app
 
-        # Setup: Episode with existing transcript
-        existing_messages = [
-            {"role": "system", "content": "Old system"},
-            {"role": "user", "content": "Old user"},
-        ]
-        sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = existing_messages
+        # Setup: Episode exists (existing messages are in Redis, not context)
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 3
 
-        # New messages to replace with
+        # New messages
         new_messages = [
             {"role": "system", "content": "New system"},
             {"role": "user", "content": "New user"},
@@ -241,22 +239,21 @@ class TestTranscriptAppendMode:
         # Assert: Success
         assert response.status_code == 200
 
-        # Assert: Old transcript replaced with new
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored_transcript) == 3
-        assert stored_transcript[0]["content"] == "New system"
-        assert stored_transcript[1]["content"] == "New user"
-        assert stored_transcript[2]["content"] == "New assistant"
+        # Assert: All 3 messages pushed through coordinator
+        assert coordinator.push_message.call_count == 3
+        calls = coordinator.push_message.call_args_list
+        assert calls[0][1]["message"]["content"] == "New system"
+        assert calls[1][1]["message"]["content"] == "New user"
+        assert calls[2][1]["message"]["content"] == "New assistant"
 
     def test_default_mode_is_replace(self, session_manager_app, sample_episode):
         """Test that default mode is 'replace' for backward compatibility."""
         manager, client = session_manager_app
 
-        # Setup: Episode with existing transcript
-        sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "system", "content": "Old"}
-        ]
+        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 1
 
         # Execute: Push WITHOUT mode parameter (should default to replace)
         response = client.post(
@@ -269,10 +266,10 @@ class TestTranscriptAppendMode:
 
         assert response.status_code == 200
 
-        # Assert: Transcript replaced (not appended)
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored) == 1
-        assert stored[0]["content"] == "New"
+        # Assert: Message pushed through coordinator
+        assert coordinator.push_message.call_count == 1
+        call_kwargs = coordinator.push_message.call_args[1]
+        assert call_kwargs["message"]["content"] == "New"
 
     # ========================================================================
     # Test: Mode Parameter Validation
@@ -322,9 +319,11 @@ class TestTranscriptAppendMode:
     # ========================================================================
 
     def test_append_to_empty_transcript(self, session_manager_app, sample_episode):
-        """Test appending to empty transcript works correctly."""
+        """Test appending messages when no previous transcript exists."""
         manager, client = session_manager_app
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 2
 
         # Episode has no existing transcript (empty context)
         # Execute: Append messages
@@ -342,20 +341,20 @@ class TestTranscriptAppendMode:
 
         assert response.status_code == 200
 
-        # Assert: Messages stored correctly
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored) == 2
-        assert stored[0]["content"] == "First message"
+        # Assert: Both messages pushed through coordinator
+        assert coordinator.push_message.call_count == 2
+        calls = coordinator.push_message.call_args_list
+        assert calls[0][1]["message"]["content"] == "First message"
+        assert calls[1][1]["message"]["content"] == "Second message"
 
     def test_append_empty_list(self, session_manager_app, sample_episode):
         """Test appending empty list is allowed (no-op)."""
         manager, client = session_manager_app
 
-        # Setup: Episode with existing messages
-        sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "system", "content": "Existing"}
-        ]
+        # Setup: Episode exists (existing messages in Redis)
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 1
 
         # Execute: Append empty list
         response = client.post(
@@ -369,20 +368,17 @@ class TestTranscriptAppendMode:
 
         assert response.status_code == 200
 
-        # Assert: Existing messages unchanged
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored) == 1
-        assert stored[0]["content"] == "Existing"
+        # Assert: No messages pushed through coordinator
+        assert coordinator.push_message.call_count == 0
 
     def test_replace_with_empty_clears_transcript(self, session_manager_app, sample_episode):
-        """Test replace with empty list clears transcript."""
+        """Test replace with empty list pushes no messages."""
         manager, client = session_manager_app
 
-        # Setup: Episode with existing messages
-        sample_episode.context[MetadataKeys.CLIENT_TRANSCRIPT] = [
-            {"role": "system", "content": "To be deleted"}
-        ]
+        # Setup: Episode exists (existing messages in Redis)
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 0
 
         # Execute: Replace with empty list
         response = client.post(
@@ -396,9 +392,8 @@ class TestTranscriptAppendMode:
 
         assert response.status_code == 200
 
-        # Assert: Transcript cleared
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert stored == []
+        # Assert: No messages pushed
+        assert coordinator.push_message.call_count == 0
 
     # ========================================================================
     # Test: Differential Sync Use Case
@@ -408,8 +403,10 @@ class TestTranscriptAppendMode:
         """Test realistic differential sync scenario with multiple iterations."""
         manager, client = session_manager_app
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
 
         # Iteration 1: Initial push (system + user)
+        coordinator.get_message_count.return_value = 2
         response1 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -424,6 +421,7 @@ class TestTranscriptAppendMode:
         assert response1.status_code == 200
 
         # Iteration 2: Agent responds with tool call
+        coordinator.get_message_count.return_value = 3
         response2 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -447,6 +445,7 @@ class TestTranscriptAppendMode:
         assert response2.status_code == 200
 
         # Iteration 3: Tool response
+        coordinator.get_message_count.return_value = 4
         response3 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -465,6 +464,7 @@ class TestTranscriptAppendMode:
         assert response3.status_code == 200
 
         # Iteration 4: Final assistant response
+        coordinator.get_message_count.return_value = 5
         response4 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json={
@@ -477,21 +477,23 @@ class TestTranscriptAppendMode:
         )
         assert response4.status_code == 200
 
-        # Assert: All messages accumulated in order
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored) == 5
-        assert stored[0]["role"] == "system"
-        assert stored[1]["role"] == "user"
-        assert stored[2]["role"] == "assistant"
-        assert stored[2]["tool_calls"] is not None
-        assert stored[3]["role"] == "tool"
-        assert stored[4]["role"] == "assistant"
-        assert stored[4]["content"] == "The answer is 4"
+        # Assert: All 5 messages pushed through coordinator in order
+        assert coordinator.push_message.call_count == 5
+        calls = coordinator.push_message.call_args_list
+        assert calls[0][1]["message"]["role"] == "system"
+        assert calls[1][1]["message"]["role"] == "user"
+        assert calls[2][1]["message"]["role"] == "assistant"
+        assert calls[2][1]["message"]["tool_calls"] is not None
+        assert calls[3][1]["message"]["role"] == "tool"
+        assert calls[4][1]["message"]["role"] == "assistant"
+        assert calls[4][1]["message"]["content"] == "The answer is 4"
 
     def test_append_with_tool_calls_and_reasoning(self, session_manager_app, sample_episode):
         """Test appending messages with complex structures (tool calls, reasoning)."""
         manager, client = session_manager_app
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
+        coordinator = manager.episode_manager.transcript_coordinator
+        coordinator.get_message_count.return_value = 1
 
         # Append assistant message with reasoning and tool calls
         response = client.post(
@@ -518,10 +520,9 @@ class TestTranscriptAppendMode:
 
         assert response.status_code == 200
 
-        # Assert: Complex message stored correctly
-        stored = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored) == 1
-        msg = stored[0]
+        # Assert: Complex message pushed through coordinator
+        assert coordinator.push_message.call_count == 1
+        msg = coordinator.push_message.call_args[1]["message"]
         assert msg["role"] == "assistant"
         assert msg["content"] == "I need to search"
         assert msg["reasoning"] == "The user wants information, so I should search"

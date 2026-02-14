@@ -29,7 +29,7 @@ import os
 from typing import Any
 
 from .....logging_config import LogCategory, get_saber_logger
-from .....models.transcript import TranscriptPushOperation
+from .....models.rest.websocket_messages import TranscriptOperation
 from ....base import CommandResult
 from ...base import ExecutionContext, ExecutorParameters, InjectPromptParameters, Parameter, ParameterType
 from ...models import ExecutorConfig
@@ -158,7 +158,7 @@ class InjectPromptExecutor(DockerExecutor):
                     "'restart' (reset to initial transcript and inject fresh)"
                 ),
                 required=False,
-                default=TranscriptPushOperation.APPEND.value,
+                default=TranscriptOperation.APPEND.value,
             )
         )
 
@@ -185,7 +185,7 @@ class InjectPromptExecutor(DockerExecutor):
                     "'restart' (reset to initial transcript and inject fresh)"
                 ),
                 required=False,
-                default=TranscriptPushOperation.APPEND.value,
+                default=TranscriptOperation.APPEND.value,
             ),
             "wait_for_user": Parameter(
                 name="wait_for_user",
@@ -252,7 +252,7 @@ class InjectPromptExecutor(DockerExecutor):
                 return CommandResult.error_result("Could not resolve target_episode_id from orchestration metadata")
 
             # Validate strategy - only append and restart are valid
-            valid_strategies = [s.value for s in TranscriptPushOperation]
+            valid_strategies = [s.value for s in TranscriptOperation]
             if p.strategy not in valid_strategies:
                 return CommandResult.error_result(
                     f"Invalid strategy: {p.strategy}. Valid: {', '.join(valid_strategies)}"

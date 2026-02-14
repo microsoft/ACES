@@ -29,12 +29,12 @@ class TestSessionManagerEpisodes:
     @pytest.fixture
     def mock_step(self):
         """Mock step result for testing."""
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         step = MagicMock(spec=Step)
         step.step_number = 1
         step.done = False
-        step.timestamp = datetime.utcnow()
+        step.timestamp = datetime.now(timezone.utc)
         # Mock action attribute properly
         mock_action = MagicMock()
         mock_action.tool_name = "test_tool"

@@ -29,25 +29,6 @@ class WebSocketCloseCode:
     TLS_HANDSHAKE_FAILED = 1015  # TLS handshake failed (reserved)
 
 
-class WebSocketMessageType:
-    """WebSocket message type constants.
-
-    Centralized message type strings to avoid magic strings throughout the codebase.
-    """
-
-    # Client → Server messages
-    PING = "ping"
-    SYNC_REQUEST = "sync_request"
-    PUSH_MESSAGE = "push_message"
-
-    # Server → Client messages
-    PONG = "pong"
-    CONNECTED = "connected"
-    SYNC_RESPONSE = "sync_response"
-    PUSH_ACK = "push_ack"
-    TRANSCRIPT_MODIFIED = "transcript_modified"
-
-
 class WebSocketDefaults:
     """Default values for WebSocket configuration.
 
@@ -64,7 +45,6 @@ class WebSocketDefaults:
 
     # Pull configuration (receiving transcript modifications from server)
     PULL_EVENT_TIMEOUT_SECONDS = 300.0  # 5 minutes - max wait for red team injection
-    PULL_SYNC_TIMEOUT_SECONDS = 5.0  # Sync request/response round-trip timeout
     PULL_EVENT_QUEUE_MAX_SIZE = 100  # Max queued events (prevents memory exhaustion)
 
     # Push configuration (sending new messages to server)
@@ -83,8 +63,7 @@ class WebSocketDefaults:
 
     # Event processing iteration limits
     MAX_EVENT_DISCARD_ITERATIONS = 20  # Max iterations to discard non-matching events
-    MAX_SYNC_RESPONSE_ITERATIONS = 50  # Max iterations waiting for sync_response (high for concurrent samples)
     MAX_ACK_WAIT_ITERATIONS = 20  # Max iterations waiting for push_ack
 
 
-__all__ = ["WebSocketCloseCode", "WebSocketMessageType", "WebSocketDefaults"]
+__all__ = ["WebSocketCloseCode", "WebSocketDefaults"]

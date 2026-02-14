@@ -1,11 +1,11 @@
 """Tests for auto-continue functionality."""
 
-import asyncio
 import pytest
+
 from saber.models.constants import MetadataKeys
-from saber.server.episodes.auto_continue_manager import AutoContinueManager
-from saber.server.episodes.transcript_state_machine import TranscriptState
 from saber.server.base import Episode, EpisodeState
+from saber.server.episodes.transcript.auto_continue_manager import AutoContinueManager
+from saber.server.episodes.transcript.state_machine import TranscriptState
 
 
 class MockEpisodeManager:
@@ -22,15 +22,22 @@ class MockTranscriptCoordinator:
     """Mock transcript coordinator for testing."""
 
     def __init__(self):
-        self.modifications = []
+        self.pushed_messages: list[dict[str, str]] = []
 
-    async def notify_modification(self, episode_id, modified_transcript, operation, injected_by):
-        self.modifications.append({
+    async def push_message(
+        self,
+        episode_id: str,
+        session_id: str,
+        message: dict[str, str],
+        operation: str = "append",
+    ) -> int:
+        self.pushed_messages.append({
             "episode_id": episode_id,
-            "transcript": modified_transcript,
+            "session_id": session_id,
+            "message": message,
             "operation": operation,
-            "injected_by": injected_by,
         })
+        return len(self.pushed_messages)
 
 
 @pytest.mark.asyncio
@@ -48,10 +55,6 @@ class TestAutoContinueBasic:
             session_id="session-1",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi!"}
-                ],
                 MetadataKeys.TRANSCRIPT_VERSION: 2,
                 MetadataKeys.AUTO_CONTINUE_ENABLED: True,
             }
@@ -62,12 +65,11 @@ class TestAutoContinueBasic:
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_USER)
 
         # Should inject message
-        assert len(coordinator.modifications) == 1
-        mod = coordinator.modifications[0]
-        assert mod["operation"] == "auto_continue"
-        assert mod["injected_by"] == "system"
-        assert len(mod["transcript"]) == 3  # Original 2 + 1 injected
-        assert mod["transcript"][-1]["role"] == "user"
+        assert len(coordinator.pushed_messages) == 1
+        msg = coordinator.pushed_messages[0]
+        assert msg["operation"] == "auto_continue"
+        assert msg["session_id"] == "session-1"
+        assert msg["message"]["role"] == "user"
 
     async def test_auto_continue_disabled_skips_injection(self):
         """Auto-continue should skip when disabled."""
@@ -80,10 +82,6 @@ class TestAutoContinueBasic:
             session_id="session-1",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi!"}
-                ],
                 MetadataKeys.AUTO_CONTINUE_ENABLED: False,
             }
         )
@@ -93,7 +91,7 @@ class TestAutoContinueBasic:
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_USER)
 
         # Should NOT inject
-        assert len(coordinator.modifications) == 0
+        assert len(coordinator.pushed_messages) == 0
 
     async def test_auto_continue_wrong_state_skips(self):
         """Auto-continue should only trigger in WAITING_FOR_USER state."""
@@ -106,9 +104,6 @@ class TestAutoContinueBasic:
             session_id="session-1",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"}
-                ],
                 MetadataKeys.AUTO_CONTINUE_ENABLED: True,
             }
         )
@@ -120,7 +115,7 @@ class TestAutoContinueBasic:
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_ASSISTANT)
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_TOOLS)
 
-        assert len(coordinator.modifications) == 0
+        assert len(coordinator.pushed_messages) == 0
 
     async def test_auto_continue_custom_prompt(self):
         """Auto-continue should use custom prompt if provided."""
@@ -135,10 +130,6 @@ class TestAutoContinueBasic:
             session_id="session-1",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi!"}
-                ],
                 MetadataKeys.AUTO_CONTINUE_ENABLED: True,
                 MetadataKeys.CONTINUE_PROMPT: custom_prompt,
             }
@@ -149,9 +140,9 @@ class TestAutoContinueBasic:
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_USER)
 
         # Should use custom prompt
-        assert len(coordinator.modifications) == 1
-        mod = coordinator.modifications[0]
-        assert mod["transcript"][-1]["content"] == custom_prompt
+        assert len(coordinator.pushed_messages) == 1
+        msg = coordinator.pushed_messages[0]
+        assert msg["message"]["content"] == custom_prompt
 
 
 @pytest.mark.asyncio
@@ -169,10 +160,6 @@ class TestAutoContinueIdempotency:
             session_id="session-1",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi!"}
-                ],
                 MetadataKeys.TRANSCRIPT_VERSION: 2,
                 MetadataKeys.AUTO_CONTINUE_ENABLED: True,
                 MetadataKeys.LAST_AUTO_CONTINUE_VERSION: 2,  # Already injected
@@ -184,7 +171,7 @@ class TestAutoContinueIdempotency:
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_USER)
 
         # Should NOT inject (idempotency)
-        assert len(coordinator.modifications) == 0
+        assert len(coordinator.pushed_messages) == 0
 
     async def test_idempotency_allows_new_version(self):
         """Auto-continue should inject for new version."""
@@ -197,10 +184,6 @@ class TestAutoContinueIdempotency:
             session_id="session-1",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi!"}
-                ],
                 MetadataKeys.TRANSCRIPT_VERSION: 5,
                 MetadataKeys.AUTO_CONTINUE_ENABLED: True,
                 MetadataKeys.LAST_AUTO_CONTINUE_VERSION: 3,  # Old version
@@ -212,7 +195,7 @@ class TestAutoContinueIdempotency:
         await manager.handle_auto_continue("ep-1", TranscriptState.WAITING_FOR_USER)
 
         # Should inject (new version)
-        assert len(coordinator.modifications) == 1
+        assert len(coordinator.pushed_messages) == 1
 
     async def test_missing_episode_skips_safely(self):
         """Auto-continue should skip if episode not found."""
@@ -223,4 +206,4 @@ class TestAutoContinueIdempotency:
         await manager.handle_auto_continue("ep-nonexistent", TranscriptState.WAITING_FOR_USER)
 
         # Should not raise, no modifications
-        assert len(coordinator.modifications) == 0
+        assert len(coordinator.pushed_messages) == 0

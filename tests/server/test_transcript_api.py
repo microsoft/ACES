@@ -2,17 +2,14 @@
 Unit tests for transcript synchronization API endpoints.
 
 Tests the POST and GET endpoints for transcript push/pull between client and server.
-Following TDD: Write tests first, then implement.
+Transcript data is stored in Redis via TranscriptCoordinator.
 """
 
-import json
-from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from saber.models.constants import MetadataKeys
 from saber.server.base import Episode, EpisodeState
 from saber.server.session_manager import SessionManager
 
@@ -21,7 +18,16 @@ class TestTranscriptAPI:
     """Test transcript push/pull REST API endpoints."""
 
     @pytest.fixture
-    def session_manager_app(self):
+    def mock_transcript_coordinator(self):
+        """Create a mock TranscriptCoordinator."""
+        coordinator = MagicMock()
+        coordinator.push_message = AsyncMock(return_value=1)
+        coordinator.get_message_count = AsyncMock(return_value=0)
+        coordinator.get_transcript = AsyncMock(return_value=[])
+        return coordinator
+
+    @pytest.fixture
+    def session_manager_app(self, mock_transcript_coordinator):
         """Create SessionManager with test client."""
         mock_task_manager = MagicMock()
         mock_config_loader = MagicMock()
@@ -45,6 +51,7 @@ class TestTranscriptAPI:
         mock_episode_manager.start_episode = MagicMock()
         mock_episode_manager.end_episode = MagicMock()
         mock_episode_manager.get_episode = MagicMock()
+        mock_episode_manager.transcript_coordinator = mock_transcript_coordinator
 
         with (
             patch("saber.server.session_manager.BenchmarkManager", return_value=mock_task_manager),
@@ -109,25 +116,24 @@ class TestTranscriptAPI:
     # POST /api/v1/session/{sid}/episodes/{eid}/transcript - Push Transcript
     # ========================================================================
 
-    def test_push_transcript_success(self, session_manager_app, sample_episode, sample_transcript):
-        """Test successful transcript push stores data in Episode.context."""
+    def test_push_transcript_success(
+        self, session_manager_app, sample_episode, sample_transcript, mock_transcript_coordinator
+    ):
+        """Test successful transcript push calls coordinator.push_message."""
         manager, client = session_manager_app
 
-        # Setup: Create session and episode
         session_id = sample_episode.session_id
         episode_id = sample_episode.episode_id
 
-        # Mock get_episode_by_id to return our sample episode
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[session_id] = {"episodes": {episode_id: sample_episode}}
+        mock_transcript_coordinator.get_message_count.return_value = 4
 
-        # Execute: Push transcript
         response = client.post(
             f"/api/v1/session/{session_id}/episodes/{episode_id}/transcript",
             json=sample_transcript
         )
 
-        # Assert: Success response
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
@@ -135,52 +141,43 @@ class TestTranscriptAPI:
         assert data["message_count"] == 4
         assert "stored_at" in data
 
-        # Assert: Transcript stored in Episode.context
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert stored_transcript is not None
-        assert len(stored_transcript) == 4
-        assert stored_transcript[0]["role"] == "system"
-        assert stored_transcript[1]["role"] == "user"
-        assert stored_transcript[2]["role"] == "assistant"
-        assert stored_transcript[3]["role"] == "tool"
+        # Verify coordinator.push_message was called for each message
+        assert mock_transcript_coordinator.push_message.call_count == 4
 
     def test_push_transcript_episode_not_found(self, session_manager_app, sample_transcript):
         """Test pushing transcript to non-existent episode returns 404."""
         manager, client = session_manager_app
 
-        # Mock episode manager to return None (episode not found)
         manager.get_episode_by_id = MagicMock(return_value=None)
 
-        # Execute: Push transcript to non-existent episode
         response = client.post(
             "/api/v1/session/fake_session/episodes/fake_episode/transcript",
             json=sample_transcript
         )
 
-        # Assert: 404 Not Found
         assert response.status_code == 404
         data = response.json()
         assert "detail" in data
         assert "not found" in data["detail"].lower()
 
-    def test_push_transcript_episode_terminated(self, session_manager_app, sample_episode, sample_transcript):
+    def test_push_transcript_episode_terminated(
+        self, session_manager_app, sample_episode, sample_transcript, mock_transcript_coordinator
+    ):
         """Test pushing transcript to terminated episode is allowed (for audit trail)."""
         manager, client = session_manager_app
 
-        # Setup: Episode is completed (terminated)
         sample_episode.state = EpisodeState.COMPLETED
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
+        mock_transcript_coordinator.get_message_count.return_value = 4
 
-        # Execute: Push transcript to terminated episode
         response = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json=sample_transcript
         )
 
-        # Assert: Success (200) - post-completion pushes allowed for audit trail
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
@@ -190,14 +187,12 @@ class TestTranscriptAPI:
         """Test pushing oversized transcript returns 413 Payload Too Large."""
         manager, client = session_manager_app
 
-        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
 
-        # Create large transcript (>10MB)
-        large_content = "x" * (11 * 1024 * 1024)  # 11 MB
+        large_content = "x" * (11 * 1024 * 1024)
         large_transcript = {
             "messages": [
                 {
@@ -208,90 +203,79 @@ class TestTranscriptAPI:
             "metadata": {}
         }
 
-        # Execute: Push oversized transcript
         response = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json=large_transcript
         )
 
-        # Assert: 413 Payload Too Large
         assert response.status_code == 413
         data = response.json()
         assert "detail" in data
         assert "too large" in data["detail"].lower() or "size" in data["detail"].lower()
 
-    def test_push_transcript_empty_messages(self, session_manager_app, sample_episode):
-        """Test pushing empty transcript is allowed (clear transcript)."""
+    def test_push_transcript_empty_messages(
+        self, session_manager_app, sample_episode, mock_transcript_coordinator
+    ):
+        """Test pushing empty transcript is allowed."""
         manager, client = session_manager_app
 
-        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
+        mock_transcript_coordinator.get_message_count.return_value = 0
 
         empty_transcript = {
             "messages": [],
             "metadata": {}
         }
 
-        # Execute: Push empty transcript
         response = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json=empty_transcript
         )
 
-        # Assert: Success with 0 messages
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
         assert data["message_count"] == 0
 
-        # Assert: Empty transcript stored
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert stored_transcript == []
+        # No push_message calls for empty messages
+        mock_transcript_coordinator.push_message.assert_not_called()
 
-    def test_push_transcript_idempotent(self, session_manager_app, sample_episode, sample_transcript):
-        """Test pushing same transcript twice is idempotent (last write wins)."""
+    def test_push_transcript_idempotent(
+        self, session_manager_app, sample_episode, sample_transcript, mock_transcript_coordinator
+    ):
+        """Test pushing same transcript twice succeeds both times."""
         manager, client = session_manager_app
 
-        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
+        mock_transcript_coordinator.get_message_count.return_value = 4
 
-        # Execute: Push transcript twice
         response1 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json=sample_transcript
         )
 
-        # Modify transcript
         modified_transcript = sample_transcript.copy()
-        modified_transcript["messages"].append({
-            "role": "assistant",
-            "content": "New message"
-        })
+        modified_transcript["messages"] = list(sample_transcript["messages"]) + [
+            {"role": "assistant", "content": "New message"}
+        ]
+        mock_transcript_coordinator.get_message_count.return_value = 9
 
         response2 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
             json=modified_transcript
         )
 
-        # Assert: Both succeed
         assert response1.status_code == 200
         assert response2.status_code == 200
 
-        # Assert: Last write wins (5 messages from second push)
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored_transcript) == 5
-        assert stored_transcript[-1]["content"] == "New message"
-
-    # ========================================================================
-    # GET /api/v1/session/{sid}/episodes/{eid}/transcript - REMOVED
-    # Transcript retrieval now uses WebSocket sync_request with is_observer=True
-    # ========================================================================
+        # Total push_message calls = 4 (first push) + 5 (second push)
+        assert mock_transcript_coordinator.push_message.call_count == 9
 
     # ========================================================================
     # Error Handling & Edge Cases
@@ -301,13 +285,11 @@ class TestTranscriptAPI:
         """Test pushing malformed JSON returns 422 Unprocessable Entity."""
         manager, client = session_manager_app
 
-        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
 
-        # Execute: Push malformed transcript (missing required fields)
         malformed = {"not_messages": []}
 
         response = client.post(
@@ -315,20 +297,17 @@ class TestTranscriptAPI:
             json=malformed
         )
 
-        # Assert: 422 Unprocessable Entity for validation errors
         assert response.status_code == 422
 
     def test_push_transcript_invalid_message_format(self, session_manager_app, sample_episode):
         """Test pushing transcript with invalid message format returns 422."""
         manager, client = session_manager_app
 
-        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
 
-        # Execute: Push transcript with invalid message (missing role)
         invalid_transcript = {
             "messages": [
                 {"content": "Missing role field"}
@@ -341,23 +320,25 @@ class TestTranscriptAPI:
             json=invalid_transcript
         )
 
-        # Assert: 422 Unprocessable Entity for invalid message structure
         assert response.status_code == 422
 
-    def test_concurrent_transcript_pushes(self, session_manager_app, sample_episode, sample_transcript):
-        """Test concurrent pushes to same episode don't corrupt data."""
+    def test_concurrent_transcript_pushes(
+        self, session_manager_app, sample_episode, sample_transcript, mock_transcript_coordinator
+    ):
+        """Test concurrent pushes to same episode both succeed."""
         manager, client = session_manager_app
 
-        # Setup: Episode exists
         manager.get_episode_by_id = MagicMock(return_value=sample_episode)
         manager.active_sessions[sample_episode.session_id] = {
             "episodes": {sample_episode.episode_id: sample_episode}
         }
 
-        # Execute: Push two different transcripts
         transcript1 = sample_transcript.copy()
         transcript2 = sample_transcript.copy()
-        transcript2["messages"].append({"role": "assistant", "content": "Extra message"})
+        transcript2["messages"] = list(sample_transcript["messages"]) + [
+            {"role": "assistant", "content": "Extra message"}
+        ]
+        mock_transcript_coordinator.get_message_count.return_value = 5
 
         response1 = client.post(
             f"/api/v1/session/{sample_episode.session_id}/episodes/{sample_episode.episode_id}/transcript",
@@ -368,10 +349,8 @@ class TestTranscriptAPI:
             json=transcript2
         )
 
-        # Assert: Both succeed
         assert response1.status_code == 200
         assert response2.status_code == 200
 
-        # Assert: Last write wins (no corruption)
-        stored_transcript = sample_episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
-        assert len(stored_transcript) == 5  # transcript2 has 5 messages
+        # Total calls: 4 (first) + 5 (second) = 9
+        assert mock_transcript_coordinator.push_message.call_count == 9

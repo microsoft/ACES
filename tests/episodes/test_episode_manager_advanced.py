@@ -6,13 +6,12 @@ and edge cases that may not be covered in the main test file.
 """
 
 import asyncio
-import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime
+from unittest.mock import MagicMock
 
-from saber.server.base import Action, CommandResult, Episode, EpisodeState, Step
+import pytest
+
+from saber.server.base import Action, CommandResult, EpisodeState
 from saber.server.episodes.episode_manager import EpisodeManager
-from saber.server.episodes.exceptions import EpisodeNotFoundException
 
 
 class TestEpisodeManagerAdvanced:

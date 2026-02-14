@@ -6,13 +6,12 @@ when communicating with the WebSocket daemon in Docker.
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime
-from typing import Dict, Any
-from unittest.mock import MagicMock, AsyncMock
 
 from saber.models.constants import MetadataKeys
-from saber.server.base import Episode, EpisodeState, CommandResult
+from saber.server.base import Episode, EpisodeState
 from saber.server.execution.executors.standard_registry.inject_prompt_executor import InjectPromptExecutor
 from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
@@ -66,9 +65,6 @@ class TestAutomaticTargetResolution:
             session_id="session-789",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful..."},
-                ],
                 MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: 0,
                 MetadataKeys.ORCHESTRATION_ROLE: "blue_team",
             },
@@ -258,12 +254,6 @@ class TestInjectionStrategies:
             session_id="session-xyz",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful..."},
-                    {"role": "user", "content": "What is 2+2?"},
-                    {"role": "assistant", "content": "2+2 is 4."},
-                    {"role": "user", "content": "What is 3+3?"},
-                ],
                 MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: 0,
             },
         )
@@ -415,9 +405,6 @@ class TestBackwardCompatibility:
             session_id="session-legacy",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful..."},
-                ],
                 MetadataKeys.TRANSCRIPT_MODIFICATION_COUNT: 0,
             },
         )

@@ -6,6 +6,8 @@ and coordinating all server components. REST API functionality is handled by Ses
 """
 
 import asyncio
+import os
+import subprocess
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,12 +30,14 @@ from .api.session_rest_api import SessionRestAPI
 from .base import Action, CommandResult, Episode, EpisodeState
 from .benchmarks.benchmark_manager import BenchmarkManager
 from .benchmarks.task import Task
+
+# CleanupReason removed - using direct component cleanup
+from .db.event_repository import EpisodeEventRepository
+from .db.redis_manager import RedisManager
 from .episodes.constants import EpisodeTerminationReason
 from .episodes.episode_manager import EpisodeManager
 from .evaluation.evaluation_manager import EvaluationManager
 from .evaluation.session_evaluation_service import SessionEvaluationService
-
-# CleanupReason removed - using direct component cleanup
 from .execution.execution_manager import ExecutionManager
 from .policy.policy_manager import PolicyDocument, PolicyManager
 from .time_source import TimeSource, UTCTimeSource
@@ -239,6 +243,9 @@ class SessionManager:
         )
 
         self.benchmark_manager = BenchmarkManager(domain_name, config_dir)
+        self.redis_manager = RedisManager()
+        self._redis_auto_start = os.getenv("SABER_REDIS_AUTO_START", "true").lower() != "false"
+        self._redis_compose_path: Path | None = None  # Set during start, used during stop
         self.episode_manager = EpisodeManager(time_source=self._time_source)
 
         # Initialize execution manager with self for cross-episode executor operations
@@ -471,6 +478,121 @@ class SessionManager:
                 "error": f"Failed to check permanent environment health: {str(e)}",
             }
 
+    async def _connect_redis(self) -> None:
+        """Connect RedisManager and wire EpisodeEventRepository if successful.
+
+        Redis is OPTIONAL — connection failure is logged as a warning
+        and the system continues without DB-backed transcript storage.
+        """
+        try:
+            await self.redis_manager.connect()
+        except Exception:
+            logger.warning(
+                "Redis unavailable — continuing without DB transcript storage",
+                extra={"event": "redis_optional_skip"},
+                exc_info=True,
+            )
+            return
+
+        if self.redis_manager.is_connected:
+            event_repo = EpisodeEventRepository(self.redis_manager.client)
+            self.episode_manager.wire_event_repository(event_repo)
+            logger.info(
+                "EpisodeEventRepository wired into TranscriptCoordinator",
+                extra={"event": "event_repository_wired"},
+            )
+
+    def _start_redis_container(self) -> None:
+        """Start Redis container via Docker Compose if auto-start is enabled.
+
+        Uses the bundled redis-compose.yml from package_resources.
+        Graceful degradation: failures are logged, never raised.
+        """
+        if not self._redis_auto_start:
+            return
+
+        try:
+            from saber.domain.resources import resolve_redis_compose_path
+
+            compose_path = resolve_redis_compose_path()
+            self._redis_compose_path = compose_path
+        except Exception as e:
+            logger.warning(
+                f"Redis compose file not found, skipping auto-start: {e}",
+                extra={"event": "redis_compose_not_found", "error": str(e)},
+            )
+            return
+
+        cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(compose_path),
+            "-p",
+            "saber-redis",
+            "up",
+            "-d",
+            "--wait",
+            "--wait-timeout",
+            "30",
+        ]
+
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            logger.info(
+                "Redis container started",
+                extra={"event": "redis_container_started", "compose_path": str(compose_path)},
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "Docker not found — cannot auto-start Redis container",
+                extra={"event": "redis_docker_not_found"},
+            )
+            self._redis_compose_path = None
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                f"Failed to start Redis container: {e.stderr}",
+                extra={
+                    "event": "redis_container_start_failed",
+                    "returncode": e.returncode,
+                    "stderr": e.stderr,
+                },
+            )
+            self._redis_compose_path = None
+
+    def _stop_redis_container(self) -> None:
+        """Stop Redis container via Docker Compose.
+
+        Only stops if we started it (compose_path is set from start).
+        Graceful degradation: failures are logged, never raised.
+        """
+        if not self._redis_compose_path:
+            return
+
+        cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(self._redis_compose_path),
+            "-p",
+            "saber-redis",
+            "down",
+        ]
+
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            logger.info(
+                "Redis container stopped",
+                extra={"event": "redis_container_stopped"},
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to stop Redis container: {e}",
+                extra={"event": "redis_container_stop_failed", "error": str(e)},
+            )
+        finally:
+            self._redis_compose_path = None
+
     async def start_server(self) -> None:
         """Start both REST and MCP servers concurrently with session cleanup.
 
@@ -478,6 +600,14 @@ class SessionManager:
         can respond to health checks immediately with startup progress.
         """
         import asyncio
+
+        # Start managed Redis container if auto-start enabled
+        # Run sync subprocess in executor to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._start_redis_container)
+
+        # Connect to Redis (optional — failure is non-fatal)
+        await self._connect_redis()
 
         # Start permanent environment in background (non-blocking)
         # This allows REST API to respond to health checks during startup
@@ -556,6 +686,12 @@ class SessionManager:
                 extra={"event": "shutdown_session_termination", "session_id": session_id},
             )
             await self.terminate_session(session_id)
+
+        # Disconnect RedisManager
+        await self.redis_manager.disconnect()
+
+        # Stop managed Redis container (after client disconnect)
+        self._stop_redis_container()
 
         logger.info(
             "SessionManager shutdown complete",

@@ -6,7 +6,6 @@ from .websocket_handlers import (
     BaseWebSocketHandler,
     PingHandler,
     PushMessageHandler,
-    SyncRequestHandler,
     WebSocketMessageRouter,
     get_message_router,
 )
@@ -16,7 +15,6 @@ __all__ = [
     "SessionMCPAPI",
     "BaseWebSocketHandler",
     "PingHandler",
-    "SyncRequestHandler",
     "PushMessageHandler",
     "WebSocketMessageRouter",
     "get_message_router",

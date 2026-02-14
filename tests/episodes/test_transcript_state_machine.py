@@ -1,14 +1,13 @@
 """Unit tests for TranscriptStateMachine core state detection."""
 
 import asyncio
+
 import pytest
-import time
-from saber.models.constants import MetadataKeys
-from saber.server.episodes.transcript_state_machine import (
+
+from saber.server.episodes.transcript.state_machine import (
     TranscriptState,
     TranscriptStateMachine,
 )
-from saber.server.base import Episode, EpisodeState
 
 
 class TestTranscriptStateDetection:
@@ -16,215 +15,113 @@ class TestTranscriptStateDetection:
 
     def test_empty_transcript_is_waiting_for_user(self):
         """Empty transcript should be WAITING_FOR_USER."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={MetadataKeys.CLIENT_TRANSCRIPT: []}
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([])
 
         assert state == TranscriptState.WAITING_FOR_USER
 
     def test_user_message_is_waiting_for_assistant(self):
         """Last message from user → WAITING_FOR_ASSISTANT."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful"},
-                    {"role": "user", "content": "Hello"}
-                ]
-            }
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+        ])
 
         assert state == TranscriptState.WAITING_FOR_ASSISTANT
 
     def test_assistant_without_tool_calls_is_waiting_for_user(self):
         """Assistant message without tool_calls → WAITING_FOR_USER."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi there!"}
-                ]
-            }
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+        ])
 
         assert state == TranscriptState.WAITING_FOR_USER
 
     def test_assistant_with_tool_calls_is_waiting_for_tools(self):
         """Assistant message with tool_calls → WAITING_FOR_TOOLS."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "List files"},
-                    {
-                        "role": "assistant",
-                        "content": "I'll list the files",
-                        "tool_calls": [
-                            {"id": "1", "type": "function", "function": {"name": "bash"}}
-                        ]
-                    }
-                ]
-            }
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([
+            {"role": "user", "content": "List files"},
+            {
+                "role": "assistant",
+                "content": "I'll list the files",
+                "tool_calls": [
+                    {"id": "1", "type": "function", "function": {"name": "bash"}}
+                ],
+            },
+        ])
 
         assert state == TranscriptState.WAITING_FOR_TOOLS
 
     def test_tool_result_is_waiting_for_user(self):
         """Tool result message → WAITING_FOR_USER."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {
-                        "role": "assistant",
-                        "tool_calls": [{"id": "1", "type": "function"}]
-                    },
-                    {"role": "tool", "tool_call_id": "1", "content": "file.txt"}
-                ]
-            }
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "1", "type": "function"}],
+            },
+            {"role": "tool", "tool_call_id": "1", "content": "file.txt"},
+        ])
 
         assert state == TranscriptState.WAITING_FOR_USER
 
     def test_system_messages_are_skipped(self):
         """System messages don't affect state detection."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi!"},
-                    {"role": "system", "content": "Injected system message"}
-                ]
-            }
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
+            {"role": "system", "content": "Injected system message"},
+        ])
 
         # Should ignore system and look at assistant
         assert state == TranscriptState.WAITING_FOR_USER
 
     def test_only_system_messages(self):
         """Transcript with only system messages → WAITING_FOR_USER."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "System message 1"},
-                    {"role": "system", "content": "System message 2"}
-                ]
-            }
-        )
-
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        state = state_machine.compute_state_from_transcript([
+            {"role": "system", "content": "System message 1"},
+            {"role": "system", "content": "System message 2"},
+        ])
 
         # Should return default state when only system messages
         assert state == TranscriptState.WAITING_FOR_USER
 
 
 class TestTranscriptValidation:
-    """Test transcript structure validation."""
+    """Test transcript structure validation via _is_valid_transcript (internal helper)."""
 
     def test_malformed_transcript_missing_role(self):
-        """Transcript with missing role → ERROR_MALFORMED."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"content": "Hello"}  # Missing role
-                ]
-            }
-        )
-
+        """Transcript with missing role is detected as invalid."""
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        transcript = [{"content": "Hello"}]  # Missing role
 
-        assert state == TranscriptState.ERROR_MALFORMED
+        assert state_machine._is_valid_transcript(transcript) is False
 
     def test_malformed_transcript_invalid_role(self):
-        """Transcript with invalid role → ERROR_MALFORMED."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "invalid_role", "content": "Hello"}
-                ]
-            }
-        )
-
+        """Transcript with invalid role is detected as invalid."""
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        transcript = [{"role": "invalid_role", "content": "Hello"}]
 
-        assert state == TranscriptState.ERROR_MALFORMED
+        assert state_machine._is_valid_transcript(transcript) is False
 
     def test_malformed_transcript_invalid_tool_calls(self):
-        """Transcript with malformed tool_calls → ERROR_MALFORMED."""
-        episode = Episode(
-            episode_id="ep-1",
-            task_id="task-1",
-            session_id="session-1",
-            state=EpisodeState.ACTIVE,
-            context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {
-                        "role": "assistant",
-                        "content": "Calling tool",
-                        "tool_calls": "not a list"  # Should be list
-                    }
-                ]
-            }
-        )
-
+        """Transcript with malformed tool_calls is detected as invalid."""
         state_machine = TranscriptStateMachine()
-        state = state_machine.get_state(episode)
+        transcript = [
+            {
+                "role": "assistant",
+                "content": "Calling tool",
+                "tool_calls": "not a list",  # Should be list
+            }
+        ]
 
-        assert state == TranscriptState.ERROR_MALFORMED
+        assert state_machine._is_valid_transcript(transcript) is False
 
 
 class TestStateTransitionValidation:

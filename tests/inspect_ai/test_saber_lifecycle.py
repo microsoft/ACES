@@ -9,15 +9,15 @@ Tests focus on increasing coverage for:
 - MCP client lifecycle
 """
 
-import asyncio
-import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, Mock, patch, call
-from pydantic import create_model, ConfigDict
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from saber.inspect_ai.saber import SABERSandboxEnvironment, SandboxError
+import pytest
+from pydantic import ConfigDict, create_model
+
 from saber.inspect_ai.core.types import DomainRegistryEntry
-from saber.models import SingleEpisodeTask, OrchestratedTask, MetadataKeys, TaskExecutionMode
+from saber.inspect_ai.saber import SABERSandboxEnvironment, SandboxError
+from saber.models import MetadataKeys, SingleEpisodeTask
 
 
 @pytest.fixture
@@ -261,7 +261,7 @@ class TestSampleInitPaths:
             with patch('saber.inspect_ai.core.mcp_factory.mcp_server_http') as mock_mcp_server:
                 mock_mcp_server.return_value = MagicMock()
 
-                with patch('saber.inspect_ai.saber.store') as mock_store:
+                with patch('saber.inspect_ai.saber.store'):
                     # Execute sample_init
                     result = await SABERSandboxEnvironment.sample_init(
                         "test_task", mock_config, metadata
@@ -325,8 +325,8 @@ class TestHelperMethods:
     """Test internal helper methods."""
 
     def test_default_concurrency_returns_sensible_default(self):
-        """Test that default_concurrency returns 8 (Inspect AI's default max_sandboxes)."""
-        assert SABERSandboxEnvironment.default_concurrency() == 8
+        """Test that default_concurrency returns None (defers to Inspect AI's --max-samples)."""
+        assert SABERSandboxEnvironment.default_concurrency() is None
 
     def test_config_files_returns_empty_list(self):
         """Test that config_files returns empty list."""

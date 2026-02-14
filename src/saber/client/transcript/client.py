@@ -1,26 +1,28 @@
-"""Transcript sync client orchestrator.
+"""Transcript push client orchestrator.
 
 This module provides the main TranscriptSyncClient class that orchestrates
-WebSocket-based transcript synchronization for any evaluation harness.
+WebSocket-based transcript push operations for any evaluation harness.
 
 The client composes:
 - WebSocketConnectionManager for connection lifecycle
 - WebSocketEventProcessor for event handling
-- GenericTranscriptSyncOperations for sync operations
+- GenericTranscriptSyncOperations for push operations
 
 Logging category: AGENT.
 """
 
 import asyncio
-from typing import Any, ClassVar, Generic, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from websockets import ClientConnection
 
 from ...logging_config import LogCategory, get_saber_logger
 from ...models.rest.websocket_config import WebSocketConfig
 from .connection import WebSocketConnectionManager
 from .event_processor import WebSocketEventProcessor
-from .models import SyncResult
 from .protocols import MessageSerializer
-from .sync_operations import GenericTranscriptSyncOperations
+from .sync_operations import GenericTranscriptSyncOperations, ReconnectCallback
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -29,22 +31,21 @@ M = TypeVar("M")
 
 
 class TranscriptSyncClient(Generic[M]):
-    """Generic, harness-agnostic transcript synchronization client.
+    """Generic, harness-agnostic transcript push client.
 
-    This client provides bidirectional transcript sync over WebSocket,
+    This client provides transcript push over WebSocket,
     supporting any evaluation harness via the MessageSerializer protocol.
 
     Provides:
     - Persistent WebSocket connection (established on first use or via context manager)
-    - Instant notifications (<100ms when red team injects)
-    - Differential sync (only pull deltas)
-    - Local version tracking (checksum validation)
+    - Instant state event notifications (<100ms when server state changes)
+    - Push messages to server with retry logic
     - Automatic reconnection on connection loss
 
     Components:
     - _connection: WebSocketConnectionManager for connection lifecycle
     - _events: WebSocketEventProcessor for event handling
-    - _sync: GenericTranscriptSyncOperations for push/pull operations
+    - _sync: GenericTranscriptSyncOperations for push operations
 
     Type Parameter:
         M: The harness-specific message type (e.g., ChatMessage for inspect_ai)
@@ -63,45 +64,8 @@ class TranscriptSyncClient(Generic[M]):
             rest_url="http://localhost:8000",
             serializer=MyMessageSerializer(),
         ) as client:
-            messages = await client.sync_transcript()
             await client.push_message(response_msg)
     """
-
-    # Class-level registry to track clients by episode_id for cleanup
-    _clients_by_episode: ClassVar[dict[str, "TranscriptSyncClient[Any]"]] = {}
-
-    @classmethod
-    def get_client_for_episode(cls, episode_id: str) -> Optional["TranscriptSyncClient[Any]"]:
-        """Get the client instance for a given episode_id.
-
-        Used by sandbox cleanup to find and cleanup the client.
-
-        Args:
-            episode_id: The episode ID to look up
-
-        Returns:
-            The client instance if found, None otherwise
-        """
-        return cls._clients_by_episode.get(episode_id)
-
-    @classmethod
-    def _register_client(cls, episode_id: str, client: "TranscriptSyncClient[Any]") -> None:
-        """Register a client instance for cleanup lookup."""
-        cls._clients_by_episode[episode_id] = client
-        logger.debug(
-            "Registered transcript sync client for episode",
-            extra={"episode_id": episode_id, "total_registered": len(cls._clients_by_episode)},
-        )
-
-    @classmethod
-    def _unregister_client(cls, episode_id: str) -> None:
-        """Unregister a client instance after cleanup."""
-        if episode_id in cls._clients_by_episode:
-            del cls._clients_by_episode[episode_id]
-            logger.debug(
-                "Unregistered transcript sync client for episode",
-                extra={"episode_id": episode_id, "total_registered": len(cls._clients_by_episode)},
-            )
 
     def __init__(
         self,
@@ -122,7 +86,6 @@ class TranscriptSyncClient(Generic[M]):
         self._rest_url = rest_url
         self._serializer = serializer
         self._ws_config = ws_config or WebSocketConfig()
-        self._first_call = True
 
         # Initialize component modules
         self._connection = WebSocketConnectionManager(
@@ -142,12 +105,6 @@ class TranscriptSyncClient(Generic[M]):
             serializer=serializer,
             ws_config=self._ws_config,
         )
-
-        # Flag to skip waiting after wait_and_sync_transcript() already synced
-        self._skip_next_wait = False
-
-        # Register this client for cleanup lookup
-        self._register_client(episode_id, self)
 
         logger.debug(
             "Created TranscriptSyncClient",
@@ -188,16 +145,6 @@ class TranscriptSyncClient(Generic[M]):
         return self._ws_config.push.enabled
 
     @property
-    def local_version(self) -> int:
-        """Get current local transcript version."""
-        return self._sync.local_version
-
-    @property
-    def local_checksum(self) -> str:
-        """Get current local transcript checksum."""
-        return self._sync.local_checksum
-
-    @property
     def local_messages(self) -> list[M]:
         """Get current local transcript messages."""
         return self._sync.local_messages
@@ -215,11 +162,6 @@ class TranscriptSyncClient(Generic[M]):
     def websocket(self) -> Any:
         """Get WebSocket (for advanced usage/testing)."""
         return self._connection.websocket
-
-    @property
-    def event_queue(self) -> asyncio.Queue:
-        """Get event queue (for advanced usage/testing)."""
-        return self._events.event_queue
 
     # =========================================================================
     # Context manager
@@ -248,10 +190,10 @@ class TranscriptSyncClient(Generic[M]):
 
         await self._connection.ensure_connected(on_connected_callback=_start_listener)
 
-    async def _get_reconnect_callback(self) -> Any:
+    async def _get_reconnect_callback(self) -> ReconnectCallback:
         """Get a callback for reconnection."""
 
-        async def reconnect() -> Any:
+        async def reconnect() -> "ClientConnection":
             return await self._connection.force_reconnect(
                 on_connected_callback=lambda ws: self._events.start_listener(ws)
             )
@@ -278,10 +220,10 @@ class TranscriptSyncClient(Generic[M]):
         """
         if not self._ws_config.push.enabled:
             logger.debug(
-                "Push disabled, updating local state only",
+                "Push disabled, tracking locally only",
                 extra={"episode_id": self._episode_id},
             )
-            self._sync.update_local_state_without_push(message)
+            self._sync._local_messages.append(message)
             return True
 
         await self.ensure_connected()
@@ -325,7 +267,7 @@ class TranscriptSyncClient(Generic[M]):
         )
 
     # =========================================================================
-    # Sync operations
+    # State event operations
     # =========================================================================
 
     async def wait_for_state_event(self) -> bool:
@@ -344,145 +286,6 @@ class TranscriptSyncClient(Generic[M]):
         """
         return await self._events.wait_for_state_event_with_retry()
 
-    async def sync_transcript(self) -> SyncResult[M]:
-        """Request and apply transcript sync from server.
-
-        Returns:
-            SyncResult with updated messages, version, and sync mode
-        """
-        await self.ensure_connected()
-        websocket = self._connection.websocket
-        if not websocket:
-            raise RuntimeError("WebSocket not connected")
-
-        sync_data = await self._sync.request_sync(websocket)
-        if not sync_data:
-            raise RuntimeError("No sync response received")
-
-        messages = self._sync.apply_sync_response(sync_data)
-
-        return SyncResult(
-            messages=messages,
-            version=self._sync.local_version,
-            checksum=self._sync.local_checksum,
-            sync_mode=sync_data.sync_mode.value,
-            modified=sync_data.modified or False,
-        )
-
-    async def wait_and_sync_transcript(self) -> list[M]:
-        """Wait for server transcript modification and sync, returning updated messages.
-
-        This method is used to get server-injected messages (e.g., continue prompts,
-        red team injections) without the client adding its own continue messages.
-
-        Returns:
-            List of messages with server-provided transcript
-
-        Raises:
-            RuntimeError: If sync fails or times out
-        """
-        logger.debug(
-            "wait_and_sync_transcript called",
-            extra={
-                "episode_id": self._episode_id,
-                "local_version": self._sync.local_version,
-            },
-        )
-
-        # Ensure WebSocket is connected
-        await self.ensure_connected()
-
-        # Wait for modification event
-        event_received = await self._events.wait_for_state_event_with_retry()
-
-        if not event_received:
-            logger.warning(
-                "No modification event received, returning current messages",
-                extra={
-                    "episode_id": self._episode_id,
-                    "local_message_count": len(self._sync.local_messages),
-                },
-            )
-            return self._sync.local_messages.copy()
-
-        # Request sync
-        websocket = self._connection.websocket
-        if not websocket:
-            raise RuntimeError("WebSocket not connected")
-
-        sync_data = await self._sync.request_sync(websocket)
-
-        if sync_data:
-            self._sync.apply_sync_response(sync_data)
-            # Signal to skip waiting in the next sync call
-            self._skip_next_wait = True
-        else:
-            logger.warning(
-                "No sync_data received",
-                extra={"episode_id": self._episode_id},
-            )
-
-        return self._sync.local_messages.copy()
-
-    async def wait_for_injection_and_sync(self) -> list[M]:
-        """Wait for red team injection, then sync transcript.
-
-        This method waits for red team to inject a user message. It specifically
-        waits for is_waiting_on_assistant event which indicates a new user message
-        was added.
-
-        Waits indefinitely - the evaluation's task timeout or red team submission
-        will terminate the session if needed.
-
-        Returns:
-            List of messages with server-provided transcript after injection
-        """
-        logger.debug(
-            "wait_for_injection_and_sync called",
-            extra={"episode_id": self._episode_id},
-        )
-
-        # Ensure WebSocket is connected
-        await self.ensure_connected()
-
-        # Wait for injection event (is_waiting_on_assistant) - no timeout
-        await self._events.wait_for_injection_event()
-
-        # Injection received - sync transcript to get the new user message
-        websocket = self._connection.websocket
-        if not websocket:
-            raise RuntimeError("WebSocket not connected")
-
-        sync_data = await self._sync.request_sync(websocket)
-
-        if sync_data:
-            self._sync.apply_sync_response(sync_data)
-            # Signal to skip waiting in the next sync call
-            self._skip_next_wait = True
-
-        logger.debug(
-            "Injection received and synced",
-            extra={
-                "episode_id": self._episode_id,
-                "message_count": len(self._sync.local_messages),
-            },
-        )
-        return self._sync.local_messages.copy()
-
-    def should_skip_next_wait(self) -> bool:
-        """Check if the next wait should be skipped (because we just synced).
-
-        Used by harness wrappers to avoid duplicate waiting.
-
-        Returns:
-            True if next wait should be skipped
-        """
-        return self._skip_next_wait
-
-    def clear_skip_next_wait(self) -> None:
-        """Clear the skip_next_wait flag after it's been consumed."""
-        self._skip_next_wait = False
-
     # =========================================================================
     # Cleanup
     # =========================================================================
@@ -495,51 +298,39 @@ class TranscriptSyncClient(Generic[M]):
         )
 
         # Signal shutdown to unblock any waiting operations (e.g., wait_for_injection_event)
-        logger.info(
+        logger.debug(
             "[CLEANUP] Signaling shutdown to event processor",
             extra={"episode_id": self._episode_id},
         )
         self._events.signal_shutdown()
 
         # Cancel listener task
-        if self._events._listener_task:
-            logger.info(
-                "[CLEANUP] Cancelling listener task",
-                extra={"episode_id": self._episode_id},
-            )
-            self._events._listener_task.cancel()
-            try:
-                await self._events._listener_task
-            except asyncio.CancelledError:
-                pass
-            logger.info(
-                "[CLEANUP] Listener task cancelled",
-                extra={"episode_id": self._episode_id},
-            )
+        logger.debug(
+            "[CLEANUP] Cancelling listener task",
+            extra={"episode_id": self._episode_id},
+        )
+        await self._events.cancel_listener()
 
         # Close connection
-        logger.info(
+        logger.debug(
             "[CLEANUP] Closing WebSocket connection",
             extra={"episode_id": self._episode_id},
         )
         await self._connection.close()
 
         # Drain event queue
-        logger.info(
+        logger.debug(
             "[CLEANUP] Draining event queue",
             extra={"episode_id": self._episode_id},
         )
         self._events.drain_queue()
 
         # Clear sync state
-        logger.info(
+        logger.debug(
             "[CLEANUP] Clearing sync state",
             extra={"episode_id": self._episode_id},
         )
         self._sync.clear_state()
-
-        # Unregister from class-level registry
-        self._unregister_client(self._episode_id)
 
         logger.info(
             "[CLEANUP] cleanup() COMPLETE",

@@ -8,7 +8,7 @@ raw dictionaries with proper Pydantic models.
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, root_validator, validator
 
@@ -390,7 +390,7 @@ class SABERConfig:
     agents: list[AgentAssignment] = field(default_factory=list)
 
     # Role-based configuration for orchestrated tasks
-    role_config: Optional["RoleBasedConfig"] = field(default=None)
+    role_config: "RoleBasedConfig | None" = field(default=None)
 
     # Domain configuration (optional - for logging organization)
     domain: str | None = field(default=None)

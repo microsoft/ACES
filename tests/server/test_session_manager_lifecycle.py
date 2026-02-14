@@ -1,7 +1,7 @@
 """Tests for session shutdown, cleanup, and lifecycle management."""
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -120,7 +120,7 @@ class TestInactiveSessionCleanup:
     async def test_cleanup_skips_complete_orphaned_episodes(self, session_manager):
         """Test cleanup skips already completed orphaned episodes."""
         session = await session_manager.create_session("client1")
-        old_time = datetime.utcnow() - timedelta(minutes=session_manager.session_timeout_minutes + 1)
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=session_manager.session_timeout_minutes + 1)
         session.last_activity = old_time
 
         session.add_active_episode("ep1")

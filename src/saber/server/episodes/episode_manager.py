@@ -5,8 +5,9 @@ Logging Category: EPISODE
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from saber.logging_config import LogCategory, get_saber_logger
 
@@ -17,7 +18,10 @@ from ..time_source import TimeSource, UTCTimeSource
 from .connection_manager import ConnectionManager
 from .constants import EpisodeTerminationReason
 from .exceptions import EpisodeNotFoundException
-from .transcript_coordinator import TranscriptCoordinator
+from .transcript.coordinator import TranscriptCoordinator
+
+if TYPE_CHECKING:
+    from ..db.event_repository import EpisodeEventRepository
 
 logger = get_saber_logger(LogCategory.EPISODE, __name__)
 
@@ -39,23 +43,79 @@ class EpisodeManager:
     Supports multiple concurrent episodes per session.
     """
 
-    def __init__(self, time_source: TimeSource | None = None) -> None:
+    def __init__(
+        self,
+        time_source: TimeSource | None = None,
+        event_repository: "EpisodeEventRepository | None" = None,
+    ) -> None:
         """Initialize the EpisodeManager.
 
         Args:
             time_source: Time source for getting current time (defaults to UTCTimeSource)
+            event_repository: Optional EpisodeEventRepository for DB-backed transcript storage
         """
         self.episodes: dict[str, Episode] = {}  # episode_id -> Episode
         self.session_episodes: dict[str, list[str]] = {}  # session_id -> [episode_ids]
         self.completed_episodes: dict[str, Episode] = {}  # episode_id -> completed Episode (for history)
         self.episode_configs: dict[str, dict[str, Any]] = {}  # episode_id -> episode config from task
         self._time_source = time_source or UTCTimeSource()
+        # Lifecycle callbacks (must be initialized before TranscriptCoordinator)
+        self._on_episode_created_callbacks: list[Callable[[str], Awaitable[None]]] = []
+        self._on_episode_ended_callbacks: list[Callable[[str], Awaitable[None]]] = []
         self.connection_manager = ConnectionManager(
             episode_manager=self, time_source=self._time_source
         )  # WebSocket connection manager with cleanup support
         self.transcript_coordinator = TranscriptCoordinator(
-            self, self.connection_manager, time_source=self._time_source
+            self,
+            self.connection_manager,
+            event_repository=event_repository,
+            time_source=self._time_source,
         )  # Transcript coordination
+
+    def register_on_episode_created(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        """Register a callback for episode creation events.
+
+        Args:
+            callback: Async callable invoked with episode_id after creation
+        """
+        self._on_episode_created_callbacks.append(callback)
+
+    def register_on_episode_ended(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        """Register a callback for episode termination events.
+
+        Args:
+            callback: Async callable invoked with episode_id before termination
+        """
+        self._on_episode_ended_callbacks.append(callback)
+
+    def wire_event_repository(self, event_repository: "EpisodeEventRepository") -> None:
+        """Wire an EpisodeEventRepository into the TranscriptCoordinator.
+
+        Used for late-binding the DB repository after async connection
+        is established (e.g., during server startup).
+
+        Args:
+            event_repository: The connected EpisodeEventRepository to use
+        """
+        self.transcript_coordinator.set_repository(event_repository)
+
+    async def _safe_callback(
+        self,
+        callback: Callable[[str], Awaitable[None]],
+        episode_id: str,
+        error_msg: str,
+    ) -> None:
+        """Execute a lifecycle callback with error logging.
+
+        Args:
+            callback: Async callback to invoke
+            episode_id: Episode ID to pass to the callback
+            error_msg: Log message on failure
+        """
+        try:
+            await callback(episode_id)
+        except Exception:
+            logger.exception(error_msg, extra={"episode_id": episode_id})
 
     def get_episode_by_id(self, episode_id: str) -> Episode | None:
         """Get episode by episode ID from active or completed episodes."""
@@ -105,13 +165,9 @@ class EpisodeManager:
     def _clear_episode_heavy_data(self, episode: Episode) -> None:
         """Clear heavy data from episode to free memory.
 
-        Removes transcript and step context snapshots while preserving
+        Removes step context snapshots while preserving
         essential episode metadata needed for lookups and evaluation.
         """
-        # Clear transcript from context
-        episode.context.pop(MetadataKeys.CLIENT_TRANSCRIPT, None)
-        episode.context.pop(MetadataKeys.TRANSCRIPT_CHECKSUM, None)
-
         # Clear step context snapshots (they can hold transcript copies)
         for step in episode.steps:
             step.context_snapshot.clear()
@@ -559,7 +615,7 @@ class EpisodeManager:
                 "task_id": getattr(task, "task_id", "unknown"),
                 "transcript_initialized": should_init,
                 "transcript_version": context.get(MetadataKeys.TRANSCRIPT_VERSION) if should_init else None,
-                "transcript_length": len(context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])) if should_init else 0,
+                "transcript_length": len(context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])) if should_init else 0,
             },
         )
 
@@ -603,7 +659,6 @@ class EpisodeManager:
         """
         from ...models.benchmark_task import SingleEpisodeTask, SubTaskDefinition
         from ...models.rest.websocket_messages import TranscriptOperation
-        from ...models.transcript import compute_checksum
 
         if not isinstance(task, (SingleEpisodeTask, SubTaskDefinition)):
             return
@@ -626,16 +681,11 @@ class EpisodeManager:
         ]
 
         # Update context with transcript metadata
-        # Version must equal the message count to maintain the invariant that
-        # all_messages[:version] == messages_at_that_version, which is used by
-        # the transcript sync checksum validation (see transcript_coordinator._sync_owner).
-        context[MetadataKeys.CLIENT_TRANSCRIPT] = initial_transcript
-        # Store the initial transcript separately for restart operations
-        # This preserves the original system->user messages for red team restart
+        # Version equals the message count — maintains the invariant that
+        # sequence number N means N messages have been stored.
         context[MetadataKeys.INITIAL_TRANSCRIPT] = list(initial_transcript)  # Deep copy
         context[MetadataKeys.TRANSCRIPT_VERSION] = len(initial_transcript)
         context[MetadataKeys.TRANSCRIPT_LAST_OPERATION] = TranscriptOperation.INIT.value
-        context[MetadataKeys.TRANSCRIPT_CHECKSUM] = compute_checksum(initial_transcript)
 
         # Store continue_prompt for AutoContinueManager to use
         # This allows server-side continue message injection to use the task's
@@ -682,7 +732,7 @@ class EpisodeManager:
                     "event": "transcript_initialized",
                     "session_id": session_id,
                     "task_id": task_id,
-                    "message_count": len(context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])),
+                    "message_count": len(context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])),
                 },
             )
 
@@ -704,6 +754,19 @@ class EpisodeManager:
 
         # Add episode to session's episode tracking
         self.add_episode_to_session(session_id, episode)
+
+        # Fire lifecycle callbacks (fire-and-forget since start_episode is sync;
+        # _safe_callback already handles errors via try/except with logging)
+        for callback in self._on_episode_created_callbacks:
+            try:
+                asyncio.get_event_loop().create_task(
+                    self._safe_callback(callback, episode.episode_id, "Episode created callback failed")
+                )
+            except RuntimeError:
+                logger.warning(
+                    "No event loop for episode created callback",
+                    extra={"episode_id": episode.episode_id},
+                )
 
         logger.info(
             "Episode created",
@@ -892,6 +955,10 @@ class EpisodeManager:
         if episode_id in self.episode_configs:
             del self.episode_configs[episode_id]
 
+        # Fire lifecycle callbacks before cleanup
+        for callback in self._on_episode_ended_callbacks:
+            await self._safe_callback(callback, episode_id, "Episode ended callback failed")
+
         # Clean up WebSocket connections and transcript coordination
         await self.transcript_coordinator.cleanup_episode(episode_id)
 
@@ -937,12 +1004,8 @@ class EpisodeManager:
         response_dict = asdict(response)
 
         # Create context snapshot excluding heavy data (transcript)
-        # We preserve version/checksum for tracking but not the actual messages
-        context_snapshot = {
-            k: v
-            for k, v in episode.context.items()
-            if k not in (MetadataKeys.CLIENT_TRANSCRIPT, MetadataKeys.TRANSCRIPT_CHECKSUM)
-        }
+        # We preserve version for tracking but not the actual messages
+        context_snapshot = dict(episode.context)
 
         # Create step without adding it to episode yet
         step = Step(

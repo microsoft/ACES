@@ -10,7 +10,6 @@ Tests cover:
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,14 +20,10 @@ from saber.models.rest.websocket_messages import (
     PushAckMessage,
     StateEventData,
     StateEventMessage,
-    SyncMode,
-    SyncResponseData,
-    SyncResponseMessage,
     TranscriptErrorData,
     TranscriptErrorMessage,
     TranscriptErrorType,
     TranscriptOperation,
-    TranscriptVersion,
     WebSocketMessageType,
 )
 
@@ -61,14 +56,20 @@ def event_processor_short_timeout():
 class TestEventQueueAccess:
     """Tests for event queue access."""
 
-    def test_event_queue_exists(self, event_processor):
-        """Test that event queue is created."""
-        assert event_processor.event_queue is not None
-        assert isinstance(event_processor.event_queue, asyncio.Queue)
+    def test_ack_queue_exists(self, event_processor):
+        """Test that ack queue is created."""
+        assert event_processor.ack_queue is not None
+        assert isinstance(event_processor.ack_queue, asyncio.Queue)
 
-    def test_event_queue_is_empty_initially(self, event_processor):
-        """Test that event queue is empty on creation."""
-        assert event_processor.event_queue.empty()
+    def test_state_queue_exists(self, event_processor):
+        """Test that state queue is created."""
+        assert event_processor.state_queue is not None
+        assert isinstance(event_processor.state_queue, asyncio.Queue)
+
+    def test_queues_are_empty_initially(self, event_processor):
+        """Test that both queues are empty on creation."""
+        assert event_processor.ack_queue.empty()
+        assert event_processor.state_queue.empty()
 
 
 class TestWaitForStateEvent:
@@ -79,8 +80,8 @@ class TestWaitForStateEvent:
         """Test that state events are accepted."""
         processor = event_processor_short_timeout
 
-        # Put a state event in the queue
-        await processor.event_queue.put(StateEventMessage(
+        # Put a state event in the state queue
+        await processor.state_queue.put(StateEventMessage(
             type="is_waiting_on_assistant",
             data=StateEventData(
                 version=1,
@@ -101,7 +102,7 @@ class TestWaitForStateEvent:
         """Test that transcript_modified events are accepted."""
         processor = event_processor_short_timeout
 
-        await processor.event_queue.put(StateEventMessage(
+        await processor.state_queue.put(StateEventMessage(
             type="transcript_modified",
             data=StateEventData(
                 version=2,
@@ -110,35 +111,6 @@ class TestWaitForStateEvent:
                 state="WAITING_FOR_USER"
             ),
             id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        result = await processor.wait_for_state_event()
-
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_wait_for_state_event_discards_push_ack(self, event_processor_short_timeout):
-        """Test that push_ack events are discarded."""
-        processor = event_processor_short_timeout
-
-        # Put push_ack (should be discarded) then state event
-        await processor.event_queue.put(PushAckMessage(
-            type="push_ack",
-            data=PushAckData(version=1, checksum="abc"),
-            id="msg-1",
-            timestamp=_ts(),
-        ))
-
-        await processor.event_queue.put(StateEventMessage(
-            type="is_waiting_on_assistant",
-            data=StateEventData(
-                version=1,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="WAITING_FOR_ASSISTANT"
-            ),
-            id="msg-2",
             timestamp=_ts(),
         ))
 
@@ -165,9 +137,9 @@ class TestWaitForMessageType:
         """Test waiting for specific message type."""
         processor = event_processor_short_timeout
 
-        await processor.event_queue.put(PushAckMessage(
+        await processor.ack_queue.put(PushAckMessage(
             type="push_ack",
-            data=PushAckData(version=1, checksum="abc"),
+            data=PushAckData(sequence=1),
             id="msg-1",
             timestamp=_ts(),
         ))
@@ -182,33 +154,19 @@ class TestWaitForMessageType:
 
     @pytest.mark.asyncio
     async def test_wait_for_message_type_requeues_state_events(self, event_processor_short_timeout):
-        """Test that state events are re-queued when waiting for other types."""
+        """Test that non-matching messages are discarded when waiting for specific type."""
         processor = event_processor_short_timeout
-
-        # Put state event then push_ack
-        state_event = StateEventMessage(
-            type="is_waiting_on_assistant",
-            data=StateEventData(
-                version=1,
-                operation=TranscriptOperation.APPEND,
-                modification_count=0,
-                state="WAITING_FOR_ASSISTANT"
-            ),
-            id="msg-1",
-            timestamp=_ts(),
-        )
 
         push_ack = PushAckMessage(
             type="push_ack",
-            data=PushAckData(version=1, checksum="abc"),
+            data=PushAckData(sequence=1),
             id="msg-2",
             timestamp=_ts(),
         )
 
-        await processor.event_queue.put(state_event)
-        await processor.event_queue.put(push_ack)
+        await processor.ack_queue.put(push_ack)
 
-        # Wait for push_ack - state event should be re-queued
+        # Wait for push_ack from the ack queue
         result = await processor.wait_for_message_type(
             expected_type=WebSocketMessageType.PUSH_ACK,
             timeout=1.0,
@@ -216,11 +174,6 @@ class TestWaitForMessageType:
 
         assert result is not None
         assert result.type == "push_ack"
-
-        # State event should still be in queue
-        assert not processor.event_queue.empty()
-        requeued = await processor.event_queue.get()
-        assert requeued.type == "is_waiting_on_assistant"
 
     @pytest.mark.asyncio
     async def test_wait_for_message_type_timeout(self, event_processor_short_timeout):
@@ -244,7 +197,7 @@ class TestCheckForStuckState:
         processor = event_processor
 
         # Put a stuck_state error event
-        await processor.event_queue.put(TranscriptErrorMessage(
+        await processor.state_queue.put(TranscriptErrorMessage(
             type="transcript_error",
             data=TranscriptErrorData(
                 error=TranscriptErrorType.STUCK_STATE,
@@ -262,7 +215,7 @@ class TestCheckForStuckState:
         assert result is True
 
         # Event should be re-queued
-        assert not processor.event_queue.empty()
+        assert not processor.state_queue.empty()
 
     @pytest.mark.asyncio
     async def test_check_for_stuck_state_no_stuck(self, event_processor):
@@ -270,7 +223,7 @@ class TestCheckForStuckState:
         processor = event_processor
 
         # Put a normal state event
-        await processor.event_queue.put(StateEventMessage(
+        await processor.state_queue.put(StateEventMessage(
             type="is_waiting_on_assistant",
             data=StateEventData(
                 version=1,
@@ -287,7 +240,7 @@ class TestCheckForStuckState:
         assert result is False
 
         # Event should be re-queued
-        assert not processor.event_queue.empty()
+        assert not processor.state_queue.empty()
 
     @pytest.mark.asyncio
     async def test_check_for_stuck_state_empty_queue(self, event_processor):
@@ -304,12 +257,12 @@ class TestDrainQueue:
 
     @pytest.mark.asyncio
     async def test_drain_queue_empties_queue(self, event_processor):
-        """Test drain_queue removes all events."""
+        """Test drain_queue removes all events from both queues."""
         processor = event_processor
 
-        # Add some events
-        for i in range(5):
-            await processor.event_queue.put(StateEventMessage(
+        # Add state events
+        for i in range(3):
+            await processor.state_queue.put(StateEventMessage(
                 type="is_waiting_on_assistant",
                 data=StateEventData(
                     version=i,
@@ -317,15 +270,26 @@ class TestDrainQueue:
                     modification_count=0,
                     state="WAITING_FOR_ASSISTANT"
                 ),
-                id=f"msg-{i}",
+                id=f"state-{i}",
                 timestamp=_ts(),
             ))
 
-        assert not processor.event_queue.empty()
+        # Add ack events
+        for i in range(2):
+            await processor.ack_queue.put(PushAckMessage(
+                type="push_ack",
+                data=PushAckData(sequence=i),
+                id=f"ack-{i}",
+                timestamp=_ts(),
+            ))
+
+        assert not processor.state_queue.empty()
+        assert not processor.ack_queue.empty()
 
         processor.drain_queue()
 
-        assert processor.event_queue.empty()
+        assert processor.state_queue.empty()
+        assert processor.ack_queue.empty()
 
     def test_drain_queue_safe_on_empty(self, event_processor):
         """Test drain_queue is safe on empty queue."""
@@ -334,7 +298,8 @@ class TestDrainQueue:
         # Should not raise
         processor.drain_queue()
 
-        assert processor.event_queue.empty()
+        assert processor.state_queue.empty()
+        assert processor.ack_queue.empty()
 
 
 class TestWaitForStateEventWithRetry:
@@ -348,7 +313,7 @@ class TestWaitForStateEventWithRetry:
         # Schedule a state event to arrive after first timeout
         async def delayed_event():
             await asyncio.sleep(0.15)  # After first timeout (0.1s)
-            await processor.event_queue.put(StateEventMessage(
+            await processor.state_queue.put(StateEventMessage(
                 type="is_waiting_on_assistant",
                 data=StateEventData(
                     version=1,

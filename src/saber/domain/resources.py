@@ -78,6 +78,33 @@ def get_env_example_content() -> str:
     )
 
 
+def resolve_redis_compose_path() -> Path:
+    """Resolve the bundled Redis compose file path.
+
+    Unlike resolve_schema_file() which needs as_file() context manager for
+    potential zip-embedded resources, this returns the Path directly since
+    SABER is always installed as an on-disk package (wheel/sdist/editable).
+
+    Returns:
+        Path to redis-compose.yml on disk
+
+    Raises:
+        ResourceNotFoundError: If file cannot be found
+    """
+    try:
+        resource = files("saber.domain.package_resources").joinpath("redis-compose.yml")
+        resource_path = Path(str(resource))
+        if resource_path.exists():
+            return resource_path
+    except (ImportError, FileNotFoundError, AttributeError):
+        pass
+
+    raise ResourceNotFoundError(
+        "redis-compose.yml",
+        "Not found in package resources. Ensure SABER is properly installed.",
+    )
+
+
 def _find_development_schema(schema_name: str) -> Path | None:
     """Find schema file in development environment."""
     current_file = Path(__file__)

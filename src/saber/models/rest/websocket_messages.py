@@ -18,10 +18,6 @@ class WebSocketMessageType(str, Enum):
     # Connection lifecycle
     CONNECTED = "connected"
 
-    # Transcript synchronization
-    SYNC_REQUEST = "sync_request"
-    SYNC_RESPONSE = "sync_response"
-
     # Push operations
     PUSH_MESSAGE = "push_message"
     PUSH_ACK = "push_ack"
@@ -40,20 +36,12 @@ class WebSocketMessageType(str, Enum):
     PONG = "pong"
 
 
-class SyncMode(str, Enum):
-    """Transcript sync mode."""
-
-    FULL = "full"  # Full transcript replacement
-    DELTA = "delta"  # Incremental delta
-    NO_CHANGE = "no_change"  # No changes since requested version
-
-
 class TranscriptErrorType(str, Enum):
     """Transcript error types."""
 
     STUCK_STATE = "stuck_state"
-    CHECKSUM_MISMATCH = "checksum_mismatch"
     INVALID_TRANSITION = "invalid_transition"
+    PUSH_FAILED = "push_failed"
 
 
 class TranscriptOperation(str, Enum):
@@ -73,58 +61,22 @@ class TranscriptOperation(str, Enum):
 # Pydantic models for structured validation
 
 
-class TranscriptVersion(BaseModel):
-    """Transcript version with checksum."""
-
-    sequence: int = Field(description="Sequential version number", ge=0)
-    checksum: str = Field(description="SHA256 checksum of transcript")
-    message_count: int | None = Field(default=None, description="Total message count", ge=0)
-    last_operation: str | None = Field(default=None, description="Last operation")
-
-
-class SyncRequestData(BaseModel):
-    """Data payload for sync_request messages."""
-
-    since_version: int = Field(default=0, description="Last known version", ge=0)
-    client_checksum: str | None = Field(default=None, description="Client checksum for verification")
-
-    # Observer/cross-episode fields (for red team accessing blue team transcript)
-    target_episode_id: str | None = Field(default=None, description="Target episode for cross-episode sync")
-    hide_system_prompt: bool | None = Field(default=None, description="Hide system messages for security")
-    retrieval_mode: str | None = Field(default=None, description="Retrieval mode: full, delta, tail")
-    tail_count: int | None = Field(default=None, description="Number of messages for tail mode", ge=1)
-
-
 class PushMessageRequestData(BaseModel):
     """Data payload for push_message messages (normal and injection mode)."""
 
     message: dict[str, Any] = Field(description="Message to push")
-    since_version: int = Field(default=0, ge=0)
-    client_checksum: str | None = Field(default=None)
+    since_sequence: int = Field(default=0, ge=0)
 
     # Injection fields (optional - red team only)
     target_episode_id: str | None = Field(default=None, description="Target episode for injection")
     strategy: str = Field(default="append", description="Operation strategy: append or restart")
 
 
-class SyncResponseData(BaseModel):
-    """Server sync response data."""
-
-    sync_mode: SyncMode = Field(description="Full or delta sync")
-    current_version: TranscriptVersion
-    modified: bool | None = Field(default=None, description="Whether transcript was modified")
-    full_transcript: list[dict[str, Any]] | None = Field(
-        default=None, description="Full transcript (when sync_mode=FULL)"
-    )
-    delta: list[dict[str, Any]] | None = Field(default=None, description="Delta messages (when sync_mode=DELTA)")
-
-
 class PushMessageData(BaseModel):
     """Client push message data (both normal and injection)."""
 
     message: dict[str, Any]
-    since_version: int = Field(ge=0)
-    client_checksum: str | None = Field(default=None)
+    since_sequence: int = Field(ge=0)
 
     # Injection fields (red team only)
     target_episode_id: str | None = Field(default=None, description="Target episode for injection")
@@ -134,8 +86,7 @@ class PushMessageData(BaseModel):
 class PushAckData(BaseModel):
     """Server push acknowledgment data."""
 
-    version: int = Field(description="New version after push", ge=0)
-    checksum: str = Field(description="New checksum after push")
+    sequence: int = Field(description="New sequence number after push", ge=0)
     modification_count: int | None = Field(default=None, description="Injection counter", ge=0)
     target_episode_id: str | None = Field(default=None, description="Target episode for injection")
 
@@ -193,15 +144,6 @@ class PongMessage(BaseModel):
     timestamp: str
 
 
-class SyncResponseMessage(BaseModel):
-    """WebSocket sync response."""
-
-    type: Literal["sync_response"] = "sync_response"
-    data: SyncResponseData
-    id: str
-    timestamp: str
-
-
 class PushAckMessage(BaseModel):
     """WebSocket push acknowledgment."""
 
@@ -231,7 +173,7 @@ class TranscriptErrorMessage(BaseModel):
 # Union type for all possible WebSocket messages sent by server
 # Uses discriminated union on the 'type' field for efficient parsing
 WebSocketServerMessage = Annotated[
-    ConnectedMessage | PongMessage | SyncResponseMessage | PushAckMessage | StateEventMessage | TranscriptErrorMessage,
+    ConnectedMessage | PongMessage | PushAckMessage | StateEventMessage | TranscriptErrorMessage,
     Field(discriminator="type"),
 ]
 
@@ -242,15 +184,11 @@ WebSocketServerMessageAdapter: TypeAdapter[WebSocketServerMessage] = TypeAdapter
 __all__ = [
     # Enums
     "WebSocketMessageType",
-    "SyncMode",
     "TranscriptErrorType",
     "TranscriptOperation",
     # Data models (request dataclasses)
-    "SyncRequestData",
     "PushMessageRequestData",
     # Data models (response Pydantic)
-    "TranscriptVersion",
-    "SyncResponseData",
     "PushMessageData",
     "PushAckData",
     "StateEventData",
@@ -260,7 +198,6 @@ __all__ = [
     # Message wrappers
     "ConnectedMessage",
     "PongMessage",
-    "SyncResponseMessage",
     "PushAckMessage",
     "StateEventMessage",
     "TranscriptErrorMessage",

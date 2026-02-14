@@ -20,7 +20,7 @@ Usage:
 Logging category: AGENT.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from inspect_ai.model import ChatMessage
 from inspect_ai.solver import TaskState
@@ -29,7 +29,7 @@ from ...logging_config import LogCategory, get_saber_logger
 from ..constants import InspectStoreKeys
 
 if TYPE_CHECKING:
-    from .model_wrapper import WebSocketTranscriptSyncingModelWrapper
+    pass
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
 
@@ -72,7 +72,7 @@ class AgentTranscriptSync:
             state: TaskState containing the model wrapper in store
         """
         self._state = state
-        self._wrapper: WebSocketTranscriptSyncingModelWrapper | None = None
+        self._wrapper: Any = None
         self._last_synced_count = 0
         self._enabled = False
 
@@ -110,7 +110,7 @@ class AgentTranscriptSync:
 
         try:
             # Ensure WebSocket connection is established
-            await self._wrapper._ensure_connected()
+            await self._wrapper._client.ensure_connected()
             self._enabled = True
             logger.info(
                 "Agent transcript sync initialized",
@@ -127,6 +127,9 @@ class AgentTranscriptSync:
     async def push_messages(self, messages: list[ChatMessage]) -> bool:
         """Push new messages to the SABER server.
 
+        Uses the wrapper's TranscriptSyncClient.push_message() which handles
+        connection management, retry logic, and reconnection internally.
+
         Args:
             messages: List of ChatMessage objects to push
 
@@ -139,19 +142,12 @@ class AgentTranscriptSync:
         if not messages:
             return True
 
-        websocket = self._wrapper._connection.websocket
-        if not websocket:
-            logger.warning("WebSocket not connected, cannot push messages")
-            return False
-
         success = True
         for msg in messages:
             try:
-                pushed = await self._wrapper._sync.push_message_with_retry(
-                    websocket=websocket,
-                    msg=msg,
+                pushed = await self._wrapper._client.push_message(
+                    message=msg,
                     context="agent_manual_push",
-                    reconnect_callback=await self._wrapper._get_reconnect_callback(),
                 )
                 if not pushed:
                     success = False
@@ -172,7 +168,7 @@ class AgentTranscriptSync:
                 extra={
                     "episode_id": self._wrapper._episode_id,
                     "message_count": len(messages),
-                    "new_version": self._wrapper._sync.local_version,
+                    "local_message_count": len(self._wrapper._client.local_messages),
                 },
             )
 

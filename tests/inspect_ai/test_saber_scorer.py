@@ -9,16 +9,13 @@ Tests the client-side evaluation logic including:
 - Subtask scoring (static, tool_call, and LLM)
 """
 
-import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from inspect_ai.model import ChatMessage, ChatMessageAssistant, ChatMessageUser, ModelOutput
-from inspect_ai.scorer import Score, SampleScore
+from inspect_ai.model import ModelOutput
+from inspect_ai.scorer import SampleScore, Score
 from inspect_ai.solver import TaskState
-from inspect_ai.util import Store
 from jinja2 import TemplateError
 
 from saber.inspect_ai.core.saber_scorer import (
@@ -44,12 +41,10 @@ from saber.models.rest.evaluation import (
     EpisodeStepData,
     EpisodeStepsResponse,
     EpisodeSubmissionResponse,
-    StepEvaluation,
     SubmissionEvaluationCriteriaResponse,
     SubtaskEvaluationCriteriaResponse,
     TaskEvaluationContext,
 )
-
 
 # ============================================================================
 # Test Fixtures
@@ -348,7 +343,7 @@ class TestSubmissionScoreMetric:
             )
         ]
         result = metric_fn(sample_scores)
-        assert result == 0.8
+        assert result == {"submission_score": 0.8}
 
     def test_submission_score_multiple_samples(self):
         """Test submission_score averages across samples."""
@@ -366,22 +361,22 @@ class TestSubmissionScoreMetric:
             ),
         ]
         result = metric_fn(sample_scores)
-        assert result == 0.75
+        assert result == {"submission_score": 0.75}
 
     def test_submission_score_missing_metadata(self):
-        """Test submission_score with missing metadata defaults to 0.0."""
+        """Test submission_score with missing metadata returns empty dict."""
         metric_fn = submission_score()
         sample_scores = [
             SampleScore(sample_id="1", score=Score(value=1.0, answer="", metadata={}), sample_metadata={})
         ]
         result = metric_fn(sample_scores)
-        assert result == 0.0
+        assert result == {}
 
     def test_submission_score_empty_list(self):
-        """Test submission_score returns 0.0 for empty list."""
+        """Test submission_score returns empty dict for empty list."""
         metric_fn = submission_score()
         result = metric_fn([])
-        assert result == 0.0
+        assert result == {}
 
 
 class TestSubtaskScoreMetric:

@@ -107,7 +107,7 @@ class TestRegisterDependentSample:
         coordinator = OrchestrationCoordinator()
 
         result = await coordinator.register_dependent_sample(
-            "orch_999", "red", "sample_red", "blue", 2
+            "orch_999", "red", "sample_red", "blue", 2, timeout=0.5
         )
 
         assert result is False

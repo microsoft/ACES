@@ -52,18 +52,12 @@ class PullConfig:
 
     # Internal defaults (not configurable via YAML - these are implementation details)
     _event_timeout: float = WebSocketDefaults.PULL_EVENT_TIMEOUT_SECONDS
-    _sync_timeout: float = WebSocketDefaults.PULL_SYNC_TIMEOUT_SECONDS
     _event_queue_max_size: int = WebSocketDefaults.PULL_EVENT_QUEUE_MAX_SIZE
 
     @property
     def event_timeout(self) -> float:
         """Timeout waiting for transcript modification events (seconds)."""
         return self._event_timeout
-
-    @property
-    def sync_timeout(self) -> float:
-        """Timeout for sync_request/sync_response round-trip (seconds)."""
-        return self._sync_timeout
 
     @property
     def event_queue_max_size(self) -> int:
@@ -73,11 +67,11 @@ class PullConfig:
 
 @dataclass
 class WebSocketConfig:
-    """Configuration for WebSocket connections and bidirectional coordination.
+    """Configuration for WebSocket connections and push-only coordination.
 
     Centralizes all WebSocket-related configuration to enable per-domain
     tuning and testing without code changes. Separates push (client→server)
-    and pull (server→client) operations for independent control.
+    and event (server→client) operations for independent control.
 
     Attributes:
         connection_timeout: Timeout for initial WebSocket connection (seconds)

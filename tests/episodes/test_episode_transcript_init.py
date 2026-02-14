@@ -6,14 +6,12 @@ system and user messages constructed from task prompts.
 Design Doc: SERVER_SIDE_TRANSCRIPT_INIT_DESIGN.md
 """
 
-import pytest
-from unittest.mock import MagicMock
 
-from saber.server.base import Episode, EpisodeState
-from saber.server.episodes.episode_manager import EpisodeManager
+import pytest
+
 from saber.models.benchmark_task import SingleEpisodeTask
 from saber.models.constants import MetadataKeys
-from saber.models.transcript import compute_checksum
+from saber.server.episodes.episode_manager import EpisodeManager
 
 
 class TestServerSideTranscriptInit:
@@ -45,7 +43,7 @@ class TestServerSideTranscriptInit:
         )
 
         # Assert - transcript should be initialized
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
+        transcript = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT)
         assert transcript is not None, "Transcript should be initialized"
         assert len(transcript) == 2, "Transcript should have system and user messages"
 
@@ -67,11 +65,6 @@ class TestServerSideTranscriptInit:
         # which is required by transcript sync checksum validation.
         assert episode.context.get(MetadataKeys.TRANSCRIPT_VERSION) == len(transcript)
         assert episode.context.get(MetadataKeys.TRANSCRIPT_LAST_OPERATION) == "init"
-
-        # Check checksum
-        expected_checksum = compute_checksum(transcript)
-        actual_checksum = episode.context.get(MetadataKeys.TRANSCRIPT_CHECKSUM)
-        assert actual_checksum == expected_checksum
 
     def test_start_episode_uses_delimiter_between_prompts(self):
         """System message should use --- delimiter between prompt sections."""
@@ -99,7 +92,7 @@ class TestServerSideTranscriptInit:
         )
 
         # Assert
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        transcript = episode.context[MetadataKeys.INITIAL_TRANSCRIPT]
         system_content = transcript[0]["content"]
 
         # Should have exactly 2 delimiter instances (between 3 parts)
@@ -122,7 +115,7 @@ class TestServerSideTranscriptInit:
         )
 
         # Assert - no transcript initialized
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
+        transcript = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT)
         assert transcript is None
 
     def test_start_episode_preserves_initial_context(self):
@@ -161,7 +154,7 @@ class TestServerSideTranscriptInit:
         assert episode.context["another_field"] == 42
 
         # And transcript added
-        assert MetadataKeys.CLIENT_TRANSCRIPT in episode.context
+        assert MetadataKeys.INITIAL_TRANSCRIPT in episode.context
 
     def test_start_episode_handles_empty_prompt_parts(self):
         """Should handle tasks with empty prompt components gracefully."""
@@ -189,7 +182,7 @@ class TestServerSideTranscriptInit:
         )
 
         # Assert - should still create transcript
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
+        transcript = episode.context[MetadataKeys.INITIAL_TRANSCRIPT]
         assert len(transcript) == 2
 
         # System message should only have non-empty parts
@@ -198,38 +191,6 @@ class TestServerSideTranscriptInit:
         # Empty parts should not create extra delimiters
         assert not system_content.startswith("---")
         assert not system_content.endswith("---")
-
-    def test_start_episode_checksum_matches_content(self):
-        """Checksum should match the actual transcript content."""
-        # Arrange
-        manager = EpisodeManager()
-
-        task = SingleEpisodeTask(
-            task_id="test_task",
-            domain="test_domain",
-            title="Test",
-            description="Description",
-            max_steps=5,
-            episode_attempts=1,
-            instruction_prompt="Instruction",
-            assistant_prompt="Assistant",
-            submit_prompt="Submit",
-            continue_prompt="",
-        )
-
-        # Act
-        episode = manager.start_episode(
-            session_id="test_session",
-            task_id="test_task",
-            task=task
-        )
-
-        # Assert - recompute checksum and verify
-        transcript = episode.context[MetadataKeys.CLIENT_TRANSCRIPT]
-        stored_checksum = episode.context.get("_transcript_checksum")
-        computed_checksum = compute_checksum(transcript)
-
-        assert stored_checksum == computed_checksum
 
     def test_start_episode_version_equals_message_count_on_init(self):
         """Initial transcript version should equal the message count."""
@@ -259,7 +220,7 @@ class TestServerSideTranscriptInit:
         # Assert - version equals message count so that
         # all_messages[:version] == messages_at_that_version
         version = episode.context.get(MetadataKeys.TRANSCRIPT_VERSION)
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+        transcript = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT, [])
         assert version == len(transcript)
 
     def test_start_episode_operation_marked_as_init(self):
@@ -308,7 +269,7 @@ class TestOrchestratedTaskTranscriptInit:
         )
 
         # Assert - no transcript for orchestration coordinator
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
+        transcript = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT)
         assert transcript is None
 
     def test_sub_task_episode_has_transcript(self):
@@ -341,7 +302,7 @@ class TestOrchestratedTaskTranscriptInit:
         )
 
         # Assert - sub-task should have transcript
-        transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT)
+        transcript = episode.context.get(MetadataKeys.INITIAL_TRANSCRIPT)
         assert transcript is not None
         assert len(transcript) == 2
 

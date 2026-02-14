@@ -6,17 +6,15 @@ state-aware waiting and efficient delta retrieval.
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from datetime import datetime
-from typing import Dict, Any
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from saber.models.constants import MetadataKeys
-from saber.server.base import Episode, EpisodeState, CommandResult
+from saber.server.base import Episode, EpisodeState
 from saber.server.execution.executors.standard_registry.get_target_transcript_executor import (
     GetTargetTranscriptExecutor,
 )
-from saber.server.execution.sandbox.sandbox_environment_manager import SandboxEnvironmentManager
 
 
 class TestGetTargetTranscriptExecutorParameterValidation:
@@ -31,11 +29,6 @@ class TestGetTargetTranscriptExecutorParameterValidation:
             session_id="session-789",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "You are helpful..."},
-                    {"role": "user", "content": "Hello"},
-                    {"role": "assistant", "content": "Hi there!"},
-                ],
                 MetadataKeys.TRANSCRIPT_VERSION: 3,
                 MetadataKeys.TRANSCRIPT_LAST_OPERATION: "append",
             },
@@ -228,11 +221,6 @@ class TestGetTargetTranscriptExecutorFullMode:
             session_id="session-789",
             state=EpisodeState.ACTIVE,
             context={
-                MetadataKeys.CLIENT_TRANSCRIPT: [
-                    {"role": "system", "content": "System message"},
-                    {"role": "user", "content": "User message"},
-                    {"role": "assistant", "content": "Assistant message"},
-                ],
                 MetadataKeys.TRANSCRIPT_VERSION: 3,
                 MetadataKeys.TRANSCRIPT_LAST_OPERATION: "append",
             },
@@ -257,10 +245,14 @@ class TestGetTargetTranscriptExecutorFullMode:
         env = AsyncMock()
 
         async def mock_execute_command(command, timeout):
-            # Simulate daemon returning full transcript
+            # Simulate daemon returning full transcript (data lives in Redis)
             response = {
                 "success": True,
-                "messages": blue_episode.context[MetadataKeys.CLIENT_TRANSCRIPT],
+                "messages": [
+                    {"role": "system", "content": "System message"},
+                    {"role": "user", "content": "User message"},
+                    {"role": "assistant", "content": "Assistant message"},
+                ],
                 "current_version": 3,
                 "full_transcript_length": 3,
                 "last_operation": "append",

@@ -140,14 +140,12 @@ class MetadataKeys(str, Enum):
     SUBTASK_SCORES = "subtask_scores"
 
     # Transcript synchronization context keys
-    CLIENT_TRANSCRIPT = "_client_transcript"
     INITIAL_TRANSCRIPT = "_initial_transcript"  # Original transcript (system->user) for restart operation
     TRANSCRIPT_METADATA = "_transcript_metadata"
 
     # WebSocket-based transcript coordination (Phase 2)
     TRANSCRIPT_VERSION = "_transcript_version"  # Monotonic sequence number (0, 1, 2, 3...)
     TRANSCRIPT_LAST_OPERATION = "_transcript_last_operation"  # Last operation type: append, rewrite, insert, rewind
-    TRANSCRIPT_CHECKSUM = "_transcript_checksum"  # SHA256 checksum of transcript
 
     # Prompt formatting
     PROMPT_SECTION_DELIMITER = "\n\n---\n\n"  # Delimiter between prompt sections in system message
@@ -157,6 +155,10 @@ class MetadataKeys(str, Enum):
     STUCK_STATE_THRESHOLD = "stuck_state_threshold"  # Custom threshold per episode (seconds)
     EPISODE_STUCK = "episode_stuck"  # Flag indicating episode is stuck
     STUCK_SINCE = "stuck_since"  # Timestamp when stuck was detected
+
+    # Blocking transcript solver - modification signaling
+    TRANSCRIPT_MODIFIED = "_transcript_modified"  # Flag: red team has modified transcript
+    TRANSCRIPT_MODIFIED_AT = "_transcript_modified_at"  # ISO timestamp of last modification
 
     # Blocking transcript solver - Timestamp-driven coordination (Legacy - being replaced)
     TRANSCRIPT_LAST_PUSHED_AT = "_transcript_last_pushed_at"  # ISO timestamp of last transcript push

@@ -19,7 +19,6 @@ from fastmcp.server.dependencies import get_http_headers
 
 from ...logging_config import get_api_logger, log_operation_failure, log_operation_start, log_operation_success
 from ...models import EvalSubmission, HTTPHeaders, OrchestrationEnvironment, RequestHeaders
-from ...models.constants import MetadataKeys
 from ...models.mcp import MCPToolCallResponse, MCPToolListResponse, MCPToolSchema
 from ..base import Action, CommandResult, Episode
 from .mcp_tool_generator import MCPToolGenerator
@@ -550,7 +549,7 @@ class SessionMCPAPI:
 
         try:
             # Execute action through SessionManager with explicit episode_id
-            action = self._convert_to_action(name, arguments, episode)
+            action = await self._convert_to_action(name, arguments, episode)
             command_result = await self.session_manager.execute_action(headers.session_id, headers.episode_id, action)
 
             # Convert result to MCP format using typed response
@@ -720,30 +719,28 @@ class SessionMCPAPI:
                 content=[{"type": "text", "text": f"Error: Failed to end episode: {exc}"}], isError=True
             )
 
-    def _extract_context_from_transcript(self, episode: "Episode") -> tuple[str | None, str | None]:
+    async def _extract_context_from_transcript(self, episode_id: str) -> tuple[str | None, str | None]:
         """
         Extract assistant message and reasoning from the episode's client transcript.
 
-        Looks for the most recent assistant message in the transcript to extract
-        the content and reasoning that would have previously been injected via
-        monkey-patching.
+        Reads transcript from Redis via the TranscriptCoordinator.
 
         Args:
-            episode: Episode object containing the client transcript
+            episode_id: Episode ID to read transcript for
 
         Returns:
             Tuple of (assistant_message, reasoning), either can be None
         """
         try:
-            # Get transcript from episode context
-            transcript = episode.context.get(MetadataKeys.CLIENT_TRANSCRIPT, [])
+            # Get transcript from Redis via coordinator
+            coordinator = self.session_manager.episode_manager.transcript_coordinator
+            transcript = await coordinator.get_transcript(episode_id)
 
             if not transcript:
                 logger.warning(
                     "Transcript is empty during context extraction",
                     extra={
-                        "episode_id": episode.episode_id,
-                        "context_keys": list(episode.context.keys()),
+                        "episode_id": episode_id,
                     },
                 )
                 return None, None
@@ -794,13 +791,13 @@ class SessionMCPAPI:
                 f"Failed to extract context from transcript: {e}",
                 extra={
                     "event": "transcript_context_extraction_failed",
-                    "episode_id": episode.episode_id,
+                    "episode_id": episode_id,
                     "error": str(e),
                 },
             )
             return None, None
 
-    def _convert_to_action(self, tool_name: str, arguments: dict[str, Any], episode: "Episode") -> Action:
+    async def _convert_to_action(self, tool_name: str, arguments: dict[str, Any], episode: "Episode") -> Action:
         """
         Convert MCP tool call to Action object.
 
@@ -825,7 +822,7 @@ class SessionMCPAPI:
             return Action(tool_name=tool_name, parameters=arguments, reasoning=None, assistant_message=None)
 
         # Extract context from transcript
-        assistant_message, reasoning = self._extract_context_from_transcript(episode)
+        assistant_message, reasoning = await self._extract_context_from_transcript(episode.episode_id)
 
         logger.debug(
             "Extracted context from transcript",

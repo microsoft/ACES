@@ -71,6 +71,7 @@ class LogCategory(Enum):
     # System Operations
     CONFIG = ("🔧", "Configuration and startup")
     CLEANUP = ("🧹", "Resource cleanup and shutdown")
+    DATABASE = ("🗄️", "Database operations and storage")
     WARNING = ("⚠️", "Warnings and degraded modes")
     ERROR = ("❌", "Error handling")
 

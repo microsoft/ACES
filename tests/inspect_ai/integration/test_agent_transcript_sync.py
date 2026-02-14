@@ -41,37 +41,21 @@ class MockTaskState:
         self.output = MagicMock()
 
 
-class MockWebSocket:
-    """Mock WebSocket connection."""
+class MockClient:
+    """Mock TranscriptSyncClient."""
 
-    def __init__(self):
-        self.closed = False
-        self.send = AsyncMock()
-
-
-class MockConnection:
-    """Mock connection manager."""
-
-    def __init__(self, websocket=None):
-        self.websocket = websocket or MockWebSocket()
+    def __init__(self, push_return: bool = True):
+        self.push_message = AsyncMock(return_value=push_return)
+        self.local_messages: list = []
+        self.ensure_connected = AsyncMock()
 
 
-class MockSyncOperations:
-    """Mock sync operations."""
-
-    def __init__(self):
-        self.local_version = 0
-        self.push_message_with_retry = AsyncMock(return_value=True)
-
-
-def create_mock_wrapper(connection=None, sync=None):
+def create_mock_wrapper(client: MockClient | None = None) -> MagicMock:
     """Create a mock that passes isinstance check for WebSocketTranscriptSyncingModelWrapper."""
     mock = MagicMock(spec=WebSocketTranscriptSyncingModelWrapper)
-    mock._connection = connection or MockConnection()
-    mock._sync = sync or MockSyncOperations()
+    mock._client = client or MockClient()
     mock._episode_id = "test-episode-123"
     mock._ensure_connected = AsyncMock()
-    mock._get_reconnect_callback = AsyncMock(return_value=AsyncMock())
     return mock
 
 
@@ -119,7 +103,7 @@ class TestAgentTranscriptSyncInitialize:
         assert result is True
         assert sync.is_enabled is True
         assert sync._wrapper is mock_wrapper
-        mock_wrapper._ensure_connected.assert_called_once()
+        mock_wrapper._client.ensure_connected.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_initialize_without_wrapper(self):
@@ -150,7 +134,7 @@ class TestAgentTranscriptSyncInitialize:
         """Test initialization fails gracefully on connection error."""
         state = MockTaskState()
         mock_wrapper = create_mock_wrapper()
-        mock_wrapper._ensure_connected = AsyncMock(side_effect=Exception("Connection failed"))
+        mock_wrapper._client.ensure_connected = AsyncMock(side_effect=Exception("Connection failed"))
         state.store.set(InspectStoreKeys.MODEL_WRAPPER, mock_wrapper)
 
         sync = AgentTranscriptSync(state)
@@ -188,7 +172,7 @@ class TestAgentTranscriptSyncPushMessages:
         result = await sync.push_messages([])
 
         assert result is True
-        mock_wrapper._sync.push_message_with_retry.assert_not_called()
+        mock_wrapper._client.push_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_push_single_message(self):
@@ -205,7 +189,7 @@ class TestAgentTranscriptSyncPushMessages:
         result = await sync.push_messages(messages)
 
         assert result is True
-        mock_wrapper._sync.push_message_with_retry.assert_called_once()
+        mock_wrapper._client.push_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_push_multiple_messages(self):
@@ -226,14 +210,14 @@ class TestAgentTranscriptSyncPushMessages:
         result = await sync.push_messages(messages)
 
         assert result is True
-        assert mock_wrapper._sync.push_message_with_retry.call_count == 3
+        assert mock_wrapper._client.push_message.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_push_message_with_no_websocket(self):
-        """Test push_messages fails when websocket not connected."""
+    async def test_push_message_failure(self):
+        """Test push_messages returns False when client.push_message fails."""
         state = MockTaskState()
-        mock_wrapper = create_mock_wrapper()
-        mock_wrapper._connection.websocket = None
+        mock_client = MockClient(push_return=False)
+        mock_wrapper = create_mock_wrapper(client=mock_client)
         state.store.set(InspectStoreKeys.MODEL_WRAPPER, mock_wrapper)
 
         sync = AgentTranscriptSync(state)
@@ -249,11 +233,10 @@ class TestAgentTranscriptSyncPushMessages:
     async def test_push_message_partial_failure(self):
         """Test push_messages returns False on partial failure."""
         state = MockTaskState()
-        mock_wrapper = create_mock_wrapper()
+        mock_client = MockClient()
         # First call succeeds, second fails
-        mock_wrapper._sync.push_message_with_retry = AsyncMock(
-            side_effect=[True, False]
-        )
+        mock_client.push_message = AsyncMock(side_effect=[True, False])
+        mock_wrapper = create_mock_wrapper(client=mock_client)
         state.store.set(InspectStoreKeys.MODEL_WRAPPER, mock_wrapper)
 
         sync = AgentTranscriptSync(state)
@@ -272,10 +255,9 @@ class TestAgentTranscriptSyncPushMessages:
     async def test_push_message_exception_handling(self):
         """Test push_messages handles exceptions gracefully."""
         state = MockTaskState()
-        mock_wrapper = create_mock_wrapper()
-        mock_wrapper._sync.push_message_with_retry = AsyncMock(
-            side_effect=Exception("Network error")
-        )
+        mock_client = MockClient()
+        mock_client.push_message = AsyncMock(side_effect=Exception("Network error"))
+        mock_wrapper = create_mock_wrapper(client=mock_client)
         state.store.set(InspectStoreKeys.MODEL_WRAPPER, mock_wrapper)
 
         sync = AgentTranscriptSync(state)
@@ -319,7 +301,7 @@ class TestAgentTranscriptSyncSyncStateMessages:
         result = await sync.sync_state_messages(state)
 
         assert result is True
-        mock_wrapper._sync.push_message_with_retry.assert_not_called()
+        mock_wrapper._client.push_message.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_sync_state_differential_sync(self):
@@ -341,11 +323,11 @@ class TestAgentTranscriptSyncSyncStateMessages:
         # Sync - should push both messages
         result = await sync.sync_state_messages(state)
         assert result is True
-        assert mock_wrapper._sync.push_message_with_retry.call_count == 2
+        assert mock_wrapper._client.push_message.call_count == 2
         assert sync.synced_message_count == 2
 
         # Reset mock
-        mock_wrapper._sync.push_message_with_retry.reset_mock()
+        mock_wrapper._client.push_message.reset_mock()
 
         # Add one more message
         state.messages.append(ChatMessageAssistant(content="Response"))
@@ -353,7 +335,7 @@ class TestAgentTranscriptSyncSyncStateMessages:
         # Sync again - should only push the new message
         result = await sync.sync_state_messages(state)
         assert result is True
-        assert mock_wrapper._sync.push_message_with_retry.call_count == 1
+        assert mock_wrapper._client.push_message.call_count == 1
         assert sync.synced_message_count == 3
 
     @pytest.mark.asyncio
@@ -381,8 +363,8 @@ class TestAgentTranscriptSyncSyncStateMessages:
     async def test_sync_state_does_not_update_count_on_failure(self):
         """Test that last_synced_count is not updated on failure."""
         state = MockTaskState()
-        mock_wrapper = create_mock_wrapper()
-        mock_wrapper._sync.push_message_with_retry = AsyncMock(return_value=False)
+        mock_client = MockClient(push_return=False)
+        mock_wrapper = create_mock_wrapper(client=mock_client)
         state.store.set(InspectStoreKeys.MODEL_WRAPPER, mock_wrapper)
 
         sync = AgentTranscriptSync(state)
@@ -429,21 +411,21 @@ class TestAgentTranscriptSyncResetState:
 
         # First sync
         await sync.sync_state_messages(state)
-        assert mock_wrapper._sync.push_message_with_retry.call_count == 2
+        assert mock_wrapper._client.push_message.call_count == 2
 
         # Reset mock
-        mock_wrapper._sync.push_message_with_retry.reset_mock()
+        mock_wrapper._client.push_message.reset_mock()
 
         # Try to sync again - should do nothing since messages already synced
         await sync.sync_state_messages(state)
-        assert mock_wrapper._sync.push_message_with_retry.call_count == 0
+        assert mock_wrapper._client.push_message.call_count == 0
 
         # Reset sync state
         sync.reset_sync_state()
 
         # Now syncing should push all messages again
         await sync.sync_state_messages(state)
-        assert mock_wrapper._sync.push_message_with_retry.call_count == 2
+        assert mock_wrapper._client.push_message.call_count == 2
 
 
 class TestAgentTranscriptSyncProperties:
