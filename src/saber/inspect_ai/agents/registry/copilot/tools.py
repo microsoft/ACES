@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 ToolResult = dict[str, Any]
 ToolInvocation = dict[str, Any]
 
+# Async callback invoked before each tool execution to flush pending events
+PreToolHook = Callable[[], Awaitable[None]]
+
 
 @dataclass
 class ToolCallRecord:
@@ -181,6 +184,7 @@ def mcp_tool_to_copilot_tool(
     inspect_tool: Any,
     mcp_client: Any,
     tracker: ToolCallTracker | None = None,
+    pre_tool_hook: PreToolHook | None = None,
 ) -> Tool:
     """Convert an Inspect AI tool or MCP tool to a Copilot SDK Tool.
 
@@ -311,6 +315,15 @@ def mcp_tool_to_copilot_tool(
                 "argument_keys": list(arguments.keys()),
             },
         )
+
+        # Flush pending events to ensure the assistant message that
+        # triggered this tool call has been pushed to the SABER server
+        # before the MCP call arrives there.
+        if pre_tool_hook is not None:
+            try:
+                await pre_tool_hook()
+            except Exception as e:
+                logger.warning(f"Pre-tool hook failed: {e}")
 
         try:
             if is_callable_tool:
@@ -477,6 +490,7 @@ def convert_mcp_tools_to_copilot(
     mcp_tools: list[Any],
     mcp_client: Any,
     tracker: ToolCallTracker | None = None,
+    pre_tool_hook: PreToolHook | None = None,
 ) -> list[Tool]:
     """Convert a list of MCP tools to Copilot SDK Tools.
 
@@ -484,6 +498,7 @@ def convert_mcp_tools_to_copilot(
         mcp_tools: List of MCP tool objects
         mcp_client: MCP client instance for executing tool calls
         tracker: Optional ToolCallTracker to record calls for transcript visibility
+        pre_tool_hook: Optional async callback invoked before each tool execution
 
     Returns:
         List of Copilot SDK Tool instances
@@ -493,7 +508,7 @@ def convert_mcp_tools_to_copilot(
 
     copilot_tools = []
     for mcp_tool in mcp_tools:
-        copilot_tool = mcp_tool_to_copilot_tool(mcp_tool, mcp_client, tracker)
+        copilot_tool = mcp_tool_to_copilot_tool(mcp_tool, mcp_client, tracker, pre_tool_hook)
         copilot_tools.append(copilot_tool)
 
     logger.info(

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
+from datetime import UTC
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -392,7 +393,7 @@ def _record_events_to_transcript(
         model_name: Model name for events
         accumulated_input: Accumulated input messages (will be mutated)
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from inspect_ai.event._model import ModelEvent
     from inspect_ai.event._tool import ToolEvent
@@ -433,7 +434,7 @@ def _record_events_to_transcript(
             if is_error:
                 error_obj = ToolCallError(type="unknown", message=content)
 
-            parsed_timestamp = _parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
+            parsed_timestamp = _parse_event_timestamp(event.timestamp) or datetime.now(UTC)
 
             tool_call = pending_tool_requests.get(event.data.toolCallId)
             tool_name = tool_call.function if tool_call else "unknown"
@@ -501,7 +502,7 @@ def _record_events_to_transcript(
             )
 
             # Create and record ModelEvent
-            parsed_timestamp = _parse_event_timestamp(event.timestamp) or datetime.now(timezone.utc)
+            parsed_timestamp = _parse_event_timestamp(event.timestamp) or datetime.now(UTC)
             model_timestamp = parsed_timestamp
             if tool_calls and model_timestamp:
                 model_timestamp = model_timestamp - timedelta(milliseconds=1)
@@ -566,6 +567,7 @@ class EventsWatcherContext:
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     _system_content: str = ""
     record_transcript: bool = False
+    _watcher: Any = field(default=None, repr=False)
 
     @property
     def is_running(self) -> bool:
@@ -657,6 +659,7 @@ class EventsWatcherContext:
                     logger.error(f"Message callback error: {e}")
 
         watcher = EventsFileWatcher(events_path=events_path, on_events=on_events)
+        self._watcher = watcher
 
         async def run_watcher() -> None:
             """Run the watcher with proper cleanup."""
@@ -681,11 +684,23 @@ class EventsWatcherContext:
             self.watcher_task.cancel()
             try:
                 await asyncio.wait_for(self.watcher_task, timeout=2.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+            except (TimeoutError, asyncio.CancelledError):
                 pass
 
         self.watcher_task = None
+        self._watcher = None
         logger.debug("Watcher context stopped")
+
+    async def flush(self) -> None:
+        """Force an immediate parse-and-push of any pending events.
+
+        Call this before tool execution to ensure the assistant message
+        that triggered the tool call has been processed and pushed to the
+        SABER server, avoiding the race where a tool call arrives at the
+        server before its associated assistant message.
+        """
+        if self._watcher is not None:
+            await self._watcher.flush()
 
 
 __all__ = [

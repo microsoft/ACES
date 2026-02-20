@@ -338,7 +338,7 @@ class EventsFileWatcher:
                     timeout=poll_interval,
                 )
                 break  # Stop event was set
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue  # Keep polling
 
     async def _read_and_emit_events(self) -> None:
@@ -371,6 +371,33 @@ class EventsFileWatcher:
         """
         self._stop_event.set()
         logger.debug("Watcher stop signal sent")
+
+    async def flush(self) -> list[CopilotEvent]:
+        """Force an immediate read-and-emit of any pending events.
+
+        This is used to ensure recently-written events (e.g., an assistant
+        message that precedes a tool call) are processed before the tool
+        handler makes an MCP call to the SABER server.
+
+        Returns:
+            List of newly parsed events (may be empty)
+        """
+        events = self._parser.parse_new_events()
+        if not events:
+            return []
+
+        if self._on_events:
+            try:
+                await self._on_events(events)
+            except Exception as e:
+                logger.error(f"Flush callback error: {e}")
+
+        if self._event_queue:
+            for event in events:
+                await self._event_queue.put(event)
+
+        logger.debug(f"Flushed {len(events)} pending events")
+        return events
 
 
 __all__ = [

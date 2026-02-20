@@ -50,6 +50,7 @@ from .session_events import (
     create_event_callback,
 )
 from .tools import (
+    PreToolHook,
     Tool,
     ToolCallRecord,
     ToolCallTracker,
@@ -167,7 +168,7 @@ class SessionTracker:
         """
         try:
             await asyncio.wait_for(self.event_context.idle_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(f"Timeout waiting for session idle after {timeout}s")
             raise
 
@@ -361,6 +362,91 @@ class CopilotClientWrapper:
 
 
 # =============================================================================
+# Shared Client (single CLI process for all concurrent sessions)
+# =============================================================================
+
+
+class SharedCopilotClient:
+    """Manages a single CopilotClientWrapper shared across concurrent solver invocations.
+
+    Instead of spawning N CLI subprocesses for N concurrent samples, this class
+    maintains a single CopilotClientWrapper and uses reference counting for lifecycle
+    management. The CLI process starts when the first solver acquires the client and
+    stops when the last solver releases it.
+
+    The Copilot SDK natively supports multiple sessions on a single client
+    (CopilotClient._sessions dict with _sessions_lock), so this is safe.
+    Model/provider selection is per-session, not per-client.
+    """
+
+    _client: CopilotClientWrapper | None = None
+    _ref_count: int = 0
+    _lock: asyncio.Lock | None = None
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        """Lazily create the asyncio lock (must be called within a running event loop)."""
+        if cls._lock is None:
+            cls._lock = asyncio.Lock()
+        return cls._lock
+
+    @classmethod
+    async def acquire(cls, options: dict[str, Any] | None = None) -> CopilotClientWrapper:
+        """Acquire a reference to the shared client, starting it if needed.
+
+        Args:
+            options: CopilotClient options (only used on first acquisition).
+
+        Returns:
+            The shared CopilotClientWrapper instance.
+        """
+        async with cls._get_lock():
+            if cls._ref_count == 0:
+                cls._client = CopilotClientWrapper(options or {"auto_start": True})
+                await cls._client.start()
+                logger.info("SharedCopilotClient: started shared CLI process")
+            cls._ref_count += 1
+            logger.debug(
+                "SharedCopilotClient: acquired",
+                extra={"ref_count": cls._ref_count},
+            )
+            assert cls._client is not None
+            return cls._client
+
+    @classmethod
+    async def release(cls) -> None:
+        """Release a reference, stopping the client when count reaches 0."""
+        async with cls._get_lock():
+            cls._ref_count -= 1
+            logger.debug(
+                "SharedCopilotClient: released",
+                extra={"ref_count": cls._ref_count},
+            )
+            if cls._ref_count <= 0:
+                if cls._client is not None:
+                    try:
+                        await cls._client.stop()
+                    except Exception as e:
+                        logger.warning(f"SharedCopilotClient: error stopping client: {e}")
+                    cls._client = None
+                cls._ref_count = 0
+                logger.info("SharedCopilotClient: stopped shared CLI process")
+
+    @classmethod
+    async def reset(cls) -> None:
+        """Force-reset the shared client (for testing or error recovery)."""
+        async with cls._get_lock():
+            if cls._client is not None:
+                try:
+                    await cls._client.stop()
+                except Exception:
+                    pass
+                cls._client = None
+            cls._ref_count = 0
+            logger.info("SharedCopilotClient: force reset")
+
+
+# =============================================================================
 # Tool Setup
 # =============================================================================
 
@@ -370,6 +456,7 @@ async def setup_tools(
     tool_tracker: ToolCallTracker,
     session_tracker: SessionTracker,
     submit_enabled: bool,
+    pre_tool_hook: PreToolHook | None = None,
 ) -> list[Tool]:
     """Set up all tools for the Copilot session.
 
@@ -378,13 +465,14 @@ async def setup_tools(
         tool_tracker: Tracker for recording tool calls
         session_tracker: Session state tracker for submit detection
         submit_enabled: Whether to include the submit tool
+        pre_tool_hook: Optional async callback invoked before each tool execution
 
     Returns:
         List of Copilot SDK Tool objects
     """
     mcp_tools = await get_saber_mcp_tools(sb)
     mcp_client = get_mcp_client_from_sandbox("saber")
-    copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, mcp_client, tool_tracker)
+    copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, mcp_client, tool_tracker, pre_tool_hook)
 
     all_tools: list[Tool] = list(copilot_tools)
     if submit_enabled:
@@ -477,17 +565,24 @@ def copilot_solver(
 
     async def solve(state: TaskState) -> TaskState:
         """Execute the Copilot agent loop."""
-        client = CopilotClientWrapper({"auto_start": True})
+        client = await SharedCopilotClient.acquire()
         tool_tracker = ToolCallTracker()
         session_tracker = SessionTracker()
+        session = None  # Track session for cleanup in finally
 
         try:
-            await client.start()
-            logger.info("Copilot client started")
+            logger.info("Copilot client acquired (shared)")
 
             # Get sandbox and set up tools
             sb = sandbox("saber")
-            all_tools = await setup_tools(sb, tool_tracker, session_tracker, submit_enabled)
+
+            # Pre-tool hook: flush pending events from events.jsonl so the
+            # assistant message that triggered the tool call is pushed to the
+            # SABER server transcript BEFORE the MCP call arrives.
+            async def _pre_tool_hook() -> None:
+                await session_tracker.watcher_ctx.flush()
+
+            all_tools = await setup_tools(sb, tool_tracker, session_tracker, submit_enabled, _pre_tool_hook)
             tool_names = [t.name for t in all_tools]
 
             # Build session config
@@ -612,10 +707,12 @@ def copilot_solver(
             if session_tracker.session_id:
 
                 async def on_new_messages(messages: list[ChatMessage]) -> None:
-                    """Add new messages to state (skip duplicates)."""
+                    """Add new messages to state and push to SABER server (skip duplicates)."""
                     for msg in messages:
                         if not is_duplicate_message(msg, state.messages):
                             state.messages.append(msg)
+                    # Incrementally sync new messages to the SABER server
+                    await transcript_sync.sync_state_messages(state)
 
                 start_watcher(
                     tracker=session_tracker,
@@ -643,7 +740,7 @@ def copilot_solver(
                 try:
                     await session.send({"prompt": prompt})
                     await session_tracker.wait_for_idle(timeout=timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     timed_out = True
                     consecutive_timeouts += 1
                     logger.warning(
@@ -811,12 +908,12 @@ def copilot_solver(
                     },
                 )
 
-            # Single transcript sync at end
+            # Final transcript sync — pushes any messages the watcher may have missed
             logger.debug(
-                f"Before transcript sync: {len(state.messages)} messages, sync enabled: {transcript_sync.is_enabled}"
+                f"Final transcript sync: {len(state.messages)} messages, sync enabled: {transcript_sync.is_enabled}"
             )
             sync_result = await transcript_sync.sync_state_messages(state)
-            logger.debug(f"Transcript sync result: {sync_result}")
+            logger.debug(f"Final transcript sync result: {sync_result}")
 
             logger.info(
                 "Copilot solver completed",
@@ -834,8 +931,16 @@ def copilot_solver(
         finally:
             # Stop the events watcher before cleanup
             await stop_watcher(session_tracker)
-            await client.stop()
-            logger.info("Copilot client stopped")
+            # Destroy our session before releasing the shared client.
+            # This may be a no-op if session.destroy() was already called
+            # in the main flow (submit or post-loop cleanup).
+            if session is not None:
+                try:
+                    await session.destroy()
+                except Exception as e:
+                    logger.debug(f"Session destroy during cleanup (may be duplicate): {e}")
+            await SharedCopilotClient.release()
+            logger.info("Copilot client released")
 
         return state
 
