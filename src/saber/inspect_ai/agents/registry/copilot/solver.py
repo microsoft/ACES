@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from inspect_ai.model import ChatMessage
 from inspect_ai.model._model import ModelName, active_model, record_and_check_model_usage
 from inspect_ai.solver import Solver, TaskState
-from inspect_ai.util import sandbox
+from inspect_ai.util import LimitExceededError, sandbox
 
 if TYPE_CHECKING:
     from inspect_ai.util import SandboxEnvironment
@@ -747,6 +747,10 @@ def copilot_solver(
                         f"Turn {turn + 1} timed out",
                         extra={"consecutive_timeouts": consecutive_timeouts},
                     )
+                except LimitExceededError:
+                    # Tool call limit exceeded - re-raise to let sample runner handle it
+                    logger.info("Tool call limit exceeded, stopping agent loop")
+                    raise
                 except Exception as e:
                     # Check for fatal auth/authorization errors - fail fast instead of retrying
                     if is_auth_error(e):

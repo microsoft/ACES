@@ -295,3 +295,122 @@ class TestCreateSubmitTool:
         # Should handle empty answer gracefully
         assert result["resultType"] == "success"
         assert result["textResultForLlm"] == ""
+
+
+class TestToolCallLimitEnforcement:
+    """Tests for tool call limit enforcement in Copilot tool handlers.
+
+    The Copilot SDK bypasses inspect_ai's execute_tools() pipeline, so
+    limit checks must be called explicitly in the tool handlers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_handler_records_and_checks_limit(self):
+        """Tool handler calls record_tool_call_usage and check_tool_call_limit."""
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
+
+        mcp_tool = Mock()
+        mcp_tool.name = "bash"
+        mcp_tool.description = "Execute bash commands"
+        mcp_tool.inputSchema = {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}
+
+        mock_content = Mock(spec=["text"])
+        mock_content.text = "output"
+        mock_result = Mock(spec=["content", "isError", "is_error"])
+        mock_result.content = [mock_content]
+        mock_result.isError = False
+        mock_result.is_error = False
+        mock_mcp_client = AsyncMock()
+        mock_mcp_client.call_tool = AsyncMock(return_value=mock_result)
+
+        copilot_tool = mcp_tool_to_copilot_tool(mcp_tool, mock_mcp_client)
+
+        invocation = {
+            "session_id": "test-session",
+            "tool_call_id": "call-123",
+            "arguments": {"command": "ls"},
+        }
+
+        with patch("saber.inspect_ai.agents.registry.copilot.tools.record_tool_call_usage") as mock_record, \
+             patch("saber.inspect_ai.agents.registry.copilot.tools.check_tool_call_limit") as mock_check:
+            result = await copilot_tool.handler(invocation)
+
+        mock_record.assert_called_once_with(1)
+        mock_check.assert_called_once()
+        assert result["resultType"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_handler_propagates_limit_exceeded_error(self):
+        """LimitExceededError from check_tool_call_limit propagates out of handler."""
+        from inspect_ai.util import LimitExceededError
+        from saber.inspect_ai.agents.registry.copilot.tools import mcp_tool_to_copilot_tool
+
+        mcp_tool = Mock()
+        mcp_tool.name = "bash"
+        mcp_tool.description = "Execute bash commands"
+        mcp_tool.inputSchema = {"type": "object", "properties": {}}
+
+        mock_mcp_client = AsyncMock()
+        copilot_tool = mcp_tool_to_copilot_tool(mcp_tool, mock_mcp_client)
+
+        invocation = {
+            "session_id": "test-session",
+            "tool_call_id": "call-123",
+            "arguments": {},
+        }
+
+        with patch("saber.inspect_ai.agents.registry.copilot.tools.record_tool_call_usage"), \
+             patch("saber.inspect_ai.agents.registry.copilot.tools.check_tool_call_limit",
+                   side_effect=LimitExceededError("tool_call", value=10, limit=10)):
+            with pytest.raises(LimitExceededError):
+                await copilot_tool.handler(invocation)
+
+        # Tool should NOT have been called since limit check happens before execution
+        mock_mcp_client.call_tool.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_submit_tool_records_and_checks_limit(self):
+        """Submit tool handler calls record_tool_call_usage and check_tool_call_limit."""
+        from saber.inspect_ai.agents.registry.copilot.tools import create_submit_tool
+
+        tool = create_submit_tool()
+
+        invocation = {
+            "session_id": "test-session",
+            "tool_call_id": "call-123",
+            "arguments": {"answer": "The answer is 42"},
+        }
+
+        with patch("saber.inspect_ai.agents.registry.copilot.tools.record_tool_call_usage") as mock_record, \
+             patch("saber.inspect_ai.agents.registry.copilot.tools.check_tool_call_limit") as mock_check:
+            result = await tool.handler(invocation)
+
+        mock_record.assert_called_once_with(1)
+        mock_check.assert_called_once()
+        assert result["resultType"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_submit_tool_records_submission_before_limit_check(self):
+        """Submit tool sets submission answer before checking limit, so answer is captured."""
+        from inspect_ai.util import LimitExceededError
+        from saber.inspect_ai.agents.registry.copilot.tools import create_submit_tool
+
+        mock_tracker = Mock()
+        mock_tracker.set_submission = Mock()
+
+        tool = create_submit_tool(session_tracker=mock_tracker)
+
+        invocation = {
+            "session_id": "test-session",
+            "tool_call_id": "call-123",
+            "arguments": {"answer": "Final answer"},
+        }
+
+        with patch("saber.inspect_ai.agents.registry.copilot.tools.record_tool_call_usage"), \
+             patch("saber.inspect_ai.agents.registry.copilot.tools.check_tool_call_limit",
+                   side_effect=LimitExceededError("tool_call", value=10, limit=10)):
+            with pytest.raises(LimitExceededError):
+                await tool.handler(invocation)
+
+        # Submission should have been recorded BEFORE the limit check raised
+        mock_tracker.set_submission.assert_called_once_with("Final answer")

@@ -777,8 +777,9 @@ def saber_scorer(score_aggregation_override: str | None = None) -> Scorer:
                 explanation = (
                     f"{submission_explanation}, "
                     f"weighted_subtasks={total_subtask_score:.2f}/{weighted_max_possible_subtasks:.2f}, "
-                    f"{effective_strategy.value}(submission, subtasks)="
-                    f"{total_score:.2f}/{max_possible:.2f} = {normalized_total_score:.3f}"
+                    f"{effective_strategy.value}(submission, subtasks) = "
+                    f"{effective_strategy.value}({normalized_submission_score:.2f}, {normalized_subtask_score:.2f}) = "
+                    f"{normalized_total_score:.3f}"
                     f"{checkpoint_summary}"
                 )
             else:

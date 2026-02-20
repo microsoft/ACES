@@ -11,6 +11,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from inspect_ai.util import LimitExceededError
+
+# NOTE: record_tool_call_usage and check_tool_call_limit are internal inspect_ai APIs.
+# They are not exposed publicly and are used here because the Copilot SDK bypasses
+# inspect_ai's execute_tools() pipeline where these are normally called.
+# If inspect_ai changes this private API, update this import accordingly.
+from inspect_ai.util._limit import check_tool_call_limit, record_tool_call_usage
+
 from saber.logging_config import LogCategory, get_saber_logger
 
 logger = get_saber_logger(LogCategory.AGENT, __name__)
@@ -316,6 +324,12 @@ def mcp_tool_to_copilot_tool(
             },
         )
 
+        # Record and check tool call limit before execution (matching inspect_ai behavior).
+        # The Copilot SDK bypasses inspect_ai's execute_tools() pipeline, so we must
+        # call these directly to enforce the tool_call_limit set on the Task/sample.
+        record_tool_call_usage(1)
+        check_tool_call_limit()
+
         # Flush pending events to ensure the assistant message that
         # triggered this tool call has been pushed to the SABER server
         # before the MCP call arrives there.
@@ -357,6 +371,9 @@ def mcp_tool_to_copilot_tool(
                         extra={"tool_name": tool_name, "result_type": type(result).__name__},
                     )
                 except BaseException as async_err:
+                    # Re-raise limit errors immediately (don't wrap in RuntimeError)
+                    if isinstance(async_err, LimitExceededError):
+                        raise
                     # Handle ExceptionGroup and other async errors
                     # Extract the actual error message from ExceptionGroup if present
                     error_msg = str(async_err)
@@ -454,6 +471,9 @@ def mcp_tool_to_copilot_tool(
                 "resultType": "success",
             }
 
+        except LimitExceededError:
+            # Let tool call limit errors propagate to break the agent loop
+            raise
         except Exception as e:
             logger.error(
                 "Exception executing Inspect AI tool",
@@ -561,10 +581,16 @@ def create_submit_tool(
             },
         )
 
-        # Set submission on session tracker (signals agent loop to exit)
+        # Set submission on session tracker FIRST (signals agent loop to exit)
+        # This happens before the limit check so the agent's answer is captured
+        # even if the tool call limit is exceeded on this final call.
         if session_tracker is not None and hasattr(session_tracker, "set_submission"):
             session_tracker.set_submission(answer)
             logger.info("Submission flag set on session tracker")
+
+        # Record and check tool call limit (submit counts as a tool call)
+        record_tool_call_usage(1)
+        check_tool_call_limit()
 
         # Record submission in tracker for transcript
         if tracker:

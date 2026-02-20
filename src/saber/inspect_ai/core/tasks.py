@@ -309,7 +309,7 @@ def create_domain_task(
                 role_config_obj,
                 skills_dir,
                 agent_persona,
-                score_aggregation=score_aggregation,
+                score_aggregation,
             )
         except Exception as e:
             # Ensure we have a clean error message

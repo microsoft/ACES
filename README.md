@@ -214,6 +214,28 @@ docker ps
 docker stop $(docker ps -q --filter "name=<domain_slug>")
 ```
 
+### Score Aggregation
+
+SABER supports configurable strategies for combining submission and subtask scores into a final normalized score:
+
+| Strategy | Formula | Description |
+|----------|---------|-------------|
+| `average` | `(norm_sub + norm_step) / 2` | Equal weight per dimension (default) |
+| `weighted_sum` | `(raw_sub + raw_step) / (max_sub + max_step)` | Components weighted by max score |
+| `max` | `max(norm_sub, norm_step)` | Best normalized component wins |
+
+**Configure in YAML** (domain `global.yaml` or per-task):
+```yaml
+global_defaults:
+  scoring_config:
+    aggregation: max  # or: average, weighted_sum
+```
+
+**Override via CLI** (takes precedence over YAML):
+```bash
+uv run inspect eval domains/excytin --model openai/gpt-4 -T score_aggregation=weighted_sum
+```
+
 ### Development Setup
 
 ```bash
