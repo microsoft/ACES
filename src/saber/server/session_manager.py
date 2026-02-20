@@ -576,6 +576,8 @@ class SessionManager:
             "-p",
             "saber-redis",
             "down",
+            "-t",
+            "1",
         ]
 
         try:
@@ -585,7 +587,9 @@ class SessionManager:
                 extra={"event": "redis_container_stopped"},
             )
         except Exception as e:
-            if isinstance(e, subprocess.TimeoutExpired):
+            # Use string check because tests mock subprocess, making
+            # subprocess.TimeoutExpired a MagicMock rather than a real class.
+            if type(e).__name__ == "TimeoutExpired":
                 logger.warning(
                     "Redis container stop timed out after 30s",
                     extra={"event": "redis_container_stop_timeout"},
@@ -2002,7 +2006,7 @@ class SessionManager:
                     )
                     result = await asyncio.to_thread(
                         subprocess.run,
-                        ["docker", "compose", "-p", project_name, "down", "-v", "--remove-orphans"],
+                        ["docker", "compose", "-p", project_name, "down", "-v", "--remove-orphans", "-t", "1"],
                         capture_output=True,
                         text=True,
                         timeout=30,

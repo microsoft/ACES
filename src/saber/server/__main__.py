@@ -13,6 +13,7 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -200,18 +201,80 @@ def resolve_domain_paths(domains_root: Path, domain: str, manifest: dict[str, An
     return paths
 
 
+def _disable_uvicorn_signal_handling() -> None:
+    """Prevent uvicorn from stealing SIGTERM/SIGINT handlers.
+
+    uvicorn.Server.capture_signals() uses signal.signal() to install its own
+    SIGTERM/SIGINT handlers, overriding any asyncio loop.add_signal_handler()
+    registrations. Its shutdown path then calls _wait_tasks_to_complete() with
+    timeout_graceful_shutdown=None, which waits **forever** for connections to
+    close.
+
+    By replacing capture_signals with a no-op context manager, uvicorn never
+    touches signal handlers and SABER retains full control of shutdown.
+    This affects all uvicorn instances in the process (REST + FastMCP's internal
+    uvicorn), which is exactly what we want.
+    """
+    import contextlib
+
+    import uvicorn
+
+    @contextlib.contextmanager
+    def _noop_capture_signals(self: Any) -> Generator[None, None, None]:
+        yield
+
+    uvicorn.Server.capture_signals = _noop_capture_signals
+
+
 async def start_server(args: argparse.Namespace) -> None:
-    """Start the SABER server with the given arguments."""
+    """Start the SABER server with the given arguments.
+
+    Signal handling strategy:
+    -----------------------
+    uvicorn (used by both the REST API server and FastMCP's internal server)
+    normally steals SIGTERM/SIGINT via signal.signal() inside its
+    capture_signals() context manager. We disable that entirely (see
+    _disable_uvicorn_signal_handling) and register our own handlers via
+    loop.add_signal_handler(), giving SABER exclusive control of shutdown.
+
+    On SIGTERM/SIGINT:
+    1. Our handler schedules _do_shutdown() as an asyncio task.
+    2. _do_shutdown() runs session_manager.shutdown() which stops all
+       Docker containers (permanent env, episodes, Redis) with -t 1.
+    3. After cleanup, os._exit(0) terminates the process immediately
+       (uvicorn's event loops are still running and would hang otherwise).
+    4. A watchdog thread ensures we exit even if shutdown() hangs.
+    """
+    # Disable uvicorn signal handling BEFORE any server starts
+    _disable_uvicorn_signal_handling()
+
     session_manager: SessionManager | None = None
-    shutdown_event = asyncio.Event()
     _shutdown_initiated = False
 
-    async def shutdown_handler() -> None:
-        """Handle graceful shutdown."""
+    async def _do_shutdown() -> None:
+        """Run SessionManager cleanup, then force-exit the process."""
         logger.info(
             "Shutdown signal received; initiating graceful shutdown",
             extra={"event": "server_shutdown_initiated"},
         )
+
+        # Watchdog: force-exit if shutdown hangs (e.g., Docker daemon unresponsive).
+        # 25s budget gives plenty of room for -t 1 compose downs on several
+        # containers, while staying well under the CLI's 30s SIGKILL timeout.
+        import threading
+
+        def _force_exit() -> None:
+            import time
+
+            time.sleep(25)
+            logger.warning(
+                "Force-exiting: shutdown did not complete within 25s",
+                extra={"event": "server_force_exit"},
+            )
+            os._exit(1)
+
+        threading.Thread(target=_force_exit, daemon=True).start()
+
         if session_manager:
             try:
                 await session_manager.shutdown()
@@ -224,49 +287,28 @@ async def start_server(args: argparse.Namespace) -> None:
                     "Error during graceful shutdown",
                     extra={"event": "server_shutdown_failed", "error": str(e)},
                 )
-        shutdown_event.set()
 
-        # Safety net: force-exit if uvicorn/MCP servers don't terminate promptly.
-        # After SessionManager.shutdown() completes (including Redis stop), the
-        # only remaining work is cancelling the uvicorn tasks. Uvicorn's
-        # capture_signals() re-raises SIGTERM through a chain of signal handlers,
-        # and _wait_tasks_to_complete() defaults to timeout_graceful_shutdown=None
-        # (wait forever). This watchdog ensures the process actually exits.
-        # Placed AFTER shutdown() so all cleanup (Redis, Docker, etc.) completes
-        # before the countdown begins.
-        import threading
+        logger.info(
+            "Shutdown cleanup complete; exiting process",
+            extra={"event": "server_exit"},
+        )
+        os._exit(0)
 
-        def _force_exit() -> None:
-            import time
-
-            time.sleep(10)
-            logger.warning(
-                "Force-exiting: uvicorn/async cleanup did not complete within 10s after shutdown",
-                extra={"event": "server_force_exit"},
-            )
-            os._exit(0)
-
-        threading.Thread(target=_force_exit, daemon=True).start()
-
-    # Setup signal handlers for graceful shutdown using asyncio
+    # Register signal handlers via asyncio (these now work reliably because
+    # uvicorn's capture_signals is disabled and can't override them).
     loop = asyncio.get_running_loop()
 
     def signal_handler() -> None:
         nonlocal _shutdown_initiated
         if _shutdown_initiated:
-            logger.info(
-                "Duplicate shutdown signal received; ignoring (shutdown already in progress)",
-                extra={"event": "server_shutdown_signal_duplicate"},
-            )
             return
         _shutdown_initiated = True
         logger.info(
             "Signal received; scheduling shutdown",
             extra={"event": "server_shutdown_signal_received"},
         )
-        asyncio.create_task(shutdown_handler())
+        asyncio.create_task(_do_shutdown())
 
-    # Register signal handlers (only available on Unix systems)
     try:
         if hasattr(signal, "SIGTERM"):
             loop.add_signal_handler(signal.SIGTERM, signal_handler)
@@ -277,7 +319,6 @@ async def start_server(args: argparse.Namespace) -> None:
             extra={"event": "server_signal_handlers_registered"},
         )
     except NotImplementedError:
-        # Windows doesn't support add_signal_handler
         logger.warning(
             "Signal handlers not available on this platform",
             extra={"event": "server_signal_handlers_unavailable", "platform": sys.platform},
@@ -350,21 +391,8 @@ async def start_server(args: argparse.Namespace) -> None:
             },
         )
 
-        # Create a task for the server so we can wait for either server completion or shutdown signal
-        server_task = asyncio.create_task(session_manager.start_server())
-
-        # Wait for either the server to complete or a shutdown signal
-        done, pending = await asyncio.wait(
-            [server_task, asyncio.create_task(shutdown_event.wait())], return_when=asyncio.FIRST_COMPLETED
-        )
-
-        # Cancel any remaining tasks
-        for task in pending:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        # Start the server (runs indefinitely until _do_shutdown calls os._exit)
+        await session_manager.start_server()
 
     except KeyboardInterrupt:
         logger.info(
@@ -373,6 +401,9 @@ async def start_server(args: argparse.Namespace) -> None:
         )
         if session_manager:
             await session_manager.shutdown()
+            os._exit(0)
+    except asyncio.CancelledError:
+        pass  # Expected during shutdown
     except ServerConfigError as e:
         logger.error(
             "Server configuration error",

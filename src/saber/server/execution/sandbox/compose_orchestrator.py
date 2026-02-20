@@ -1191,7 +1191,7 @@ class ComposeOrchestrator:
             env["EPISODE_ID"] = episode_id
             env["COMPOSE_PROJECT_NAME"] = episode_project_name
 
-        cmd.extend(["down", "--volumes", "--remove-orphans"])
+        cmd.extend(["down", "--volumes", "--remove-orphans", "-t", "1"])
 
         # Determine display name for logging
         if project_name:
@@ -1242,7 +1242,7 @@ class ComposeOrchestrator:
             )
 
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=15)
             except TimeoutError:
                 process.kill()
                 await process.wait()
@@ -1369,9 +1369,9 @@ class ComposeOrchestrator:
 
         try:
             # First, try docker compose down (works for fully created environments)
-            cmd = ["docker", "compose", "-p", project_name, "down", "--volumes", "--remove-orphans"]
+            cmd = ["docker", "compose", "-p", project_name, "down", "--volumes", "--remove-orphans", "-t", "1"]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
 
             logger.info(
                 "Episode compose cleanup completed",
@@ -1718,9 +1718,19 @@ class ComposeOrchestrator:
         )
         try:
             # Stop and remove containers for this project
-            cleanup_command = ["docker", "compose", "-p", project_name, "down", "--volumes", "--remove-orphans"]
+            cleanup_command = [
+                "docker",
+                "compose",
+                "-p",
+                project_name,
+                "down",
+                "--volumes",
+                "--remove-orphans",
+                "-t",
+                "1",
+            ]
 
-            result = subprocess.run(cleanup_command, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cleanup_command, capture_output=True, text=True, timeout=30)
 
             if result.returncode == 0:
                 logger.info(
