@@ -13,6 +13,7 @@ Event types handled:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -241,6 +242,9 @@ class AssistantUsageHandler(SessionEventHandler):
             cache_write_tokens=cache_write_tokens,
         )
 
+        # Update activity timestamp so the solver knows the SDK is making progress
+        context.last_activity_time = time.monotonic()
+
         # Log current turn's tokens and running totals (info level for debugging, will reduce later)
         logger.info(
             "Token usage update",
@@ -272,6 +276,7 @@ class SessionEventContext:
     session_id: str | None = None
     _error: Exception | None = None
     token_usage: TokenUsage = field(default_factory=TokenUsage)
+    last_activity_time: float = field(default_factory=time.monotonic)
 
     def set_error(self, error: Exception) -> None:
         """Set an error condition."""

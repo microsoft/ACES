@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -125,8 +126,21 @@ class SessionTracker:
     watcher_ctx: EventsWatcherContext = field(default_factory=EventsWatcherContext)
 
     # Submission tracking (specific to SABER workflow)
+    # NOTE: `submitted` is set asynchronously by the submit tool callback,
+    # not within the solver's own code path.
     submitted: bool = False
     submit_answer: str | None = None
+
+    @property
+    def is_submitted(self) -> bool:
+        """Whether the agent has submitted an answer.
+
+        Use this property instead of accessing `submitted` directly in
+        control-flow checks.  Mypy cannot narrow through property access,
+        which prevents false "unreachable" errors caused by the field
+        being set asynchronously from a tool callback.
+        """
+        return self.submitted
 
     @property
     def idle_event(self) -> asyncio.Event:
@@ -178,6 +192,20 @@ class SessionTracker:
 
         # Reset for next turn
         self.event_context.idle_event.clear()
+
+    @property
+    def last_activity_time(self) -> float:
+        """Timestamp of the last detected SDK activity (monotonic clock)."""
+        return self.event_context.last_activity_time
+
+    def record_activity(self) -> None:
+        """Record that the SDK performed meaningful work (e.g. tool call).
+
+        Updates the activity timestamp so the solver can distinguish
+        between genuine inactivity and the SDK being busy with its
+        internal agentic loop.
+        """
+        self.event_context.last_activity_time = time.monotonic()
 
     def set_submission(self, answer: str) -> None:
         """Mark submission and store the answer.
@@ -457,6 +485,7 @@ async def setup_tools(
     session_tracker: SessionTracker,
     submit_enabled: bool,
     pre_tool_hook: PreToolHook | None = None,
+    on_activity: Callable[[], None] | None = None,
 ) -> list[Tool]:
     """Set up all tools for the Copilot session.
 
@@ -466,13 +495,15 @@ async def setup_tools(
         session_tracker: Session state tracker for submit detection
         submit_enabled: Whether to include the submit tool
         pre_tool_hook: Optional async callback invoked before each tool execution
+        on_activity: Optional callback invoked after each tool execution to
+            signal that the SDK is making progress
 
     Returns:
         List of Copilot SDK Tool objects
     """
     mcp_tools = await get_saber_mcp_tools(sb)
     mcp_client = get_mcp_client_from_sandbox("saber")
-    copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, mcp_client, tool_tracker, pre_tool_hook)
+    copilot_tools = convert_mcp_tools_to_copilot(mcp_tools, mcp_client, tool_tracker, pre_tool_hook, on_activity)
 
     all_tools: list[Tool] = list(copilot_tools)
     if submit_enabled:
@@ -511,7 +542,7 @@ def copilot_solver(
     submit: bool | None = None,
     transcript_config: dict[str, Any] | None = None,
     streaming: bool = False,
-    timeout: float = 60.0,
+    timeout: float = 180.0,
     provider_type: str | None = None,
     provider_base_url: str | None = None,
     provider_api_key: str | None = None,
@@ -540,7 +571,7 @@ def copilot_solver(
         submit: Whether to enable the submit tool (default: True)
         transcript_config: Optional transcript synchronization config
         streaming: Whether to enable streaming responses (default: False)
-        timeout: Timeout in seconds for each turn (default: 60.0)
+        timeout: Timeout in seconds for each idle wait (default: 180.0)
         provider_type: Override provider type - 'openai', 'azure', or 'anthropic'
         provider_base_url: Override API endpoint URL
         provider_api_key: Override API key
@@ -582,7 +613,14 @@ def copilot_solver(
             async def _pre_tool_hook() -> None:
                 await session_tracker.watcher_ctx.flush()
 
-            all_tools = await setup_tools(sb, tool_tracker, session_tracker, submit_enabled, _pre_tool_hook)
+            all_tools = await setup_tools(
+                sb,
+                tool_tracker,
+                session_tracker,
+                submit_enabled,
+                _pre_tool_hook,
+                on_activity=session_tracker.record_activity,
+            )
             tool_names = [t.name for t in all_tools]
 
             # Build session config
@@ -722,11 +760,27 @@ def copilot_solver(
                 )
 
             # Run agent loop
+            #
+            # Architecture: The Copilot SDK runs its own internal agentic loop
+            # (model call → tool call → model call → ...) before emitting
+            # `session.idle`. This can take much longer than `timeout` seconds
+            # when the agent is actively working.
+            #
+            # The outer loop therefore separates two concerns:
+            # 1. Sending messages (only on idle — not on timeout)
+            # 2. Detecting if the SDK is stuck (consecutive idle-waits with
+            #    no activity → give up)
+            #
+            # On timeout we check `last_activity_time`: if the SDK made
+            # progress (tool calls, model calls) we simply re-enter the wait
+            # without sending a new message or incrementing the turn counter.
             turn = 0
             consecutive_timeouts = 0
 
             while (
-                turn < max_turns and not session_tracker.submitted and consecutive_timeouts < max_consecutive_timeouts
+                turn < max_turns
+                and not session_tracker.is_submitted
+                and consecutive_timeouts < max_consecutive_timeouts
             ):
                 prompt = initial_user_prompt if turn == 0 else continue_prompt
 
@@ -735,24 +789,14 @@ def copilot_solver(
                     extra={"turn": turn + 1, "max_turns": max_turns},
                 )
 
-                # Send message and wait for idle
-                timed_out = False
+                # Send the message once, then wait (possibly multiple times)
+                # for the SDK to go idle.
                 try:
                     await session.send({"prompt": prompt})
-                    await session_tracker.wait_for_idle(timeout=timeout)
-                except TimeoutError:
-                    timed_out = True
-                    consecutive_timeouts += 1
-                    logger.warning(
-                        f"Turn {turn + 1} timed out",
-                        extra={"consecutive_timeouts": consecutive_timeouts},
-                    )
                 except LimitExceededError:
-                    # Tool call limit exceeded - re-raise to let sample runner handle it
                     logger.info("Tool call limit exceeded, stopping agent loop")
                     raise
                 except Exception as e:
-                    # Check for fatal auth/authorization errors - fail fast instead of retrying
                     if is_auth_error(e):
                         logger.error(
                             f"Fatal authentication/authorization error during turn {turn + 1}: {e}",
@@ -761,21 +805,64 @@ def copilot_solver(
                         raise RuntimeError(
                             f"Copilot SDK authentication failed: {e}\n\n"
                             "Possible causes:\n"
-                            "  1. API key authentication is disabled on your Azure resource (use Entra ID instead)\n"
+                            "  1. API key authentication is disabled on your "
+                            "Azure resource (use Entra ID instead)\n"
                             "  2. Invalid or expired API key\n"
                             "  3. Missing or invalid bearer token\n"
                             "  4. Run 'az login' to refresh your Azure credentials"
                         ) from e
+                    raise
 
-                    logger.error(f"Error during turn {turn + 1}: {e}")
-                    timed_out = True
-                    consecutive_timeouts += 1
+                # Wait for idle, re-waiting if the SDK is still making progress
+                idle = False
+                while not idle and consecutive_timeouts < max_consecutive_timeouts:
+                    wait_start_time = time.monotonic()
+                    try:
+                        await session_tracker.wait_for_idle(timeout=timeout)
+                        idle = True
+                        consecutive_timeouts = 0
+                    except TimeoutError:
+                        # Check whether the SDK made progress during this wait
+                        if session_tracker.last_activity_time > wait_start_time:
+                            # SDK is still working — reset counter and re-wait
+                            consecutive_timeouts = 0
+                            elapsed = round(time.monotonic() - session_tracker.last_activity_time, 1)
+                            logger.info(
+                                f"Turn {turn + 1}: idle wait timed out but SDK is still active "
+                                f"({elapsed}s since last activity), re-waiting",
+                            )
+                        else:
+                            consecutive_timeouts += 1
+                            logger.warning(
+                                f"Turn {turn + 1}: idle wait timed out with no SDK activity",
+                                extra={"consecutive_timeouts": consecutive_timeouts},
+                            )
+                    except LimitExceededError:
+                        logger.info("Tool call limit exceeded, stopping agent loop")
+                        raise
+                    except Exception as e:
+                        if is_auth_error(e):
+                            logger.error(
+                                f"Fatal authentication/authorization error during turn {turn + 1}: {e}",
+                                extra={"error_type": "auth_error"},
+                            )
+                            raise RuntimeError(
+                                f"Copilot SDK authentication failed: {e}\n\n"
+                                "Possible causes:\n"
+                                "  1. API key authentication is disabled on your "
+                                "Azure resource (use Entra ID instead)\n"
+                                "  2. Invalid or expired API key\n"
+                                "  3. Missing or invalid bearer token\n"
+                                "  4. Run 'az login' to refresh your Azure credentials"
+                            ) from e
 
-                # Reset timeout counter on success
-                if not timed_out:
-                    consecutive_timeouts = 0
+                        logger.error(f"Error during turn {turn + 1}: {e}")
+                        consecutive_timeouts += 1
 
-                if session_tracker.submitted:
+                    if session_tracker.is_submitted:
+                        break  # type: ignore[unreachable]
+
+                if session_tracker.is_submitted:
                     logger.info("Submit detected; destroying Copilot session")  # type: ignore[unreachable]
                     try:
                         await session.destroy()

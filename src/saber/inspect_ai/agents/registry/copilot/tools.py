@@ -188,11 +188,16 @@ def _clean_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+# Sync callback invoked after each tool execution to signal SDK activity
+OnActivityCallback = Callable[[], None]
+
+
 def mcp_tool_to_copilot_tool(
     inspect_tool: Any,
     mcp_client: Any,
     tracker: ToolCallTracker | None = None,
     pre_tool_hook: PreToolHook | None = None,
+    on_activity: OnActivityCallback | None = None,
 ) -> Tool:
     """Convert an Inspect AI tool or MCP tool to a Copilot SDK Tool.
 
@@ -203,6 +208,9 @@ def mcp_tool_to_copilot_tool(
         inspect_tool: Inspect AI tool function (decorated with @tool) or MCP tool object
         mcp_client: MCP client/server instance (used for context, may be needed for some tools)
         tracker: Optional ToolCallTracker to record calls for transcript visibility
+        pre_tool_hook: Optional async callback invoked before each tool execution
+        on_activity: Optional sync callback invoked after each tool execution to
+            signal that the SDK is making progress
 
     Returns:
         Copilot SDK Tool instance
@@ -456,6 +464,10 @@ def mcp_tool_to_copilot_tool(
                 extra={"tool_name": tool_name, "result_length": len(text_content)},
             )
 
+            # Signal activity so the solver knows the SDK is making progress
+            if on_activity is not None:
+                on_activity()
+
             # Record successful call in tracker for transcript
             if tracker:
                 tracker.record_call(
@@ -511,6 +523,7 @@ def convert_mcp_tools_to_copilot(
     mcp_client: Any,
     tracker: ToolCallTracker | None = None,
     pre_tool_hook: PreToolHook | None = None,
+    on_activity: OnActivityCallback | None = None,
 ) -> list[Tool]:
     """Convert a list of MCP tools to Copilot SDK Tools.
 
@@ -519,6 +532,8 @@ def convert_mcp_tools_to_copilot(
         mcp_client: MCP client instance for executing tool calls
         tracker: Optional ToolCallTracker to record calls for transcript visibility
         pre_tool_hook: Optional async callback invoked before each tool execution
+        on_activity: Optional sync callback invoked after each tool execution to
+            signal that the SDK is making progress
 
     Returns:
         List of Copilot SDK Tool instances
@@ -528,7 +543,7 @@ def convert_mcp_tools_to_copilot(
 
     copilot_tools = []
     for mcp_tool in mcp_tools:
-        copilot_tool = mcp_tool_to_copilot_tool(mcp_tool, mcp_client, tracker, pre_tool_hook)
+        copilot_tool = mcp_tool_to_copilot_tool(mcp_tool, mcp_client, tracker, pre_tool_hook, on_activity)
         copilot_tools.append(copilot_tool)
 
     logger.info(
