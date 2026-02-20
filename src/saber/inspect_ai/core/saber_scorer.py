@@ -29,7 +29,12 @@ from inspect_ai.util import store
 from jinja2 import BaseLoader, Environment, TemplateError
 
 from ...logging_config import LogCategory, get_saber_logger
-from ...models.constants import MetadataKeys, StepEvaluationStrategy
+from ...models.constants import (
+    DEFAULT_SCORE_AGGREGATION,
+    MetadataKeys,
+    ScoreAggregationStrategy,
+    StepEvaluationStrategy,
+)
 from ...models.core import EvalSubmission
 from ...models.rest.evaluation import (
     EpisodeStepsResponse,
@@ -40,6 +45,7 @@ from ...models.rest.evaluation import (
     SubtaskEvaluationCriteriaResponse,
 )
 from ..constants import SandboxTimeouts
+from .score_aggregation import compute_aggregated_score
 from .scoring import get_submission_scorer, get_subtask_scorer, get_subtask_scorer_metadata
 
 logger = get_saber_logger(LogCategory.EVALUATION, __name__)
@@ -408,7 +414,7 @@ def subtask_score_metrics() -> Metric:
         subtask_score_metrics(),  # Per-subtask scores (<task_id>_<subtask_id>_score) - only when subtasks are scored
     ]
 )
-def saber_scorer() -> Scorer:
+def saber_scorer(score_aggregation_override: str | None = None) -> Scorer:
     """
     Client-side evaluation scorer (BREAKING CHANGE).
 
@@ -626,37 +632,41 @@ def saber_scorer() -> Scorer:
 
             # Only include submission max_score if submission is actually being evaluated
             submission_is_evaluated = submission_criteria.strategy and submission_criteria.strategy != "none"
-            if submission_is_evaluated:
-                max_possible = submission_criteria.scoring.get("max_score", 1.0)
-            else:
-                max_possible = 0.0
 
-            if has_scorable_subtasks:
-                # Calculate max possible with weights applied - only for subtasks with strategies
-                weighted_max_possible = sum(
-                    criteria.max_score * criteria.weight
-                    for criteria in subtasks_criteria_list
-                    if criteria.strategy and criteria.strategy != ""
-                )
-                max_possible += weighted_max_possible
-
-            # Normalize scores to be out of 1.0 instead of max_possible
-            normalized_total_score = total_score / max_possible if max_possible > 0 else 0.0
-            submission_max_score = submission_criteria.scoring.get("max_score", 1.0) or 1.0  # Handle 0 or None
-            normalized_submission_score = submission_score / submission_max_score if submission_max_score > 0 else 0.0
-
-            # Calculate normalized subtask score (if applicable)
+            # Compute weighted max possible for subtasks (needed before aggregation)
+            weighted_max_possible_subtasks = 0.0
             if has_scorable_subtasks and subtasks_criteria_list:
                 weighted_max_possible_subtasks = sum(
                     criteria.max_score * criteria.weight
                     for criteria in subtasks_criteria_list
                     if criteria.strategy and criteria.strategy != ""
                 )
-                normalized_subtask_score = (
-                    total_subtask_score / weighted_max_possible_subtasks if weighted_max_possible_subtasks > 0 else 0.0
-                )
-            else:
-                normalized_subtask_score = 0.0
+
+            # === Score Aggregation via strategy ===
+            # Resolve effective strategy: CLI override > YAML config > default
+            yaml_aggregation = getattr(submission_criteria, "score_aggregation", None)
+            if not isinstance(yaml_aggregation, str) or not yaml_aggregation:
+                yaml_aggregation = None
+
+            effective_strategy_str = score_aggregation_override or yaml_aggregation or DEFAULT_SCORE_AGGREGATION.value
+            effective_strategy = ScoreAggregationStrategy(effective_strategy_str)
+
+            sub_max = submission_criteria.scoring.get("max_score", 1.0) if submission_is_evaluated else 0.0
+
+            aggregation_result = compute_aggregated_score(
+                strategy=effective_strategy,
+                submission_score=submission_score,
+                submission_max_score=sub_max,
+                subtask_score=total_subtask_score,
+                subtask_max_score=weighted_max_possible_subtasks if has_scorable_subtasks else 0.0,
+                has_submission=bool(submission_is_evaluated),
+                has_subtasks=has_scorable_subtasks,
+            )
+
+            normalized_total_score = aggregation_result.normalized_total_score
+            normalized_submission_score = aggregation_result.normalized_submission_score
+            normalized_subtask_score = aggregation_result.normalized_subtask_score
+            max_possible = aggregation_result.max_possible
 
             # Step 8: Submit evaluation result
             evaluation_result = EvaluationResultSubmission(
@@ -705,7 +715,7 @@ def saber_scorer() -> Scorer:
                     "total_score": total_score,
                     "submission_score": submission_score,
                     "subtask_score": total_subtask_score,
-                    "scoring_method": "sum",
+                    "scoring_method": effective_strategy.value,
                     "event": "client_eval_complete",
                 },
             )
@@ -734,7 +744,7 @@ def saber_scorer() -> Scorer:
                 "max_possible": max_possible,
                 MetadataKeys.TASK_ID: task_id,
                 "scorer_version": "2.3",
-                "scoring_method": "sum",
+                "scoring_method": effective_strategy.value,
                 "raw_total_score": total_score,
             }
 
@@ -767,7 +777,8 @@ def saber_scorer() -> Scorer:
                 explanation = (
                     f"{submission_explanation}, "
                     f"weighted_subtasks={total_subtask_score:.2f}/{weighted_max_possible_subtasks:.2f}, "
-                    f"sum(submission, subtasks)={total_score:.2f}/{max_possible:.2f} = {normalized_total_score:.3f}"
+                    f"{effective_strategy.value}(submission, subtasks)="
+                    f"{total_score:.2f}/{max_possible:.2f} = {normalized_total_score:.3f}"
                     f"{checkpoint_summary}"
                 )
             else:
@@ -811,7 +822,7 @@ def saber_scorer() -> Scorer:
                             "event": "scorer_coordination_complete",
                         },
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.error(
                         f"Score coordination timeout for {role} - proceeding anyway",
                         extra={
@@ -890,137 +901,6 @@ async def _score_submission(
 
     # Call the scorer - all submission scorers have the same signature
     return await scorer_func(submission_data, criteria, session_manager, state)
-
-
-async def _score_submission_static(
-    submission_data: EpisodeSubmissionResponse, criteria: SubmissionEvaluationCriteriaResponse
-) -> tuple[float, str]:
-    """
-    Static submission scoring (pattern matching).
-
-    Args:
-        submission_data: Episode submission data
-        criteria: Submission evaluation criteria
-
-    Returns:
-        Tuple of (score, explanation) where score is 0.0 or max_score
-    """
-    expected_answers = criteria.criteria.get("expected_answers", [])
-    max_score = criteria.scoring.get("max_score", 1.0)
-
-    # Normalize expected_answers to always be a list (handle string or list input)
-    if isinstance(expected_answers, str):
-        expected_answers = [expected_answers]
-
-    submission_lower = submission_data.submission.lower()
-    for expected in expected_answers:
-        if expected.lower() in submission_lower:
-            logger.info(
-                "Static submission match found",
-                extra={"expected": expected, "score": max_score, "event": "static_submission_match"},
-            )
-            explanation = f"submission={max_score} Expected: {expected_answers}"
-            return max_score, explanation
-
-    logger.info("Static submission no match", extra={"score": 0.0, "event": "static_submission_no_match"})
-    explanation = f"submission=0.0 Expected: {expected_answers}"
-    return 0.0, explanation
-
-
-async def _score_submission_llm(
-    submission_data: EpisodeSubmissionResponse,
-    criteria: SubmissionEvaluationCriteriaResponse,
-    session_manager: Any,
-    state: TaskState,
-) -> tuple[float, str]:
-    """
-    LLM submission scoring with client-side template rendering.
-
-    Args:
-        submission_data: Episode submission data
-        criteria: Submission evaluation criteria
-        session_manager: Client session manager
-        state: Task state
-
-    Returns:
-        Tuple of (score, explanation) where score is 0.0 or max_score based on LLM judgment
-    """
-    # Get template content directly from criteria
-    system_template = criteria.criteria.get("judge_system_template")
-    user_template = criteria.criteria.get("judge_user_template")
-    model_name = criteria.criteria.get("model")
-
-    if not all([system_template, user_template, model_name]):
-        raise RuntimeError("Missing required template content or model in criteria")
-
-    # Type narrowing - we've verified these are not None above
-    assert system_template is not None
-    assert user_template is not None
-    assert model_name is not None
-
-    logger.debug(
-        "Using templates from criteria",
-        extra={"system_len": len(system_template), "user_len": len(user_template), "event": "using_criteria_templates"},
-    )
-
-    # Setup Jinja2
-    env = Environment(loader=TemplateStringLoader({"system": system_template, "user": user_template}))
-
-    # Build context
-    golden_answer = criteria.criteria.get("golden_answer", "")
-    context = {
-        "question": criteria.task_context.description,
-        "golden_answer": golden_answer,
-        "submission": submission_data.submission,
-        "task_id": criteria.task_id,
-        "domain": criteria.task_context.domain,
-    }
-
-    # Render templates
-    system_message = env.get_template("system").render(context)
-    user_message = env.get_template("user").render(context)
-
-    logger.debug(
-        "Rendered submission templates",
-        extra={
-            "system_len": len(system_message),
-            "user_len": len(user_message),
-            "event": "render_submission_templates",
-        },
-    )
-
-    # Execute LLM with separate message list to preserve state.messages from solver
-    # IMPORTANT: Do NOT modify state.messages - it contains the solver's conversation history
-    scorer_messages = [
-        ChatMessageSystem(content=system_message),
-        ChatMessageUser(content=user_message),
-    ]
-
-    model = get_model(model_name)
-    response = await model.generate(scorer_messages)
-    # Note: Not updating state.output to preserve solver's output
-
-    # Parse response (expect CORRECT/INCORRECT)
-    judge_response = response.completion.upper()
-    max_score = criteria.scoring.get("max_score", 1.0)
-
-    # Check for INCORRECT first (since INCORRECT contains CORRECT as substring)
-    if "INCORRECT" in judge_response:
-        logger.info("LLM judge: INCORRECT", extra={"score": 0.0, "event": "llm_submission_incorrect"})
-        explanation = f"submission=0.0 Expected: {golden_answer}" if golden_answer else "submission=0.0"
-        return 0.0, explanation
-    elif "CORRECT" in judge_response:
-        logger.info("LLM judge: CORRECT", extra={"score": max_score, "event": "llm_submission_correct"})
-        explanation = (
-            f"submission={max_score} Expected: {golden_answer}" if golden_answer else f"submission={max_score}"
-        )
-        return max_score, explanation
-    else:
-        logger.info("LLM judge: UNCLEAR", extra={"score": 0.0, "event": "llm_submission_unclear"})
-        explanation = (
-            f"submission=0.0 (unclear) Expected: {golden_answer}" if golden_answer else "submission=0.0 (unclear)"
-        )
-        return 0.0, explanation
 
 
 # ============================================================================

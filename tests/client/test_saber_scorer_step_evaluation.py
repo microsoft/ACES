@@ -383,8 +383,8 @@ class TestSaberScorerStepEvaluation:
             score = await saber_scorer_instance(task_state_with_episode, target)
 
             # Verify score results - submission should be 0.0 (INCORRECT)
-            # With normalization: (0.0 + 0.25) / (1.0 + 0.25) = 0.2
-            assert score.value == 0.2
+            # With average strategy (default): (0.0/1.0 + 0.25/0.25) / 2 = (0.0 + 1.0) / 2 = 0.5
+            assert score.value == 0.5
             assert "submission=" in score.explanation
             assert score.metadata["submission_score"] == 0.0  # INCORRECT submission
 

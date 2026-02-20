@@ -1266,6 +1266,7 @@ class SessionRestAPI:
                         strategy="none",
                         criteria={},
                         scoring={"max_score": 0.0},
+                        score_aggregation=task.scoring_config.get("aggregation"),
                         task_context=task_context,
                     )
 
@@ -1310,6 +1311,7 @@ class SessionRestAPI:
                     strategy=task.submission_evaluation_config.get("strategy", SubmissionEvaluationStrategy.LLM_JUDGE),
                     criteria=criteria_with_content,
                     scoring=task.submission_evaluation_config.get("scoring", {}),
+                    score_aggregation=task.scoring_config.get("aggregation"),
                     task_context=task_context,
                 )
             except HTTPException:

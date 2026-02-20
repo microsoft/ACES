@@ -90,6 +90,34 @@ VALID_STEP_EVAL_STRATEGIES = [strategy.value for strategy in StepEvaluationStrat
 VALID_EVAL_STRATEGIES = VALID_STEP_EVAL_STRATEGIES  # Legacy compatibility
 
 
+class ScoreAggregationStrategy(str, Enum):
+    """Strategy for combining submission and subtask scores into a final score.
+
+    Controls how the normalized_total_score (Score.value) is computed from
+    the submission score and subtask score components.
+    """
+
+    AVERAGE = "average"
+    """Average of independently normalized scores: (norm_sub + norm_step) / 2.
+    Default strategy. Gives equal weight to each evaluation dimension
+    regardless of their max scores."""
+
+    WEIGHTED_SUM = "weighted_sum"
+    """Weighted sum normalized by total max: (raw_sub + raw_step) / (max_sub + max_step).
+    Components with higher max_score contribute proportionally more."""
+
+    MAX = "max"
+    """Maximum of independently normalized scores: max(norm_sub, norm_step).
+    Credits the agent for whichever dimension they performed better on."""
+
+    def __str__(self) -> str:
+        """Return the enum value as string for logging and serialization."""
+        return self.value
+
+
+DEFAULT_SCORE_AGGREGATION = ScoreAggregationStrategy.AVERAGE
+
+
 class MetadataKeys(str, Enum):
     """Standard metadata keys used in sample metadata dictionaries.
 
@@ -214,6 +242,8 @@ __all__ = [
     "EvaluationStrategy",
     "SubmissionEvaluationStrategy",
     "StepEvaluationStrategy",
+    "ScoreAggregationStrategy",
+    "DEFAULT_SCORE_AGGREGATION",
     "EVAL_STRATEGY_STATIC",
     "EVAL_STRATEGY_LLM_JUDGE",
     "EVAL_STRATEGY_TOOL_CALL",

@@ -25,8 +25,6 @@ from saber.inspect_ai.core.saber_scorer import (
     _parse_llm_step_evaluations,
     _score_all_subtasks,
     _score_submission,
-    _score_submission_llm,
-    _score_submission_static,
     _score_subtasks_llm_batch,
     clean_dict,
     per_task_submission_scores,
@@ -35,6 +33,10 @@ from saber.inspect_ai.core.saber_scorer import (
     submission_score,
     subtask_score,
     subtask_score_metrics,
+)
+from saber.inspect_ai.core.scoring.standard_submission import (
+    score_submission_llm,
+    score_submission_static,
 )
 from saber.models.constants import MetadataKeys, StepEvaluationStrategy, SubmissionEvaluationStrategy
 from saber.models.rest.evaluation import (
@@ -610,7 +612,7 @@ class TestSubtaskScoreMetrics:
 
 
 class TestScoreSubmissionStatic:
-    """Test cases for _score_submission_static."""
+    """Test cases for score_submission_static."""
 
     @pytest.mark.asyncio
     async def test_static_submission_exact_match(self, task_context):
@@ -633,7 +635,8 @@ class TestScoreSubmissionStatic:
             task_context=task_context,
         )
 
-        score, explanation = await _score_submission_static(submission_data, criteria)
+        mock_state = Mock(spec=TaskState)
+        score, explanation = await score_submission_static(submission_data, criteria, None, mock_state)
         assert score == 1.0
         assert "42" in explanation
 
@@ -658,7 +661,8 @@ class TestScoreSubmissionStatic:
             task_context=task_context,
         )
 
-        score, explanation = await _score_submission_static(submission_data, criteria)
+        mock_state = Mock(spec=TaskState)
+        score, explanation = await score_submission_static(submission_data, criteria, None, mock_state)
         assert score == 0.0
         assert "Expected" in explanation
 
@@ -683,7 +687,8 @@ class TestScoreSubmissionStatic:
             task_context=task_context,
         )
 
-        score, explanation = await _score_submission_static(submission_data, criteria)
+        mock_state = Mock(spec=TaskState)
+        score, explanation = await score_submission_static(submission_data, criteria, None, mock_state)
         assert score == 1.0
 
     @pytest.mark.asyncio
@@ -707,7 +712,8 @@ class TestScoreSubmissionStatic:
             task_context=task_context,
         )
 
-        score, explanation = await _score_submission_static(submission_data, criteria)
+        mock_state = Mock(spec=TaskState)
+        score, explanation = await score_submission_static(submission_data, criteria, None, mock_state)
         assert score == 1.0
 
     @pytest.mark.asyncio
@@ -731,12 +737,13 @@ class TestScoreSubmissionStatic:
             task_context=task_context,
         )
 
-        score, explanation = await _score_submission_static(submission_data, criteria)
+        mock_state = Mock(spec=TaskState)
+        score, explanation = await score_submission_static(submission_data, criteria, None, mock_state)
         assert score == 1.0
 
 
 class TestScoreSubmissionLLM:
-    """Test cases for _score_submission_llm."""
+    """Test cases for score_submission_llm."""
 
     @pytest.mark.asyncio
     async def test_llm_submission_correct_response(self, task_context):
@@ -775,11 +782,12 @@ class TestScoreSubmissionLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
-            score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
+        with patch("saber.inspect_ai.core.scoring.standard_submission.resolve_template_content", new_callable=AsyncMock, side_effect=lambda _sm, val: val):
+            with patch("saber.inspect_ai.core.scoring.standard_submission.get_model", return_value=mock_model):
+                score, explanation = await score_submission_llm(submission_data, criteria, Mock(), state)
 
         assert score == 1.0
-        assert "Paris" in explanation
+        assert "1.0" in explanation
         assert mock_model.generate.called
 
     @pytest.mark.asyncio
@@ -817,8 +825,9 @@ class TestScoreSubmissionLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
-            score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
+        with patch("saber.inspect_ai.core.scoring.standard_submission.resolve_template_content", new_callable=AsyncMock, side_effect=lambda _sm, val: val):
+            with patch("saber.inspect_ai.core.scoring.standard_submission.get_model", return_value=mock_model):
+                score, explanation = await score_submission_llm(submission_data, criteria, Mock(), state)
 
         assert score == 0.0
         assert "0.0" in explanation
@@ -857,11 +866,12 @@ class TestScoreSubmissionLLM:
         mock_model = AsyncMock()
         mock_model.generate = AsyncMock(return_value=mock_output)
 
-        with patch("saber.inspect_ai.core.saber_scorer.get_model", return_value=mock_model):
-            score, explanation = await _score_submission_llm(submission_data, criteria, Mock(), state)
+        with patch("saber.inspect_ai.core.scoring.standard_submission.resolve_template_content", new_callable=AsyncMock, side_effect=lambda _sm, val: val):
+            with patch("saber.inspect_ai.core.scoring.standard_submission.get_model", return_value=mock_model):
+                score, explanation = await score_submission_llm(submission_data, criteria, Mock(), state)
 
         assert score == 0.0
-        assert "unclear" in explanation
+        assert "unable to parse" in explanation
 
     @pytest.mark.asyncio
     async def test_llm_submission_missing_templates_raises_error(self, task_context):
@@ -887,8 +897,8 @@ class TestScoreSubmissionLLM:
         state = Mock(spec=TaskState)
         state.messages = []
 
-        with pytest.raises(RuntimeError, match="Missing required template"):
-            await _score_submission_llm(submission_data, criteria, Mock(), state)
+        with pytest.raises(RuntimeError, match="LLM submission evaluation requires"):
+            await score_submission_llm(submission_data, criteria, Mock(), state)
 
 
 # ============================================================================

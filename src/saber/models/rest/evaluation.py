@@ -5,7 +5,7 @@ Response models for evaluation retrieval endpoints.
 Follows fail-fast principles with no backwards compatibility.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -21,7 +21,7 @@ class EvaluationResultResponse(BaseModel):
     max_score: float = Field(..., gt=0.0)
     score: float = Field(..., ge=0.0)
     success: bool
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     details: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -136,7 +136,7 @@ class StepEvaluationResult(BaseModel):
 
     # Evaluation metadata
     strategy: str = Field(description="Evaluation strategy used")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     details: dict[str, Any] = Field(default_factory=dict, description="Additional evaluation details")
 
 
@@ -174,9 +174,7 @@ class EvaluationFileUploadResponse(BaseModel):
     session_id: str = Field(description="Session ID")
     filename: str = Field(description="Uploaded filename")
     file_size: int = Field(description="File size in bytes")
-    upload_timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Upload timestamp"
-    )
+    upload_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Upload timestamp")
 
 
 # ============================================================================
@@ -231,6 +229,7 @@ class SubmissionEvaluationCriteriaResponse(BaseModel):
         description="Criteria dict with template CONTENT, golden_answer, model - everything needed for evaluation"
     )
     scoring: dict[str, float] = Field(description="Scoring configuration (e.g., max_score)")
+    score_aggregation: str | None = Field(None, description="Score aggregation strategy (average, weighted_sum, max)")
     task_context: TaskEvaluationContext = Field(description="Task context for evaluation")
 
 

@@ -158,17 +158,20 @@ async def score_submission_llm(
         },
     )
 
-    # Execute LLM
-    state.messages.clear()
-    state.messages.append(ChatMessageSystem(content=system_message))
-    state.messages.append(ChatMessageUser(content=user_message))
+    # Execute LLM with separate message list to preserve state.messages from solver
+    # IMPORTANT: Do NOT modify state.messages - it contains the solver's conversation history
+    # which gets written to the eval file as the sample's messages field
+    scorer_messages = [
+        ChatMessageSystem(content=system_message),
+        ChatMessageUser(content=user_message),
+    ]
 
     model = get_model(model_name)
-    response = await model.generate(state.messages)
-    state.output = response  # Update state with LLM response
+    response = await model.generate(scorer_messages)
+    # Note: Not updating state.output to preserve solver's output
 
     # Parse response (expect CORRECT/INCORRECT)
-    judge_response = state.output.completion.upper()
+    judge_response = response.completion.upper()
     max_score = criteria.scoring.get("max_score", 1.0)
 
     # Check for INCORRECT first (since INCORRECT contains CORRECT as substring)

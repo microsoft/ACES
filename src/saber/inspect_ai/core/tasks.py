@@ -28,7 +28,7 @@ from inspect_ai._util.error import PrerequisiteError
 from ...client.api.rest_client import SABERRestClient
 from ...logging_config import LogCategory, LoggingConfig, get_saber_logger, init_logging
 from ...models import BenchmarkInfo
-from ...models.constants import MetadataKeys
+from ...models.constants import MetadataKeys, ScoreAggregationStrategy
 from ..agents.agent_resolver import resolve_agent_implementation
 from ..agents.role_config_processor import all_roles_have_models, process_role_configuration
 from ..agents.solver_factory import create_saber_solver
@@ -191,6 +191,7 @@ def create_domain_task(
         roles_file: str | None = None,
         skills_dir: str | None = None,
         agent_persona: str | None = None,
+        score_aggregation: str | None = None,
         **kwargs: Any,
     ) -> Task:
         """Task callable invoked by Inspect AI with CLI parameters.
@@ -232,6 +233,9 @@ def create_domain_task(
             agent_persona: Path to a custom agent YAML file that defines the agent persona.
                 The file should contain agent_name, system_prompt, and optionally tools.
                 Only applicable for 'copilot' agent type.
+            score_aggregation: Score aggregation strategy override. Valid values:
+                'average' (default), 'weighted_sum', 'max'.
+                Overrides any YAML-configured scoring_config.aggregation.
             **kwargs: Additional parameters passed through (may include role overrides like red_model=...)
 
         Returns:
@@ -244,6 +248,16 @@ def create_domain_task(
         # This ensures the SaberLogger formatters are active and extra= fields are visible
         # Log files go to logs/{domain}/client-logs/ with console output enabled
         _initialize_inspect_logging(domain_slug, domains_root, log_level)
+
+        # Validate score_aggregation if provided
+        if score_aggregation is not None:
+            try:
+                ScoreAggregationStrategy(score_aggregation)
+            except ValueError as exc:
+                valid = [s.value for s in ScoreAggregationStrategy]
+                raise PrerequisiteError(
+                    f"Invalid score_aggregation '{score_aggregation}'. Valid values: {valid}"
+                ) from exc
 
         # Validate mutually exclusive build options
         # Note: rebuild is str (filter prefix) or None; rebuild_all is bool for rebuild-all
@@ -295,6 +309,7 @@ def create_domain_task(
                 role_config_obj,
                 skills_dir,
                 agent_persona,
+                score_aggregation=score_aggregation,
             )
         except Exception as e:
             # Ensure we have a clean error message
@@ -321,6 +336,7 @@ async def _start_and_load_tasks(
     role_config: Any | None = None,
     skills_dir: str | None = None,
     agent_persona: str | None = None,
+    score_aggregation: str | None = None,
     **kwargs: Any,
 ) -> Task:
     """Start SABER domain and load tasks as dataset.
@@ -655,7 +671,7 @@ async def _start_and_load_tasks(
                 },
             ),
             solver=saber_solver,
-            scorer=saber_scorer(),  # Client-side evaluation
+            scorer=saber_scorer(score_aggregation_override=score_aggregation),  # Client-side evaluation
             # SABER defaults for evaluation behavior
             # These can be overridden via inspect eval CLI flags
             epochs=1,  # Run each sample once by default (use --epochs N to override)

@@ -38,6 +38,7 @@ class Task:
         initial_files: dict[str, str] | None = None,
         is_template: bool = False,
         dependency_template: str | None = None,
+        scoring_config: dict[str, Any] | None = None,
     ):
         """
         Initialize a task.
@@ -148,6 +149,7 @@ class Task:
         self.initial_files = initial_files or {}
         self.is_template = is_template
         self.dependency_template = dependency_template
+        self.scoring_config = scoring_config or {}
 
         # Create lookup map for efficient subtask access
         self._subtask_map = {st.subtask_id: st for st in self.subtasks}
@@ -252,6 +254,7 @@ class Task:
             "benchmark_config": self.benchmark_config,
             "submission_evaluation_config": self.submission_evaluation_config,
             "step_evaluation_config": self.step_evaluation_config,
+            "scoring_config": self.scoring_config or None,
             "depends_on_task_id": self.depends_on_task_id,
             "initial_files": self.initial_files,
             "subtask_count": len(self.subtasks),

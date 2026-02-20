@@ -26,6 +26,7 @@ from .benchmark_task import (
 
 # Constants and enumerations
 from .constants import (
+    DEFAULT_SCORE_AGGREGATION,
     EVAL_STRATEGY_LLM_JUDGE,
     EVAL_STRATEGY_STATIC,
     EVAL_STRATEGY_TOOL_CALL,
@@ -35,6 +36,7 @@ from .constants import (
     EvaluationStrategy,
     MessageRole,
     MetadataKeys,
+    ScoreAggregationStrategy,
     StepEvaluationStrategy,
     SubmissionEvaluationStrategy,
 )
@@ -119,6 +121,8 @@ __all__ = [
     "EvaluationStrategy",
     "SubmissionEvaluationStrategy",
     "StepEvaluationStrategy",
+    "ScoreAggregationStrategy",
+    "DEFAULT_SCORE_AGGREGATION",
     "MessageRole",
     "EVAL_STRATEGY_STATIC",
     "EVAL_STRATEGY_LLM_JUDGE",

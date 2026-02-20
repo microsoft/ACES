@@ -44,6 +44,8 @@ FIELD_MAX_STEPS = "max_steps"
 FIELD_EPISODE_ATTEMPTS = "episode_attempts"
 FIELD_ALLOWED_EXECUTORS = "allowed_executors"
 FIELD_TRANSCRIPT_CONFIG = "transcript_config"
+FIELD_SCORING_CONFIG = "scoring_config"
+FIELD_AGGREGATION = "aggregation"
 
 # Task field names
 FIELD_TASK_ID = "task_id"
@@ -897,6 +899,7 @@ class BenchmarkConfigLoader:
             FIELD_BENCHMARK_CONFIG,
             FIELD_DEPENDENCY_CONFIG,
             FIELD_PROMPTS,
+            FIELD_SCORING_CONFIG,
         ]
         for section_name in global_defaults_data:
             if section_name not in valid_sections:
@@ -1287,6 +1290,23 @@ class BenchmarkConfigLoader:
                 )
                 raise InvalidTaskDefinitionException(message)
 
+            # Merge scoring_config from global defaults and task-level
+            task_scoring_config = task_data.get(FIELD_SCORING_CONFIG, {})
+            global_scoring_defaults = self.global_defaults.get(FIELD_SCORING_CONFIG, {})
+            scoring_config = deep_merge_dicts(global_scoring_defaults, task_scoring_config)
+
+            # Validate aggregation strategy if provided
+            if FIELD_AGGREGATION in scoring_config:
+                agg_value = scoring_config[FIELD_AGGREGATION]
+                from ...models.constants import ScoreAggregationStrategy
+
+                valid_strategies = [s.value for s in ScoreAggregationStrategy]
+                if agg_value not in valid_strategies:
+                    raise InvalidTaskDefinitionException(
+                        f"Task '{task_id}': Invalid score aggregation strategy '{agg_value}'. "
+                        f"Valid values: {valid_strategies}"
+                    )
+
             # NEW FORMAT ONLY: Load submission_evaluation_config and step_evaluation_config
             # NO backward compatibility with old evaluation_config
             submission_evaluation_config = task_data.get(FIELD_SUBMISSION_EVALUATION_CONFIG)
@@ -1388,6 +1408,7 @@ class BenchmarkConfigLoader:
                 initial_files=initial_files,
                 is_template=is_template,
                 dependency_template=dependency_template,
+                scoring_config=scoring_config if scoring_config else None,
             )
 
             log_operation_success(

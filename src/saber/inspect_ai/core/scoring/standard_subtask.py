@@ -479,13 +479,16 @@ async def score_subtask_llm(
         system_message = env.get_template("system").render(context)
         user_message = env.get_template("user").render(context)
 
-        # Execute LLM
-        state.messages.clear()
-        state.messages.append(ChatMessageSystem(content=system_message))
-        state.messages.append(ChatMessageUser(content=user_message))
+        # Execute LLM with separate message list to preserve state.messages from solver
+        # IMPORTANT: Do NOT modify state.messages - it contains the solver's conversation history
+        # which gets written to the eval file as the sample's messages field
+        scorer_messages = [
+            ChatMessageSystem(content=system_message),
+            ChatMessageUser(content=user_message),
+        ]
 
         model = get_model(model_name)
-        response = await model.generate(state.messages)
+        response = await model.generate(scorer_messages)
 
         # Parse response for step evaluations (JSON format expected)
         import json
