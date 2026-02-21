@@ -206,6 +206,102 @@ def start(
         ctx.exit(130)
 
 
+def _cleanup_docker_resources(dry_run: bool) -> None:
+    """Stop and remove orphaned SABER Docker containers and networks.
+
+    Finds all Docker containers whose names start with 'saber-' and
+    all Docker networks whose names start with 'saber-episode-',
+    then stops, removes, and cleans them up.
+
+    Args:
+        dry_run: If True, only report what would be done without executing.
+    """
+    import subprocess
+
+    # --- Containers ---
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", "name=saber-", "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        lines = [line.strip() for line in result.stdout.strip().splitlines() if line.strip()]
+    except Exception as e:
+        click.echo(f"  ⚠ Could not list Docker containers: {e}", err=True)
+        lines = []
+
+    if lines:
+        click.echo(f"\nFound {len(lines)} orphaned SABER container(s):")
+        container_ids: list[str] = []
+        for line in lines:
+            parts = line.split("\t", 2)
+            cid, name = parts[0], parts[1] if len(parts) > 1 else parts[0]
+            status = parts[2] if len(parts) > 2 else ""
+            click.echo(f"  {name}  ({status})")
+            container_ids.append(cid)
+
+        if dry_run:
+            click.echo("  Would stop and remove these containers.")
+        else:
+            # Stop running containers (ignore errors for already-stopped ones)
+            try:
+                subprocess.run(
+                    ["docker", "stop", *container_ids],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception:
+                pass  # best-effort
+
+            # Remove all containers
+            try:
+                subprocess.run(
+                    ["docker", "rm", "-f", *container_ids],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                click.echo(f"  ✓ Removed {len(container_ids)} container(s)")
+            except Exception as e:
+                click.echo(f"  ⚠ Error removing containers: {e}", err=True)
+    else:
+        click.echo("\nNo orphaned SABER containers found.")
+
+    # --- Networks ---
+    try:
+        result = subprocess.run(
+            ["docker", "network", "ls", "--filter", "name=saber-episode-", "--format", "{{.Name}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        networks = [n.strip() for n in result.stdout.strip().splitlines() if n.strip()]
+    except Exception as e:
+        click.echo(f"  ⚠ Could not list Docker networks: {e}", err=True)
+        networks = []
+
+    if networks:
+        click.echo(f"Found {len(networks)} orphaned SABER network(s):")
+        for net in networks:
+            click.echo(f"  {net}")
+        if dry_run:
+            click.echo("  Would remove these networks.")
+        else:
+            for net in networks:
+                try:
+                    subprocess.run(
+                        ["docker", "network", "rm", net],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,
+                    )
+                except Exception:
+                    pass  # best-effort
+            click.echo(f"  ✓ Removed {len(networks)} network(s)")
+
+
 @cli.command()
 @click.argument("domain", required=False)
 @click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
@@ -215,6 +311,9 @@ def stop(ctx: click.Context, domain: str | None, dry_run: bool) -> None:
 
     If DOMAIN is specified, stops that domain.
     If DOMAIN is omitted, stops all running SABER domains.
+
+    After stopping services and processes, any orphaned SABER Docker
+    containers and networks are also cleaned up.
     """
     import os
     import signal
@@ -248,21 +347,22 @@ def stop(ctx: click.Context, domain: str | None, dry_run: bool) -> None:
                             except OSError as e:
                                 click.echo(f"  ✗ Failed to stop PID {pid}: {e}", err=True)
                         click.echo("✓ All SABER processes stopped!")
-                    return
                 else:
                     click.echo("No running SABER domains found.")
-                    return
+            else:
+                click.echo(f"Stopping {len(running_domains)} running domain(s)...")
+                for domain_name in running_domains:
+                    if dry_run:
+                        click.echo(f"  Would stop: {domain_name}")
+                    else:
+                        orchestrator.stop_domain(domain_name, dry_run=False)
+                        click.echo(f"  ✓ Stopped {domain_name}")
 
-            click.echo(f"Stopping {len(running_domains)} running domain(s)...")
-            for domain_name in running_domains:
-                if dry_run:
-                    click.echo(f"  Would stop: {domain_name}")
-                else:
-                    orchestrator.stop_domain(domain_name, dry_run=False)
-                    click.echo(f"  ✓ Stopped {domain_name}")
+                if not dry_run:
+                    click.echo("✓ All domains stopped successfully!")
 
-            if not dry_run:
-                click.echo("✓ All domains stopped successfully!")
+        # Always clean up orphaned Docker containers and networks as a final step
+        _cleanup_docker_resources(dry_run)
 
     except DomainError as e:
         click.echo(f"Error: {e}", err=True)

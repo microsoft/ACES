@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
@@ -343,8 +344,55 @@ class CopilotClientWrapper:
         env = self._setup_fnm_path(env)
         opts["env"] = env
 
+        # Prefer explicitly configured CLI path, then environment/path resolution.
+        # This allows SABER to use globally installed runtime builds (e.g. `cpd`)
+        # instead of always falling back to the SDK bundled binary.
+        if not opts.get("cli_path"):
+            resolved_cli_path = self._resolve_cli_path(env)
+            if resolved_cli_path:
+                opts["cli_path"] = resolved_cli_path
+                logger.info(
+                    "Using Copilot CLI resolved from environment/PATH",
+                    extra={"cli_path": resolved_cli_path},
+                )
+            else:
+                logger.debug("No CLI found on PATH; SDK may fall back to bundled CLI")
+
         self._client = CopilotClient(opts)
         self._started = False
+
+    def _resolve_cli_path(self, env: dict[str, str]) -> str | None:
+        """Resolve Copilot CLI executable path.
+
+        Resolution order:
+        1. COPILOT_CLI_PATH environment variable (if it exists on disk)
+        2. `copilot-dev` from PATH (runtime CLI)
+        3. `copilot` from PATH (official Copilot CLI)
+        4. `cpd` from PATH (last resort; different runtime entrypoint)
+
+        Args:
+            env: Environment dictionary that will be passed to Copilot SDK
+
+        Returns:
+            Absolute path to executable if found, else None
+        """
+        env_cli_path = env.get("COPILOT_CLI_PATH")
+        if env_cli_path:
+            expanded = os.path.expanduser(env_cli_path)
+            if os.path.exists(expanded):
+                return expanded
+            logger.warning(
+                "COPILOT_CLI_PATH is set but does not exist",
+                extra={"cli_path": expanded},
+            )
+
+        search_path = env.get("PATH")
+        for candidate in ("copilot-dev", "copilot", "cpd"):
+            resolved = shutil.which(candidate, path=search_path)
+            if resolved:
+                return resolved
+
+        return None
 
     def _setup_fnm_path(self, env: dict[str, str]) -> dict[str, str]:
         """Set up fnm path for Node.js access."""
