@@ -1,0 +1,118 @@
+@startuml module-dependencies
+!theme plain
+title SABER Internal Module Dependencies
+caption Directed arrows show import/dependency relationships between saber packages.
+
+skinparam componentStyle rectangle
+skinparam packageStyle frame
+
+' ── Central orchestrator ──────────────────────────────────────────
+[task.py\ncreate_task()] as task <<orchestrator>>
+
+' ── Config package ────────────────────────────────────────────────
+package "config/" {
+    [loader.py\nConfigLoader\ndeep_merge()] as loader
+    [models.py\nTaskConfig\nScorerConfig\nToolConfig\n...] as models
+    [converter.py\ntasks_to_samples()\n_task_to_sample()] as converter
+}
+
+' ── Scoring package ───────────────────────────────────────────────
+package "scoring/" {
+    [factory.py\nScorerFactory\ncreate_overall_scorer()] as scorer_factory
+    [strategies.py\n6 strategies\nSaberScoringStrategy] as strategies
+    [context.py\nScoringContext\nToolStep] as scoring_ctx
+    [registry.py\nScoringStrategyRegistry] as scoring_reg
+    [aggregation.py\ncompute_aggregated_score\nbuild_scorer_summary] as aggregation
+    [templates.py\nTemplateRenderer] as templates
+    [trajectory.py\nextract_tool_steps()] as trajectory
+    [batch.py\nBatch LLM scoring] as batch
+    [parsing.py\nparse_judge_response()] as parsing
+}
+
+' ── Agents package ────────────────────────────────────────────────
+package "agents/" {
+    [__init__.py\nAgentRegistry] as agent_reg
+    [resolver.py\nresolve_agent()] as agent_resolver
+    [solver_factory.py\ncreate_saber_solver()] as solver_factory
+    [models.py\nAgentCapabilities\nAgentPromptKwargs] as agent_models
+    [bridge_utils.py\nbuild_system_prompt()\nbuild_bridged_tools()] as bridge
+}
+
+' ── Tools package ─────────────────────────────────────────────────
+package "tools/" {
+    [registry.py\nToolRegistry\nResolvedTools] as tool_reg
+    [security.py\nToolSecurityConfig\nCommandSecurityValidator\nbuild_tool_approval()] as security
+    [inspectors.py\nToolInspectorRegistry] as inspectors
+}
+
+' ── Environments package ──────────────────────────────────────────
+package "environments/" {
+    [__init__.py\nresolve_sandbox_spec()] as env_init
+    [images.py\nbuild_domain_images()\nRebuildMode] as images
+    [preflight.py\nvalidate_domain()] as preflight
+}
+
+[sandbox.py\nSaberSandboxEnvironment] as sandbox
+
+[prompts/renderer.py\nPromptRenderer] as prompt_renderer
+
+' ── task.py dependencies (the hub) ────────────────────────────────
+task --> loader
+task --> converter
+task --> models
+task --> scorer_factory
+task --> tool_reg
+task --> security
+task --> agent_resolver
+task --> solver_factory
+task --> env_init
+task --> prompt_renderer
+task --> scoring_reg
+task --> preflight
+
+' ── config internal ───────────────────────────────────────────────
+loader --> models : validates dicts into
+converter --> models : reads TaskConfig
+converter --> prompt_renderer : renders prompts
+
+' ── scoring internal ──────────────────────────────────────────────
+scorer_factory --> scoring_reg : gets strategies
+scorer_factory --> scoring_ctx : builds context
+scorer_factory --> aggregation
+scorer_factory --> templates
+scorer_factory --> trajectory : extract_tool_steps
+scorer_factory --> batch
+scoring_reg --> strategies : registers defaults
+strategies --> scoring_ctx : reads ctx
+strategies --> templates
+strategies --> parsing
+batch --> templates
+batch --> parsing
+
+' ── agents internal ───────────────────────────────────────────────
+agent_resolver --> agent_reg
+solver_factory --> agent_models
+solver_factory --> tool_reg : resolves per-sample
+solver_factory --> models : reads ToolConfig
+
+' ── tools internal ────────────────────────────────────────────────
+tool_reg --> security : collects ToolSecurityConfig
+security --> inspectors
+
+' ── environments internal ─────────────────────────────────────────
+env_init --> sandbox : configures class vars
+env_init --> images
+sandbox --> images : preflight build
+
+' ── cross-package ─────────────────────────────────────────────────
+models --> security : ToolSecurityConfig import
+scoring_ctx --> models : ScorerConfig reference
+
+note right of task
+  task.py is the **single orchestrator**.
+  Every other module is imported and
+  wired here. Domains only call
+  create_task().
+end note
+
+@enduml

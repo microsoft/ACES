@@ -1,0 +1,94 @@
+@startuml create-task-sequence
+!theme plain
+title create_task() — From Domain Entry to inspect_ai Task
+caption Numbered steps match task.py code. This is the single entry point all domains call.
+
+participant "Domain @task\n(e.g. excytin.py)" as domain
+participant "create_task()" as ct
+participant "ConfigLoader" as loader
+participant "PromptRenderer" as renderer
+participant "tasks_to_samples()" as converter
+participant "ScorerFactory" as sf
+participant "ToolRegistry" as tr
+participant "resolve_agent()" as ar
+participant "create_saber_solver()" as ss
+participant "resolve_sandbox_spec()" as rs
+participant "build_tool_approval()" as ba
+
+domain -> ct : create_task(domain_root, task_filter, agent, ...)
+
+activate ct
+
+note over ct : Step 0: Configure logging
+ct -> ct : configure_logging()
+
+note over ct : Step 0b: Optional preflight
+ct -> ct : validate_domain() [if run_preflight]
+
+note over ct : Step 1: Load YAML task configs
+ct -> loader : ConfigLoader(config_root)
+activate loader
+loader -> loader : _load_global_defaults()
+loader -> loader : _discover_task_files()
+loop for each task YAML
+    loader -> loader : _load_shared_context(task_dir)
+    loader -> loader : merge_task_configs(global, shared, task)
+    loader -> loader : TaskConfig(**merged)
+end
+loader --> ct : list[TaskConfig]
+deactivate loader
+
+note over ct : Step 2: Render prompts → Samples
+ct -> renderer : PromptRenderer(prompts_dir)
+ct -> converter : tasks_to_samples(tasks, domain_root, renderer)
+activate converter
+loop for each TaskConfig
+    converter -> renderer : render instruction, assistant, submit, continue
+    converter -> converter : _task_to_sample() → Sample
+end
+converter --> ct : list[Sample]
+deactivate converter
+
+note over ct : Step 3: Build scorers
+ct -> sf : ScorerFactory(domain_root, registry)
+activate sf
+sf -> sf : create_overall_scorer(tasks)
+note right of sf
+  **saber_overall** runs FIRST.
+  Computes aggregate independently
+  and caches LLM results in
+  state.metadata.
+end note
+loop for each TaskConfig
+    sf -> sf : create_scorers(task)
+end
+sf --> ct : [saber_overall, ...per-task scorers]
+deactivate sf
+
+note over ct : Step 4: Register domain tools
+ct -> tr : ToolRegistry()
+opt extra_tools provided
+    loop for each (name, factory)
+        ct -> tr : register(name, factory)
+    end
+end
+
+note over ct : Step 5-6: Resolve agent → solver
+ct -> ar : resolve_agent(agent_name)
+ar --> ct : agent_factory
+ct -> ss : create_saber_solver(agent_name, factory, tool_registry)
+ss --> ct : Solver
+
+note over ct : Step 7: Resolve sandbox
+ct -> rs : resolve_sandbox_spec(domain_root, sandbox_compose, ...)
+rs --> ct : ("saber", compose_path)
+
+note over ct : Step 8: Build approval policies
+ct -> ba : build_tool_approval(all_security_configs)
+ba --> ct : list[ApprovalPolicy] | None
+
+ct --> domain : Task(\n  dataset=samples,\n  solver=solver,\n  scorer=scorers,\n  sandbox=("saber", ...),\n  approval=...,\n  tool_call_limit=max(max_steps)\n)
+
+deactivate ct
+
+@enduml

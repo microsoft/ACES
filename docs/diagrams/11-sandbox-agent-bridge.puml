@@ -1,0 +1,94 @@
+@startuml sandbox-agent-bridge
+!theme plain
+title Sandbox Agent Bridge — How External Agents Interact with Sandbox
+caption copilot and claude_code agents use sandbox_agent_bridge to run inside Docker containers.
+
+participant "saber_agent_solver" as solver
+participant "Agent create_with_prompts()" as factory
+participant "bridge_utils.py" as bridge
+participant "sandbox_agent_bridge\n(inspect_ai)" as sab
+participant "Docker Sandbox" as docker
+participant "Agent CLI\n(copilot/claude)" as agent_cli
+participant "MCP Server\n(in sandbox)" as mcp
+
+== Solver Setup ==
+
+solver -> factory : create_with_prompts(\n  instruction_prompt,\n  assistant_prompt,\n  continue_prompt,\n  tools\n)
+activate factory
+
+factory -> bridge : build_system_prompt(\n  instruction, assistant\n)
+bridge --> factory : combined system prompt
+
+factory -> bridge : build_bridged_tools(tools)
+bridge --> factory : [BridgedToolsSpec(\n  name="saber_tools",\n  tools=[...]\n)]
+
+factory -> bridge : validate_model_availability()
+note right of bridge
+  Pre-flight check: calls model.api.generate()
+  with a ping message. Fails fast on wrong
+  model name / bad API key instead of waiting
+  for sandbox timeout.
+end note
+bridge --> factory : OK (or ModelValidationError)
+
+factory -> bridge : create_tool_call_limit_filter()
+bridge --> factory : GenerateFilter
+
+factory --> solver : Solver (wrapping sandbox_agent_bridge)
+deactivate factory
+
+== Execution ==
+
+solver -> sab : sandbox_agent_bridge(\n  command=["claude"/"copilot"],\n  tools=bridged_tools,\n  filter=tool_call_limit_filter\n)
+activate sab
+
+sab -> docker : Start agent CLI process
+docker -> agent_cli : Launch with args:\n--mcp-config, --allowed-tools, etc.
+activate agent_cli
+
+sab -> docker : Start MCP server\n(serves bridged SABER tools)
+docker -> mcp : MCP server listening
+activate mcp
+
+note over agent_cli, mcp
+  Agent CLI connects to MCP server
+  running inside the sandbox. SABER
+  tools are exposed as MCP tools.
+end note
+
+loop Agent reasoning loop
+    agent_cli -> mcp : Call SABER tool\n(e.g. bash, python)
+    mcp -> sab : Forward to inspect_ai Tool
+    sab -> sab : Tool executes in sandbox
+    sab -> mcp : Tool result
+    mcp -> agent_cli : Tool output
+
+    sab -> sab : GenerateFilter:\nCount new tool_calls\nrecord_tool_call_usage(delta)\ncheck_tool_call_limit()
+end
+
+agent_cli --> sab : Final response
+deactivate agent_cli
+deactivate mcp
+
+sab --> solver : TaskState with agent output
+deactivate sab
+
+== Prompt Flow ==
+
+note over solver
+  **Prompt injection path:**
+  state.metadata["instruction_prompt"] → build_system_prompt()
+  state.metadata["assistant_prompt"]   → build_system_prompt()
+  state.messages (user messages)       → build_user_prompt()
+  state.metadata["continue_prompt"]    → (used on retry)
+end note
+
+note over sab
+  **Bridge agents vs React:**
+  • react: tools passed directly, inspect_ai manages loop
+  • copilot/claude_code: tools bridged via MCP,
+    agent CLI manages its own reasoning loop
+  • All three support tool_call_limit via different paths
+end note
+
+@enduml

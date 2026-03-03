@@ -1,420 +1,270 @@
-# SABER
+# saber
 
 **Security Agent Benchmarking and Evaluation Research**
 
-A distributed system for benchmarking agentic workflows in cybersecurity domains using **inspect_ai** integration with **Model Context Protocol (MCP)**.
+A thin Python library (~5,200 LOC) that lets you define cybersecurity benchmarks using YAML files and run them through inspect_ai's native evaluation engine. No server, no client, no REST API.
 
-## Overview
+```
+YAML task configs  →  saber  →  inspect_ai Task  →  inspect eval
+     (data)          (library)     (native engine)      (CLI)
+```
 
-SABER provides a modern architecture for evaluating security agents through a dual-protocol client-server design:
+## What saber does
 
-- **Client Side**: `inspect_ai` integration with async orchestration, agent management, and MCP client for tool access
-- **Server Side**: FastAPI REST API + FastMCP server managing sessions, benchmarks, and Docker-sandboxed execution
+1. **Loads YAML** — task definitions with 3-level config inheritance (global → shared → task)
+2. **Renders prompts** — Jinja2 templates → agent instructions, judge prompts
+3. **Creates scorers** — atomic, factory-created scorers with unified `ScoringContext`
+4. **Provides tools** — `@tool`-decorated wrappers (SQL, KQL, etc.) around `sandbox().exec()`
+5. **Switches agents** — CLI-driven agent selection via `-T agent=<name>`
+6. **Manages environments** — Docker Compose lifecycle for permanent services
+
+## What saber does NOT do
+
+- Run a server
+- Manage sessions or episodes
+- Orchestrate Docker Compose directly (inspect_ai does this)
+- Implement its own agent loop (wraps `react()` and other agents)
+- Implement its own MCP server (uses `@tool` directly)
 
 ## Quick Start
 
 ### Prerequisites
-- Python 3.11-3.12 (managed by uv via `.python-version`)
-- Docker
-- Git
+
+- Python 3.11–3.12
+- Docker (with Docker Compose v2)
+- uv package manager
 
 ### Installation
 
-1. **Install uv package manager:**
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-
-2. **Clone and install:**
-   ```bash
-   git clone <repository-url>
-   cd saber
-   uv sync --all-extras
-   ```
-
-3. **Verify installation:**
-   ```bash
-   uv run python -c "from saber.inspect_ai import SABERSandboxEnvironment; print('✅ SABER installed')"
-   ```
-
-4. **Configure environment variables:**
-   ```bash
-   # Copy the template
-   cp .env.template .env
-   
-   # Edit .env and add your Azure OpenAI credentials
-   # Required variables:
-   #   AZUREAI_OPENAI_API_KEY=your-api-key-here
-   #   AZUREAI_OPENAI_BASE_URL=https://your-resource.openai.azure.com
-   #   AZUREAI_OPENAI_API_VERSION=2024-12-01-preview
-   ```
-   
-   **Note**: The `.env` file is gitignored and will never be committed. Domain-specific variables (ports, image names, etc.) are configured via task parameters (`-T` flags) and don't require environment variables.
-
-### Running Domains
-
-All domain operations use `inspect eval` commands with task parameters (`-T`) to control SABER behavior. The SABER server is automatically managed - started on first evaluation and kept running for faster subsequent runs.
-
-**Available domains** in `domains/`:
-- `excytin_demo` - Database forensics and incident response demonstrations
-
-**List available tasks:**
 ```bash
+uv sync --all-extras
+
+# Verify
+uv run python -c "from saber.task import create_task; print('✅ saber installed')"
+```
+
+### Running an Evaluation
+
+```bash
+# List available tasks
 uv run inspect list tasks
+
+# Run with default react agent
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1
+
+# Filter tasks
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T task_filter="incident_5*"
+
+# Use copilot agent
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot
+
+# Use claude_code agent
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=claude_code
 ```
 
-**Basic evaluation:**
-```bash
-# Evaluate the excytin_demo domain (server auto-starts and stays running after)
-uv run inspect eval domains/excytin_demo --model openai/gpt-4
+## Package Structure
+
+```
+src/saber/
+├── task.py                         # create_task() factory
+├── sandbox.py                      # SaberSandboxEnvironment (DockerSandboxEnvironment subclass)
+├── hooks.py                        # SetupHook protocol for pre-eval domain setup
+├── logging.py                      # configure_logging() for saber.* loggers
+├── agents/
+│   ├── __init__.py                 # AgentRegistry + auto-discovery
+│   ├── models.py                   # AgentPromptKwargs, AgentCapabilities
+│   ├── resolver.py                 # Agent name → factory lookup
+│   ├── solver_factory.py           # Agent factory → Solver bridge
+│   ├── bridge_utils.py             # Shared sandbox_agent_bridge utilities
+│   └── registry/                   # Convention-based agent modules
+│       ├── react.py                # Default react agent
+│       ├── copilot/                # GitHub Copilot SDK agent
+│       └── claude_code/            # Claude Code CLI agent
+├── config/
+│   ├── models.py                   # Pydantic v2 models (all frozen)
+│   ├── loader.py                   # YAML loading + deep merge + inheritance
+│   └── converter.py                # TaskConfig → inspect_ai Sample
+├── scoring/
+│   ├── factory.py                  # ScorerFactory — YAML → @scorer list
+│   ├── context.py                  # ScoringContext, ToolStep models
+│   ├── strategies.py               # 6 built-in scoring strategies
+│   ├── batch.py                    # Batched LLM judge scoring
+│   ├── parsing.py                  # Score response parsing
+│   ├── trajectory.py               # Tool step extraction from messages
+│   ├── aggregation.py              # Score aggregation + checkpoint summary
+│   ├── templates.py                # Jinja2 judge template rendering
+│   ├── registry.py                 # Pluggable strategy registry
+│   └── metrics.py                  # Custom @metric functions
+├── prompts/
+│   └── renderer.py                 # Jinja2 → prompt rendering
+├── tools/
+│   ├── registry.py                 # Tool name → Tool resolver
+│   └── sql.py                      # sql_query @tool
+├── approval/
+│   ├── models.py                   # SecurityPolicy, ToolInspectorConfig
+│   ├── security.py                 # CommandSecurityValidator
+│   ├── inspectors.py               # Tool inspector factory functions
+│   └── approver.py                 # @approver saber_security
+├── environments/
+│   ├── __init__.py                 # resolve_sandbox_spec() factory
+│   ├── images.py                   # Docker image build management
+│   └── preflight.py                # Compose file validation
+└── cli/
+    ├── app.py                      # saber CLI (build, teardown, start)
+    ├── discovery.py                # Domain discovery utilities
+    └── output.py                   # Rich console output
 ```
 
-**Enable detailed logging for debugging:**
+## Agents
 
-The `INSPECT_LOG_LEVEL` environment variable is extremely helpful for debugging SABER evaluations:
+Three agents are available via `-T agent=<name>`:
 
-```bash
-# Enable detailed logging to see server communication, tool calls, and execution details
-INSPECT_LOG_LEVEL=info uv run inspect eval domains/excytin_demo --model openai/gpt-4
+### React (Default)
 
-# Combine with other options for comprehensive debugging
-INSPECT_LOG_LEVEL=info uv run inspect eval domains/excytin_demo \
-    --model openai/azure/gpt-4.1 \
-    -T max_concurrent_episodes=12 \
-    -T task_filter="incident_*"
-```
-
-**Note:** This is not a default option but provides valuable insights into:
-- Server startup and health checks
-- MCP tool discovery and invocation
-- Docker sandbox execution
-- Episode lifecycle events
-- Task loading and filtering
-
-**Server endpoints** (when running):
-- REST API: `http://localhost:8000`
-- MCP Server: `http://localhost:8001`
-
-**Build options:**
-
-The build system supports three mutually exclusive modes:
-
-```bash
-# 1. INCREMENTAL BUILD: Build only missing images
-#    - Fastest option for development
-#    - Only builds images that don't exist
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T build=true
-
-# 2. COMPLETE REBUILD: Remove and rebuild all images
-#    - Use when you need a clean slate
-#    - Removes ALL existing domain images and rebuilds from scratch
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rebuild_all=true
-
-# 3. SELECTIVE REBUILD: Remove and rebuild specific images by prefix
-#    - Rebuild only server image
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rebuild=server
-```
-
-**Important**: These three options (`build`, `rebuild_all`, `rebuild=<prefix>`) are mutually exclusive and cannot be combined.
-
-**Server lifecycle management:**
-
-```bash
-# Keep server running after evaluation (default for faster re-runs)
-uv run inspect eval domains/excytin_demo --model openai/gpt-4
-
-# Stop server after evaluation completes (clean shutdown)
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T stop_saber_after=true
-
-# Rebuild all images AND stop server after
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rebuild_all=true -T stop_saber_after=true
-```
-
-**Task filtering:**
-
-```bash
-# Filter to specific tasks using exact match
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter=incident_5_task_1
-
-# Filter using glob patterns
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="incident_*"
-
-# Filter to multiple patterns (OR logic)
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T task_filter="incident_5_*,incident_6_*"
-```
-
-**Custom ports:**
+Wraps inspect_ai's native `react()` solver. Runs in-process, no special setup.
 
 ```bash
-# Use non-default ports (useful for running multiple domains)
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T rest_port=9000 -T mcp_port=9001
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1
 ```
 
-**Concurrency control:**
+### GitHub Copilot
+
+Runs the Copilot SDK Python client inside the Docker sandbox via a bridge proxy that routes LLM traffic back through inspect_ai.
+
+**Prerequisite:** The `copilot` Python package must be installed inside the sandbox Docker image.
 
 ```bash
-# Inspect AI provides two key concurrency controls:
-# --max-connections: Limits concurrent API calls to the LLM (default 10)
-#                    Use this to avoid rate limiting from your model provider
-# --max-samples:     Limits how many samples/episodes run in parallel (default 8)
-#                    Each sample is an independent evaluation episode with its own sandbox
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot
 
-# Reduce LLM API concurrency (useful for rate-limited endpoints)
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 --max-connections 5
-
-# Run samples sequentially (one at a time) - useful for debugging
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 --max-samples 1
-
-# Run 4 samples in parallel with 20 concurrent LLM connections
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 \
-  --max-samples 4 \
-  --max-connections 20
-
-# Combine with --limit to control total samples evaluated
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 \
-  --limit 10 \
-  --max-samples 4
+# With persona and skills
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot \
+  -T persona_file=path/to/persona.md \
+  -T skills_dir=path/to/skills/ \
+  -T timeout=600 \
+  -T max_steps=100
 ```
 
-**Preflight validation:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `persona_file` | None | Agent persona markdown file (YAML frontmatter + body) |
+| `skills_dir` | None | Skills directory — uploaded to sandbox at `.github/skills/` |
+| `timeout` | 300 | Runner timeout (seconds) |
+| `max_steps` | 50 | Max tool calls before forced completion |
+| `port_base` | 3000 | Bridge proxy starting port |
+
+### Claude Code
+
+Runs the Claude Code CLI binary inside the Docker sandbox via a bridge proxy.
+
+**Prerequisite:** The `claude` CLI must be installed inside the sandbox Docker image.
 
 ```bash
-# Run preflight health checks on all environments before evaluation
-# Validates all compose files are properly configured
-uv run inspect eval domains/excytin_demo --model openai/gpt-4 -T run_preflight=true
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=claude_code
 
-# Useful when making changes to domain configurations
-uv run inspect eval domains/excytin_demo \
-    --model openai/gpt-4 \
-    -T rebuild_all=true \
-    -T run_preflight=true
+# With persona, skills, and tool restrictions
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=claude_code \
+  -T persona_file=path/to/persona.md \
+  -T skills_dir=path/to/skills/ \
+  -T disallowed_tools="WebFetch,NotebookEdit"
 ```
 
-**Combined example:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `persona_file` | None | Persona content passed as `--append-system-prompt` |
+| `skills_dir` | None | Skills directory — uploaded to sandbox at `.claude/skills/` |
+| `version` | `"auto"` | Claude binary path or `"auto"` to search PATH |
+| `disallowed_tools` | `[]` | Tools to disallow via `--disallowed-tools` |
+| `timeout` | 300 | Execution timeout (seconds) |
+| `max_steps` | 50 | Max tool calls before forced completion |
+
+### Bridge Architecture
+
+Both copilot and claude_code use a sandbox bridge pattern:
+
+```
+┌─────────────────────┐     ┌─────────────────────┐
+│  Docker Sandbox     │     │  Host (inspect_ai)   │
+│                     │     │                      │
+│  Agent CLI/SDK      │────▶│  Bridge Proxy        │
+│  (copilot/claude)   │     │  (localhost:port)    │
+│                     │     │         │            │
+│  bash, python       │     │         ▼            │
+│  (native tools)     │     │  inspect_ai Model    │
+│                     │     │         │            │
+│  SABER MCP tools    │◀───│  MCP Tool Server     │
+│  (bridged)          │     │  (sql, kql, etc.)   │
+└─────────────────────┘     └─────────────────────┘
+```
+
+## Task Parameters (`-T` Flags)
+
+### Core
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `task_filter` | None | Glob or comma-separated task name filter |
+| `agent` | `"react"` | Agent: `react`, `copilot`, `claude_code` |
+| `rebuild` | None | `"true"` = all images, `"name1,name2"` = specific |
+| `run_preflight` | `false` | Validate compose files before evaluation |
+| `keep_permanent` | `false` | Keep permanent Docker services alive after eval |
+| `score_aggregation` | From YAML | Override: `average`, `weighted_sum`, `max` |
+
+### Docker
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `sandbox_compose` | `compose/sandbox.compose.yml` | Sandbox compose file |
+| `permanent_compose` | None | Permanent services compose file |
+| `permanent_project` | `saber-permanent` | Compose project name for permanent services |
+
+## Scoring
+
+Atomic factory-created scorers with unified `ScoringContext`. Each scoring unit is an independent `@scorer` visible in eval logs.
+
+**Built-in strategies:** `static`, `llm_judge`, `tool_call`, `tool_call_count`, `static_jaccard`, `none`
+
+**Aggregation:** `average` (default), `weighted_sum`, `max` — configurable in YAML or via `-T score_aggregation=...`
+
+**Domain-extensible:** Register custom strategies via `ScoringStrategyRegistry` without modifying core code.
+
+## SABER CLI
 
 ```bash
-# Rebuild server images, filter to incident tasks, preflight check, and stop server after
-uv run inspect eval domains/excytin_demo \
-    --model openai/gpt-4 \
-    -T rebuild=server \
-    -T task_filter="incident_*" \
-    -T run_preflight=true \
-    -T stop_saber_after=true
+uv run saber build [DOMAIN] [--rebuild] [--image NAME]   # Build Docker images
+uv run saber start DOMAIN [--task TASK_ID]                # Start permanent services
+uv run saber teardown [DOMAIN] [--yes]                    # Tear down Docker resources
 ```
 
-**Manual server cleanup:**
-
-If the server doesn't shut down properly, you can manually stop containers:
+## Development
 
 ```bash
-# View running containers
-docker ps
+# Run tests
+uv run pytest tests/ -v
 
-# Stop domain containers
-docker stop $(docker ps -q --filter "name=<domain_slug>")
-```
+# Lint
+uv run ruff check src/
 
-### Score Aggregation
-
-SABER supports configurable strategies for combining submission and subtask scores into a final normalized score:
-
-| Strategy | Formula | Description |
-|----------|---------|-------------|
-| `average` | `(norm_sub + norm_step) / 2` | Equal weight per dimension (default) |
-| `weighted_sum` | `(raw_sub + raw_step) / (max_sub + max_step)` | Components weighted by max score |
-| `max` | `max(norm_sub, norm_step)` | Best normalized component wins |
-
-**Configure in YAML** (domain `global.yaml` or per-task):
-```yaml
-global_defaults:
-  scoring_config:
-    aggregation: max  # or: average, weighted_sum
-```
-
-**Override via CLI** (takes precedence over YAML):
-```bash
-uv run inspect eval domains/excytin --model openai/gpt-4 -T score_aggregation=weighted_sum
-```
-
-### Development Setup
-
-```bash
-# Install with development dependencies
-uv sync --all-extras
-
-# Run unit test suite
-uv run pytest
-
-# Install pre-commit hooks
-uv run pre-commit install
-```
-
-### Copilot Agent (Optional)
-
-SABER supports using GitHub Copilot as an agent backend. This requires additional setup:
-
-**Prerequisites:**
-- Node.js 22+ (required by the Copilot CLI)
-- GitHub Copilot subscription
-
-**Installation:**
-
-```bash
-# 1. Install Node.js 22+ using fnm (fast node manager)
-curl -fsSL https://fnm.vercel.app/install | bash
-source ~/.bashrc  # or restart your shell
-fnm install 22
-fnm use 22
-
-# 2. Install the GitHub Copilot CLI globally
-npm install -g @github/copilot
-
-# 3. Verify installation
-copilot --version  # Should show 0.0.384 or later
-
-# 4. Install SABER with copilot extras
-uv sync --extra copilot
-```
-
-**Usage:**
-
-```bash
-# Run evaluation with the Copilot agent
-uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4o -T agent=copilot
-```
-
-### Claude Code Agent (Optional)
-
-SABER supports using Claude Code as an agent backend. This uses Anthropic's Claude Code SDK for agentic tool use.
-
-**Prerequisites:**
-- Node.js 18+ (required by the Claude Code CLI)
-- Anthropic API key with Claude Code access
-
-**Installation:**
-
-```bash
-# 1. Install Node.js 18+ using fnm (fast node manager) if not already installed
-curl -fsSL https://fnm.vercel.app/install | bash
-source ~/.bashrc  # or restart your shell
-fnm install 22
-fnm use 22
-
-# 2. Install the Claude Code CLI globally
-npm install -g @anthropic-ai/claude-code
-
-# 3. Verify CLI installation
-claude --version  # Should show 2.x.x (Claude Code)
-
-# 4. Install SABER with claude-code extras
-uv sync --extra claude-code
-
-# 5. Set your Anthropic API key
-export ANTHROPIC_API_KEY=your-api-key-here
-# Or add to your .env file:
-# ANTHROPIC_API_KEY=your-api-key-here
-
-# 6. Verify Python SDK installation
-uv run python -c "from claude_code_sdk import query; print('✅ Claude Code SDK installed')"
-```
-
-### Testing and Coverage
-
-**Run unit tests:**
-
-```bash
-# Setup environment
-uv sync --all-extras
-
-# Run all tests
-uv run pytest
-
-# Run specific test file
-uv run pytest tests/server/test_session_manager.py -v
-
-# Run specific test class or function
-uv run pytest tests/server/test_session_manager.py::TestSessionManagerBasics::test_create_session -v
-
-# Run tests quietly (less verbose)
-uv run pytest tests/server/ -q
-```
-
-**Measure code coverage:**
-
-```bash
-# Run tests with coverage collection
-uv run coverage run -m pytest tests/server/ -q
-
-# View coverage report in terminal
-uv run coverage report
-
-# View coverage for specific file
-uv run coverage report --include="src/saber/server/session_manager.py"
-
-# Generate detailed HTML coverage report
-uv run coverage html
-# Open htmlcov/index.html in browser to view line-by-line coverage
-```
-
-**Analyze coverage gaps:**
-
-```bash
-# Generate JSON coverage data for programmatic analysis
-uv run coverage json
-
-# View missing lines as annotated source
-uv run coverage annotate src/saber/server/session_manager.py
-# Creates session_manager.py,cover with ! marking uncovered lines
-
-# Quick coverage summary with line numbers
-uv run coverage report --show-missing --include="src/saber/server/session_manager.py"
-```
-
-**Coverage targets:**
-
-- Overall project: Aim for >80% coverage
-- Core modules (session_manager, execution_manager): Aim for >85% coverage
-- Critical paths (security, evaluation): Aim for >90% coverage
-
-**Example workflow:**
-
-```bash
-# 1. Run tests with coverage
-uv run coverage run -m pytest tests/server/ -q
-
-# 2. Check overall coverage
-uv run coverage report
-
-# 3. Identify gaps in specific module
-uv run coverage report --show-missing --include="src/saber/server/session_manager.py"
-
-# 4. Generate HTML report for detailed analysis
-uv run coverage html
-
-# 5. Open htmlcov/index.html to see which lines need tests
-```
-
-### Code Quality
-
-```bash
-# Run all quality checks
+# Pre-commit
 uv run pre-commit run --all-files
+
+# Coverage
+uv run coverage run -m pytest tests/ && uv run coverage report
 ```
 
-1. Create feature branch: `git checkout -b feature/your-feature`
-2. Make changes with type hints and validation
-3. Run tests: `uv run pytest tests/your_test.py -v`
-4. Validate: `uv run pre-commit run --all-files`
-5. Submit pull request with clear description
+## Design Documentation
 
-### Dependency Management
-
-**Standard installation (default):**
-```bash
-uv sync --all-extras
-# Uses inspect_ai from MSEC ADO repository (dev/saber_integration branch)
-```
-
----
-
-**Documentation**: [docs/README.md](docs/README.md) | **Domains**: [domains/](domains/) | **Architecture**: [docs/system/](docs/system/)
+| Document | Purpose |
+|----------|---------|
+| [Design Index](../../docs/design/refactor/README.md) | Full architecture docs |
+| [Data Models](../../docs/design/refactor/01-data-models-and-config.md) | YAML config pipeline |
+| [Scoring Engine](../../docs/design/refactor/02-scoring-engine.md) | Atomic scorer pipeline |
+| [Domain Extensibility](../../docs/design/refactor/05-domain-extensibility.md) | Custom tools & strategies |
+| [Environments](../../docs/design/refactor/06-environments.md) | Docker Compose conventions |
+| [Approval System](../../docs/design/refactor/09-approval-system.md) | Security validation |

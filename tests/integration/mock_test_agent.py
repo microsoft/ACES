@@ -10,7 +10,8 @@ import asyncio
 import json
 import os
 import sys
-from typing import Dict, Any
+from typing import Any
+
 import aiohttp
 
 
@@ -33,7 +34,7 @@ class MockTestAgent:
         if not self.session_id:
             raise ValueError("SABER_SESSION_ID environment variable required")
 
-    async def run(self, initial_prompt: str, shutdown_check=None) -> Dict[str, Any]:
+    async def run(self, initial_prompt: str, shutdown_check=None) -> dict[str, Any]:
         """
         Main agent execution method.
 
@@ -44,7 +45,7 @@ class MockTestAgent:
         Returns:
             Dict containing execution results
         """
-        print(f"🤖 Starting MockTestAgent execution")
+        print("🤖 Starting MockTestAgent execution")
         print(f"📝 Initial prompt: {initial_prompt}")
         print(f"🔗 Sidecar URL: {self.sidecar_url}")
         print(f"🆔 Session ID: {self.session_id}")
@@ -62,9 +63,9 @@ class MockTestAgent:
             test_tools = [t for t in tools if t.get("name") == "test_tool"]
             if test_tools:
                 print("🛠️ Calling test_tool...")
-                tool_result = await self.call_tool("test_tool", {
-                    "message": f"Hello from {self.task_id or 'integration test'}!"
-                })
+                tool_result = await self.call_tool(
+                    "test_tool", {"message": f"Hello from {self.task_id or 'integration test'}!"}
+                )
                 results.append({"tool": "test_tool", "result": tool_result})
                 print(f"✅ test_tool result: {tool_result}")
 
@@ -90,10 +91,10 @@ class MockTestAgent:
                 "tool_results": results,
                 "flag": flag,
                 "message": "Container-based execution successful",
-                "sidecar_communication": "working"
+                "sidecar_communication": "working",
             }
 
-            print(f"🎉 Agent execution completed successfully")
+            print("🎉 Agent execution completed successfully")
             return final_result
 
         except Exception as e:
@@ -102,7 +103,7 @@ class MockTestAgent:
                 "agent_type": "MockTestAgent",
                 "session_id": self.session_id,
                 "error": str(e),
-                "error_type": type(e).__name__
+                "error_type": type(e).__name__,
             }
             print(f"❌ Agent execution failed: {e}")
             return error_result
@@ -121,7 +122,7 @@ class MockTestAgent:
                     error_text = await response.text()
                     raise Exception(f"Failed to list tools: {response.status} - {error_text}")
 
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Call a tool via MCP sidecar."""
         url = f"{self.sidecar_url}/mcp/call_tool"
         headers = {"X-Saber-Session-Id": self.session_id}
@@ -152,11 +153,7 @@ async def main():
         sys.exit(0 if result.get("success") else 1)
 
     except Exception as e:
-        error_result = {
-            "success": False,
-            "error": str(e),
-            "error_type": type(e).__name__
-        }
+        error_result = {"success": False, "error": str(e), "error_type": type(e).__name__}
         print(json.dumps(error_result, indent=2))
         sys.exit(1)
 

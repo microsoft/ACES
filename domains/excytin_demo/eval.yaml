@@ -1,0 +1,21 @@
+# Excytin Demo domain metadata — inspect_evals convention
+slug: excytin_demo
+name: "Excytin Demo - Incident Response"
+description: >
+  Cybersecurity incident response demo with database forensics and SQL
+  analysis capabilities using a single security incident.
+version: "1.0.0"
+tags:
+  - incident-response
+  - database-forensics
+  - sql-analysis
+  - cybersecurity
+  - demo
+
+images:
+  sandbox:
+    tag: "saber/excytin_demo/sandbox:latest"
+    dockerfile: "docker/Dockerfile.sandbox"
+  incident_5_db:
+    tag: "saber/excytin_demo/incident-5:latest"
+    dockerfile: "docker/db/Dockerfile.incident_5"

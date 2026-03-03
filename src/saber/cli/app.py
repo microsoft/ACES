@@ -1,0 +1,302 @@
+"""SABER CLI — operational commands for Docker environments and images.
+
+Entry point: ``uv run saber <command>``
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import typer
+
+from saber.cli.discovery import ComposeProject, discover_domains, find_domains_root, resolve_domain
+from saber.cli.output import (
+    build_results_table,
+    console,
+    print_error,
+    print_success,
+    print_warning,
+    teardown_projects_table,
+)
+from saber.config.loader import ConfigLoader
+from saber.environments.images import RebuildMode, build_domain_images
+from saber.logging import get_logger
+from saber.sandbox import _start_permanent_services
+
+logger = get_logger(__name__)
+
+app = typer.Typer(
+    name="saber",
+    help="SABER — Security Agent Benchmarking and Evaluation Research CLI",
+    no_args_is_help=True,
+)
+
+
+@app.command()  # type: ignore[misc]
+def build(
+    domain: str | None = typer.Argument(None, help="Domain slug (omit to build all domains)"),
+    image: str | None = typer.Option(None, "--image", "-i", help="Build only this image name"),
+    rebuild: bool = typer.Option(False, "--rebuild", "-r", help="Force rebuild even if images exist"),
+) -> None:
+    """Build Docker images for SABER domains."""
+    try:
+        domains_root = find_domains_root()
+    except FileNotFoundError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    if domain is not None:
+        targets = [resolve_domain(domains_root, domain)]
+    else:
+        targets = discover_domains(domains_root)
+        if not targets:
+            print_error("No domains found")
+            raise typer.Exit(code=1)
+
+    # Determine rebuild mode
+    if rebuild and image:
+        mode = RebuildMode.specific(frozenset({image}))
+    elif rebuild:
+        mode = RebuildMode.all()
+    else:
+        mode = RebuildMode.none()
+
+    _ACTION_STYLES: dict[str, str] = {
+        "checking": "[dim]checking[/dim]",
+        "building": "[yellow]building[/yellow]",
+        "built": "[green]built[/green]",
+        "rebuilt": "[green]rebuilt[/green]",
+        "skipped": "[dim]skipped[/dim]",
+        "failed": "[red]failed[/red]",
+    }
+
+    any_failed = False
+    for target in targets:
+        logger.info("Starting image build for domain '%s'", target.slug)
+        console.print(f"\n[bold]Building images for [cyan]{target.slug}[/cyan]...[/bold]")
+
+        def _on_progress(name: str, tag: str, event: str) -> None:
+            styled = _ACTION_STYLES.get(event, event)
+            console.print(f"  {styled}  [cyan]{name}[/cyan]  [dim]{tag}[/dim]")
+
+        result = asyncio.run(
+            build_domain_images(
+                domain_root=target.root,
+                rebuild=mode,
+                on_progress=_on_progress,
+            )
+        )
+        console.print(build_results_table(result))
+        logger.info(
+            "Image build completed for domain '%s' (all_succeeded=%s)",
+            target.slug,
+            result.all_succeeded,
+        )
+        if not result.all_succeeded:
+            any_failed = True
+
+    if any_failed:
+        print_error("Some image builds failed")
+        raise typer.Exit(code=1)
+    else:
+        print_success("All images built successfully")
+
+
+async def _list_compose_projects() -> list[ComposeProject]:
+    """Run ``docker compose ls --format json`` and parse output."""
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "compose",
+        "ls",
+        "--format",
+        "json",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0 or not stdout:
+        return []
+    try:
+        raw = json.loads(stdout.decode())
+        return [ComposeProject(name=item.get("Name", ""), status=item.get("Status", "")) for item in raw]
+    except json.JSONDecodeError:
+        return []
+
+
+async def _teardown_project(project_name: str) -> tuple[bool, str]:
+    """Stop a compose project and remove volumes.
+
+    Returns:
+        Tuple of (success, stderr_text).
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "compose",
+        "-p",
+        project_name,
+        "down",
+        "--volumes",
+        "--remove-orphans",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await proc.communicate()
+    return proc.returncode == 0, stderr.decode().strip()
+
+
+def _is_saber_project(name: str, known_slugs: frozenset[str]) -> bool:
+    """Check if a Docker Compose project name belongs to SABER."""
+    if "saber" in name.lower():
+        return True
+    for slug in known_slugs:
+        if name == f"{slug}-databases":
+            return True
+    return False
+
+
+def _filter_by_domain(projects: list[ComposeProject], domain_slug: str) -> list[ComposeProject]:
+    """Filter projects to those matching a specific domain via segment matching."""
+    slug = domain_slug.lower()
+
+    def matches(name: str) -> bool:
+        lower = name.lower()
+        return lower == slug or lower.startswith(f"{slug}-") or slug in lower.split("-")
+
+    return [p for p in projects if matches(p.name)]
+
+
+@app.command()  # type: ignore[misc]
+def teardown(
+    domain: str | None = typer.Argument(None, help="Domain slug (omit to tear down all)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+) -> None:
+    """Tear down Docker environments from abandoned experiments."""
+    # Discover running compose projects
+    all_projects = asyncio.run(_list_compose_projects())
+
+    # Discover known SABER domains
+    try:
+        domains_root = find_domains_root()
+    except FileNotFoundError:
+        domains_root = None
+
+    if domains_root is not None:
+        known_domains = discover_domains(domains_root)
+    else:
+        known_domains = []
+    known_slugs = frozenset(d.slug for d in known_domains)
+
+    # Filter to SABER projects
+    saber_projects = [p for p in all_projects if _is_saber_project(p.name, known_slugs)]
+
+    # Further filter by domain if specified
+    if domain is not None:
+        saber_projects = _filter_by_domain(saber_projects, domain)
+
+    # Nothing to do
+    if not saber_projects:
+        print_warning("No SABER compose projects found")
+        return
+
+    # Display matching projects
+    console.print(teardown_projects_table(saber_projects))
+
+    # Confirm
+    if not yes:
+        typer.confirm("Tear down these projects?", abort=True)
+
+    # Tear down
+    logger.info("Starting teardown of %d SABER project(s)", len(saber_projects))
+    any_failed = False
+    for p in saber_projects:
+        name = p.name
+        console.print(f"Tearing down [cyan]{name}[/cyan]...")
+        success, stderr_text = asyncio.run(_teardown_project(name))
+        if success:
+            console.print(f"  [green]✓[/green] {name}")
+            logger.info("Teardown of '%s' succeeded", name)
+        else:
+            console.print(f"  [red]✗[/red] {name}: {stderr_text}")
+            logger.info("Teardown of '%s' failed: %s", name, stderr_text)
+            any_failed = True
+
+    if any_failed:
+        print_error("Some teardowns failed")
+        raise typer.Exit(code=1)
+    else:
+        print_success("All projects torn down successfully")
+
+
+@app.command()  # type: ignore[misc]
+def start(
+    domain: str = typer.Argument(..., help="Domain slug"),
+    task: str | None = typer.Option(None, "--task", "-t", help="Also start sandbox for this task ID"),
+) -> None:
+    """Start permanent environment (and optionally a task sandbox)."""
+    try:
+        domains_root = find_domains_root()
+    except FileNotFoundError as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    target = resolve_domain(domains_root, domain)
+
+    if target.permanent_compose is None or target.permanent_project is None:
+        print_error(f"Domain {target.slug!r} has no permanent environment")
+        raise typer.Exit(code=1)
+
+    # Start permanent services
+    logger.info("Starting permanent environment for domain '%s'", target.slug)
+    console.print(f"\n[bold]Starting permanent environment for [cyan]{target.slug}[/cyan]...[/bold]")
+    try:
+        asyncio.run(
+            _start_permanent_services(
+                target.permanent_compose,
+                target.permanent_project,
+                project_directory=target.root,
+            )
+        )
+    except RuntimeError as exc:
+        print_error(f"Failed to start permanent services: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    print_success(f"Permanent environment started (project: {target.permanent_project})")
+
+    # Optionally start task sandbox
+    if task is not None:
+        loader = ConfigLoader(target.root)
+        tasks = loader.load_tasks(task_filter=task)
+
+        if not tasks:
+            print_error(f"Task {task!r} not found in domain {target.slug!r}")
+            raise typer.Exit(code=1)
+
+        task_cfg = tasks[0]
+        logger.info("Starting sandbox for task '%s'", task_cfg.task_id)
+        console.print(f"\n[bold]Starting sandbox for task [cyan]{task_cfg.task_id}[/cyan]...[/bold]")
+        console.print(f"  Title: {task_cfg.title}")
+        console.print(f"  Description: {task_cfg.description}")
+
+        sandbox_compose = target.root / "compose" / "sandbox.compose.yml"
+        if not sandbox_compose.exists():
+            print_error(f"Sandbox compose not found at {sandbox_compose}")
+            raise typer.Exit(code=1)
+
+        try:
+            asyncio.run(
+                _start_permanent_services(
+                    sandbox_compose,
+                    f"saber-{task_cfg.task_id}",
+                    project_directory=target.root,
+                )
+            )
+        except RuntimeError as exc:
+            print_error(f"Failed to start sandbox: {exc}")
+            raise typer.Exit(code=1) from exc
+
+        print_success(f"Sandbox started for task {task_cfg.task_id}")
+
+
+if __name__ == "__main__":
+    app()

@@ -1,0 +1,18 @@
+# Custom MySQL image for excytin_demo domain - Incident 5
+# Uses volume mounts for SQL/CSV data
+
+FROM mysql:8.0.36
+
+# Copy health check script
+COPY docker/db/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh
+
+# MySQL performance tuning
+CMD ["--secure-file-priv=/var/lib/mysql-files", \
+     "--bind-address=0.0.0.0", \
+     "--innodb-redo-log-capacity=2147483648", \
+     "--innodb-buffer-pool-size=512M", \
+     "--innodb-flush-log-at-trx-commit=0", \
+     "--innodb-doublewrite=0"]
+
+EXPOSE 3306

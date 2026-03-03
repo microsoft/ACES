@@ -5,37 +5,14 @@ This module provides common test fixtures, mock objects, and utilities
 that can be shared across multiple test modules.
 """
 
-import asyncio
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional
-from unittest.mock import Mock, patch
 
 import pytest
 import yaml
 
-from saber.server.base import CommandResult
-from saber.server.execution.base import Parameter, ParameterType
-from saber.server.execution.execution_manager import ExecutionManager
-from saber.server.execution.executors.base_executors import CommandExecutor
-from saber.server.execution.executors.standard_registry.bash_executor import BashExecutor
-from saber.server.execution.utils.security_validator import SecurityValidator
-
 logger = logging.getLogger(__name__)
-
-
-@pytest.fixture(autouse=True)
-def mock_docker_validation():
-    """
-    Auto-use fixture to mock Docker validation for all tests.
-
-    This prevents tests from failing when Docker is not installed on the system.
-    Tests that specifically need to test Docker functionality should patch
-    subprocess calls directly.
-    """
-    with patch('saber.domain.orchestrator.DockerRunner._validate_docker'):
-        yield
 
 
 # Test fixtures
@@ -58,20 +35,8 @@ def test_config_path():
 @pytest.fixture
 def test_config_dict(test_config_path):
     """Load test configuration as dictionary."""
-    with open(test_config_path, "r") as f:
+    with open(test_config_path) as f:
         return yaml.safe_load(f)
-
-
-@pytest.fixture
-def registry_with_config(test_config_dict):
-    """Create ExecutionManager with test configuration."""
-    return ExecutionManager()
-
-
-@pytest.fixture
-def security_validator():
-    """Create a SecurityValidator instance for testing."""
-    return SecurityValidator()
 
 
 @pytest.fixture
@@ -97,7 +62,6 @@ global_defaults:
   prompts:
     instruction: "malware_family_analysis_prompt.md"
     assistant: "malware_family_analysis_prompt.md"
-    submit: "malware_family_analysis_prompt.md"
     continue: "test_continue.md"
   execution_config:
     executors:
@@ -161,7 +125,6 @@ global_defaults:
   prompts:
     instruction: "malware_analysis_prompt.md"
     assistant: "malware_analysis_prompt.md"
-    submit: "malware_analysis_prompt.md"
     continue: "test_continue.md"
   execution_config:
     executors:
@@ -203,6 +166,7 @@ tasks:
 @pytest.fixture
 def temp_config_dir_helper():
     """Helper fixture to create temporary config directories with hierarchical task structure and prompts directory."""
+
     def _create_temp_config_dir(tmp_path, yaml_content):
         # Create the config directory
         config_dir = tmp_path / "config"
@@ -218,7 +182,6 @@ def temp_config_dir_helper():
         default_prompts = {
             "instruction": "instructions/default.md",
             "assistant": "assistants/default.md",
-            "submit": "submits/default.md",
             "continue": "test_continue.md",
         }
 
@@ -227,7 +190,7 @@ def temp_config_dir_helper():
             "domain": yaml_data.get("domain"),
             "benchmark_config": yaml_data.get("benchmark_config", {}),
             "global_defaults": yaml_data.get("global_defaults", {}),
-            "executors": yaml_data.get("executors", [])
+            "executors": yaml_data.get("executors", []),
         }
 
         global_defaults = global_config.setdefault("global_defaults", {})
@@ -248,7 +211,7 @@ def temp_config_dir_helper():
         if "tasks" in yaml_data and yaml_data["tasks"]:
             # For each task, create a separate file or group them
             for i, task in enumerate(yaml_data["tasks"]):
-                task_file = tasks_dir / f"task_{i+1}.yaml"
+                task_file = tasks_dir / f"task_{i + 1}.yaml"
                 task_copy = dict(task)
                 template = task_copy.pop("prompt_template_file", None)
                 if template:
@@ -257,7 +220,6 @@ def temp_config_dir_helper():
                         {
                             "instruction": template,
                             "assistant": template,
-                            "submit": template,
                         },
                     )
                 else:
@@ -276,7 +238,12 @@ def temp_config_dir_helper():
         prompts_dir.mkdir()
 
         # Create some sample prompt template files (legacy single-prompt format)
-        for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md", "test_continue.md"]:
+        for template_name in [
+            "malware_family_analysis_prompt.md",
+            "malware_analysis_prompt.md",
+            "test_task_prompt.md",
+            "test_continue.md",
+        ]:
             template_file = prompts_dir / template_name
             template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
 
@@ -290,12 +257,22 @@ def temp_config_dir_helper():
 
         # Create multi-prompt template files
         multi_prompt_templates = [
-            ("instructions/default.md", "# Default Instruction\n\nThis is the default instruction template for testing."),
-            ("assistants/default.md", "# Default Assistant\n\nThis is the default assistant template for testing."),
-            ("submits/default.md", "# Default Submit\n\nThis is the default submit template for testing."),
-            ("instructions/security_analysis_instruction.md", "# Security Analysis Instruction\n\nYou are a security analyst. Your task is to..."),
-            ("assistants/security_analysis_assistant.md", "# Security Analysis Assistant\n\nAs an assistant, help the agent by..."),
-            ("submits/security_analysis_submit.md", "# Security Analysis Submit\n\nWhen submitting findings, ensure you..."),
+            (
+                "instructions/default.md",
+                "# Default Instruction\n\nThis is the default instruction template for testing.",
+            ),
+            (
+                "assistants/default.md",
+                "# Default Assistant\n\nThis is the default assistant template for testing.",
+            ),
+            (
+                "instructions/security_analysis_instruction.md",
+                "# Security Analysis Instruction\n\nYou are a security analyst. Your task is to...",
+            ),
+            (
+                "assistants/security_analysis_assistant.md",
+                "# Security Analysis Assistant\n\nAs an assistant, help the agent by...",
+            ),
         ]
 
         for template_path, content in multi_prompt_templates:
@@ -329,7 +306,7 @@ def temp_config_dir(tmp_path, sample_task_yaml):
         "domain": yaml_data.get("domain"),
         "benchmark_config": yaml_data.get("benchmark_config", {}),
         "global_defaults": yaml_data.get("global_defaults", {}),
-        "executors": yaml_data.get("executors", [])
+        "executors": yaml_data.get("executors", []),
     }
 
     # Add allowed_executors from top-level to executors if exists
@@ -347,7 +324,7 @@ def temp_config_dir(tmp_path, sample_task_yaml):
     if "tasks" in yaml_data and yaml_data["tasks"]:
         # For each task, create a separate file or group them
         for i, task in enumerate(yaml_data["tasks"]):
-            task_file = tasks_dir / f"task_{i+1}.yaml"
+            task_file = tasks_dir / f"task_{i + 1}.yaml"
             task_data = {"tasks": [task]}
             task_file.write_text(yaml.dump(task_data, default_flow_style=False))
     else:
@@ -361,7 +338,12 @@ def temp_config_dir(tmp_path, sample_task_yaml):
     prompts_dir.mkdir()
 
     # Create some sample prompt template files
-    for template_name in ["malware_family_analysis_prompt.md", "malware_analysis_prompt.md", "test_task_prompt.md", "test_continue.md"]:
+    for template_name in [
+        "malware_family_analysis_prompt.md",
+        "malware_analysis_prompt.md",
+        "test_task_prompt.md",
+        "test_continue.md",
+    ]:
         template_file = prompts_dir / template_name
         template_file.write_text("# Sample Template\n\nThis is a sample prompt template for testing.")
 
@@ -387,20 +369,6 @@ def sample_subtask_data():
         "completion_conditions": ["test_command", "another_command"],
         "depends_on": ["prerequisite_subtask"],
     }
-
-
-@pytest.fixture
-def sample_action():
-    """Sample action for episode testing."""
-    from saber.server.episodes import Action
-
-    return Action(tool_name="docker_bash_executor", parameters={"command": "file sample.exe"}, command="file sample.exe")
-
-
-@pytest.fixture
-def sample_command_result():
-    """Sample command result for testing."""
-    return CommandResult.success_result({"output": "sample.exe: PE32 executable", "file_type": "PE32"})
 
 
 @pytest.fixture(scope="function")
@@ -593,11 +561,10 @@ executors:
 tasks:
   - task_id: "multi_prompt_security_task"
     title: "Multi-Prompt Security Analysis"
-    description: "A security task with separate instruction, assistant, and submit prompts"
+    description: "A security task with separate instruction and assistant prompts"
     prompts:
       instruction: "instructions/security_analysis_instruction.md"
       assistant: "assistants/security_analysis_assistant.md"
-      submit: "submits/security_analysis_submit.md"
       continue: "test_continue.md"
     execution_config:
       executors:
@@ -629,146 +596,3 @@ tasks:
         completion_conditions: ["vulnerability_scan", "manual_testing"]
         depends_on: ["reconnaissance"]
 """
-
-
-# =============================================================================
-# Inspect AI / Agent Test Fixtures
-# =============================================================================
-# These fixtures provide standardized test data for agent and solver tests.
-# Import MetadataKeys here to avoid import issues in test files.
-
-from saber.models.constants import MetadataKeys as _MetadataKeys
-
-
-@pytest.fixture
-def base_prompts():
-    """Base prompts for agent testing.
-
-    Returns a dictionary with all four required prompts.
-    Use this when you need prompts without other metadata.
-    """
-    return {
-        "instruction": "Test instruction prompt",
-        "assistant": "Test assistant prompt",
-        "submit": "Test submit prompt",
-        "continue": "Test continue prompt",
-    }
-
-
-@pytest.fixture
-def base_metadata(base_prompts):
-    """Base metadata containing only required prompts.
-
-    Use this for tests that need minimal metadata without session/episode context.
-    """
-    return {
-        _MetadataKeys.INSTRUCTION_PROMPT: base_prompts["instruction"],
-        _MetadataKeys.ASSISTANT_PROMPT: base_prompts["assistant"],
-        _MetadataKeys.SUBMIT_PROMPT: base_prompts["submit"],
-        _MetadataKeys.CONTINUE_PROMPT: base_prompts["continue"],
-    }
-
-
-@pytest.fixture
-def complete_saber_metadata(base_metadata):
-    """Complete metadata for SABER solver testing.
-
-    Includes all prompts plus session, episode, domain, and task identifiers.
-    Use this for tests that require full SABER execution context.
-    """
-    return {
-        **base_metadata,
-        _MetadataKeys.SESSION_ID: "session-123",
-        _MetadataKeys.EPISODE_ID: "episode-456",
-        _MetadataKeys.SABER_DOMAIN_SLUG: "test-domain",
-        _MetadataKeys.TASK_ID: "task-789",
-        _MetadataKeys.SAMPLE_ID: "sample-1",
-    }
-
-
-@pytest.fixture
-def blue_team_metadata(complete_saber_metadata):
-    """Metadata for blue team agent testing.
-
-    Includes role and transcript config for continuous operation agents.
-    Blue team agents typically have pull.enabled=true for transcript sync.
-    """
-    return {
-        **complete_saber_metadata,
-        _MetadataKeys.SUB_TASK_ROLE: "blue",
-        _MetadataKeys.CONTINUE_PROMPT: "Please proceed. Do NOT call submit() - you are a continuous operation agent.",
-        "transcript_config": {
-            "websocket": {
-                "pull": {
-                    "enabled": True,
-                    "blocking": True,
-                }
-            }
-        },
-    }
-
-
-@pytest.fixture
-def red_team_metadata(complete_saber_metadata):
-    """Metadata for red team agent testing.
-
-    Includes role for attacker agents that should submit when done.
-    """
-    return {
-        **complete_saber_metadata,
-        _MetadataKeys.SUB_TASK_ROLE: "red",
-        _MetadataKeys.CONTINUE_PROMPT: "Please proceed. If done, call submit() with your answer.",
-    }
-
-
-@pytest.fixture
-def transcript_sync_metadata(complete_saber_metadata):
-    """Metadata with full transcript synchronization config.
-
-    Use this for testing WebSocket transcript coordination.
-    """
-    return {
-        **complete_saber_metadata,
-        "transcript_config": {
-            "websocket": {
-                "pull": {
-                    "enabled": True,
-                    "blocking": False,
-                    "event_timeout": 300.0,
-                }
-            }
-        },
-    }
-
-
-@pytest.fixture
-def mock_episode_mapping():
-    """Mock episode mapping for store.get() calls.
-
-    Returns a function that can be used with side_effect for store.get().
-    """
-    from unittest.mock import MagicMock
-
-    def _get_mapping(sample_id="sample-1", episode_id="episode-456"):
-        return {
-            sample_id: MagicMock(episode_id=episode_id)
-        }
-    return _get_mapping
-
-
-@pytest.fixture
-def mock_store_get(mock_episode_mapping):
-    """Create a mock for state.store.get() with common values.
-
-    Use with: mock_state.store.get.side_effect = mock_store_get
-    """
-    def _store_get(key, default=None):
-        from saber.inspect_ai.constants import InspectStoreKeys
-
-        values = {
-            InspectStoreKeys.DOMAIN_SLUG: "test-domain",
-            InspectStoreKeys.SESSION_ID: "session-123",
-            InspectStoreKeys.EPISODE_MAPPING: mock_episode_mapping(),
-        }
-        return values.get(key, default)
-    return _store_get

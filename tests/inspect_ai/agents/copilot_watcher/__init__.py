@@ -1,1 +1,0 @@
-"""Copilot agent tests."""

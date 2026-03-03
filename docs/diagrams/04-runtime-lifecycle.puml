@@ -1,0 +1,116 @@
+@startuml runtime-lifecycle
+!theme plain
+title Runtime Lifecycle — What Happens When "inspect eval" Runs
+caption Shows the full lifecycle from CLI invocation through task_init, sample loop, to cleanup.
+
+participant "inspect eval CLI" as cli
+participant "@task function\n(domain entry)" as task_fn
+participant "create_task()" as ct
+participant "inspect_ai Engine" as engine
+participant "SaberSandboxEnvironment" as sandbox
+participant "Docker Engine" as docker
+participant "Agent Solver\n(react/copilot/claude_code)" as agent
+participant "Scorers" as scorers
+
+== Initialization ==
+
+cli -> task_fn : load @task function
+activate task_fn
+task_fn -> ct : create_task(domain_root, ...)
+ct --> task_fn : Task(dataset, solver, scorer, sandbox, ...)
+task_fn --> cli : Task
+deactivate task_fn
+
+cli -> engine : evaluate(Task)
+activate engine
+
+== task_init Phase ==
+
+engine -> sandbox : task_init(task_name, config)
+activate sandbox
+
+sandbox -> sandbox : Preflight: build_domain_images()\n[once, with lock]
+
+opt permanent_compose configured
+    sandbox -> docker : docker compose -p saber-permanent up -d
+    docker --> sandbox : permanent services running
+    sandbox -> sandbox : os.environ["SABER_PROJECT"] = project
+end
+
+sandbox -> sandbox : super().task_init()\n[DockerSandboxEnvironment]
+sandbox --> engine : ready
+deactivate sandbox
+
+== Per-Sample Loop ==
+
+loop for each Sample in dataset
+    engine -> sandbox : sample_init(task_name, config, metadata)
+    activate sandbox
+    sandbox -> docker : docker compose up (sandbox containers)
+    docker --> sandbox : sandbox ready
+    sandbox --> engine : sandbox initialized
+    deactivate sandbox
+
+    engine -> agent : solve(TaskState, Generate)
+    activate agent
+
+    note over agent
+      Solver extracts prompts from
+      state.metadata (set by
+      tasks_to_samples in create_task)
+    end note
+
+    agent -> agent : Resolve per-sample tools\nfrom state.metadata["tools"]
+    agent -> agent : Two-level factory:\nagent_factory() → create_with_prompts(**kwargs)
+
+    loop agent tool-calling loop
+        agent -> sandbox : exec(cmd) / read_file / write_file
+        sandbox -> docker : execute in container
+        docker --> sandbox : result
+        sandbox --> agent : output
+    end
+
+    agent --> engine : final TaskState
+    deactivate agent
+
+    == Scoring (per sample) ==
+
+    engine -> scorers : score(TaskState, Target)
+    activate scorers
+
+    note over scorers
+      **saber_overall** runs FIRST (scores[0]):
+      - Independently scores ALL tasks
+      - Caches LLM judge results in metadata
+      - Returns aggregate normalized score
+    end note
+
+    scorers -> scorers : saber_overall:\ncompute_task_aggregate() per task
+    scorers -> scorers : Per-task scorers:\nRead LLM cache from metadata\n(skip duplicate LLM calls)
+    scorers --> engine : list[Score]
+    deactivate scorers
+
+    engine -> sandbox : sample_cleanup(task_name, config, cleanup)
+    activate sandbox
+    sandbox -> docker : docker compose down (sandbox)
+    sandbox --> engine
+    deactivate sandbox
+end
+
+== task_cleanup Phase ==
+
+engine -> sandbox : task_cleanup(task_name, config, cleanup)
+activate sandbox
+
+opt permanent services & !keep_permanent
+    sandbox -> docker : docker compose -p saber-permanent down -v
+end
+
+sandbox -> sandbox : os.environ.pop("SABER_PROJECT")
+sandbox --> engine
+deactivate sandbox
+
+engine --> cli : EvalLog with results
+deactivate engine
+
+@enduml

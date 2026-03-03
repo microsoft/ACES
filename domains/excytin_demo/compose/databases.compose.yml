@@ -1,0 +1,41 @@
+# Excytin Demo permanent database services — Incident 5 MySQL instance
+# Lifecycle: task_init → compose up, task_cleanup → compose down
+# Managed by SaberSandboxEnvironment, NOT by inspect_ai
+
+services:
+  incident-5-db:
+    image: saber/excytin_demo/incident-5:latest
+    container_name: saber-excytin-incident-5
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./data/sql_files/incident_5.sql:/docker-entrypoint-initdb.d/incident_5.sql:ro
+      - ./data/csv_files/incident_5:/var/lib/mysql-files
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_DATABASE: env_monitor_db
+      MYSQL_ROOT_HOST: "%"
+    networks:
+      - excytin-database
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 20s
+      timeout: 30s
+      retries: 5
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "0.5"
+    labels:
+      - "saber.domain=excytin_demo"
+
+networks:
+  excytin-database:
+    driver: bridge
+    internal: true
+    labels:
+      - "saber.domain=excytin_demo"
+      - "saber.network.type=shared"

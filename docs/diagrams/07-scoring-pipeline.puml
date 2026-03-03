@@ -1,0 +1,94 @@
+@startuml scoring-pipeline
+!theme plain
+title Scoring Pipeline — From YAML Config to Final Score
+caption saber_overall runs FIRST, caches LLM results; per-task scorers read cache.
+
+participant "inspect_ai Engine" as engine
+participant "saber_overall\n(scores[0])" as overall
+participant "ScorerFactory\n.compute_task_aggregate()" as aggregate
+participant "ScoringStrategyRegistry" as registry
+participant "Strategies\n(static, llm_judge, ...)" as strategies
+participant "score_checkpoints_llm_batch()" as batch
+participant "TaskState.metadata" as metadata
+participant "Per-Task Scorers\n(task_id.scorer_name)" as per_task
+
+== Phase 1: saber_overall (headline score) ==
+
+engine -> overall : score(state, target)
+activate overall
+
+note over overall
+  saber_overall is always scorers[0].
+  It computes the aggregate **independently**
+  before per-task scorers have run.
+end note
+
+loop for each TaskConfig
+    overall -> aggregate : compute_task_aggregate(task, state, target)
+    activate aggregate
+
+    aggregate -> aggregate : Extract submission,\ntool_steps from state
+
+    loop for each ScorerConfig in task.scorers
+        alt strategy ≠ "llm_judge"
+            aggregate -> registry : get(strategy_name)
+            registry --> aggregate : SaberScoringStrategy
+            aggregate -> strategies : strategy.score(ctx, renderer)
+            strategies --> aggregate : Score
+        else strategy == "llm_judge"
+            aggregate -> aggregate : collect into llm_configs
+        end
+    end
+
+    opt llm_configs not empty
+        aggregate -> metadata : check cache:\n_saber_batch_cfg_{task_id}
+
+        alt cache miss
+            aggregate -> batch : score_checkpoints_llm_batch(contexts, renderer)
+            batch --> aggregate : dict[scorer_name → Score]
+            aggregate -> metadata : **cache results**\nstate.metadata[cache_key] = results
+        else cache hit
+            metadata --> aggregate : cached batch_results
+        end
+    end
+
+    aggregate -> aggregate : Aggregate all scores:\nweighted sum / AggregationConfig\n→ normalized [0, 1]
+    aggregate --> overall : Score(value=normalized)
+    deactivate aggregate
+end
+
+overall -> overall : Combine task aggregates\n→ final headline score
+overall --> engine : Score (saber_overall)
+deactivate overall
+
+== Phase 2: Per-Task Scorers ==
+
+loop for each TaskConfig, each ScorerConfig
+    engine -> per_task : score(state, target)
+    activate per_task
+
+    alt strategy ≠ "llm_judge"
+        per_task -> registry : get(strategy)
+        per_task -> strategies : strategy.score(ctx, renderer)
+        strategies --> per_task : Score
+    else strategy == "llm_judge"
+        per_task -> metadata : **read cache**\n_saber_batch_cfg_{task_id}
+        note right
+          Cache was populated by
+          saber_overall in Phase 1.
+          **No duplicate LLM calls.**
+        end note
+        metadata --> per_task : cached Score
+    end
+
+    per_task --> engine : Score (task_id.scorer_name)
+    deactivate per_task
+end
+
+note over engine
+  Final scorers list order:
+  [saber_overall, task1.submission, task1.checkpoint_1, task2.submission, ...]
+  saber_overall is the headline metric.
+end note
+
+@enduml

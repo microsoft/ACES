@@ -15,12 +15,12 @@ from inspect_ai.model._model_output import ModelOutput
 from inspect_ai.model._registry import modelapi
 from inspect_ai.tool import ToolChoice, ToolInfo
 
-from ...logging_config import LogCategory, get_saber_logger
+from saber.logging import get_logger
 
-logger = get_saber_logger(LogCategory.AGENT, __name__)
+logger = get_logger(__name__)
 
 
-@modelapi(name="agent")  # type: ignore[untyped-decorator]
+@modelapi(name="agent")  # type: ignore[misc]
 def agent() -> type[ModelAPI]:
     """Register the agent model API."""
     return AgentModelAPI

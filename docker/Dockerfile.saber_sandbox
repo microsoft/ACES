@@ -1,20 +1,34 @@
-# Minimal SABER Sandbox Environment
-# Base sandbox with only Python and essential tools
+# SABER Sandbox Environment
+# Base sandbox with Python, Node.js, and agent tooling
 FROM python:3.11-slim
 
-# Install only essential system packages
+# Install essential system packages
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         curl \
         wget \
+        gnupg \
         && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22 LTS (required by Copilot CLI and Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install agent CLI tools globally via npm
+RUN npm install -g --ignore-scripts \
+        @github/copilot \
+        @anthropic-ai/claude-code && \
+    npm cache clean --force
 
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install minimal Python packages for basic execution
+# Install Python packages for basic execution and agent SDKs
 RUN uv pip install --system --no-cache \
-    requests
+    requests \
+    github-copilot-sdk \
+    claude-code-sdk
 
 # Set working directory
 WORKDIR /workspace

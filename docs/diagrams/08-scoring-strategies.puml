@@ -1,0 +1,154 @@
+@startuml scoring-strategies
+!theme plain
+title Scoring Strategies — Protocol and Built-in Implementations
+caption 6 built-in strategies + ScoringStrategyRegistry for domain extensions.
+
+skinparam classAttributeIconSize 0
+
+' ── Protocol ──────────────────────────────────────────────────────
+interface SaberScoringStrategy <<Protocol>> {
+    + score(ctx: ScoringContext, renderer: TemplateRenderer) : Score
+}
+
+' ── Registry ──────────────────────────────────────────────────────
+class ScoringStrategyRegistry {
+    - _strategies: dict[str, SaberScoringStrategy]
+    --
+    + register(name, strategy): void
+    + get(name): SaberScoringStrategy
+    + list_strategies(): list[str]
+    --
+    //Auto-registers 6 built-in strategies//
+    //on first instantiation//
+}
+
+' ── Built-in Strategies ───────────────────────────────────────────
+class StaticStrategy {
+    **Strategy name:** "static"
+    --
+    Exact/substring match against
+    expected_answers list.
+    --
+    Submission mode: checks final answer
+    Trajectory mode: scans tool outputs
+    --
+    Criteria: StaticCriteria
+    Returns: max_score or 0.0
+}
+
+class StaticJaccardStrategy {
+    **Strategy name:** "static_jaccard"
+    --
+    Jaccard similarity between actual
+    set and expected set.
+    --
+    Tokenizes on whitespace/commas.
+    score = |intersection| / |union|
+    Scaled to max_score.
+    --
+    Criteria: StaticCriteria
+    Returns: float [0, max_score]
+}
+
+class LLMJudgeStrategy {
+    **Strategy name:** "llm_judge"
+    --
+    LLM-as-judge with Jinja2 templates.
+    Sends rendered prompt to LLM model.
+    --
+    Response formats:
+    • BINARY: CORRECT/INCORRECT
+    • CONTINUOUS: {"score": 0.0-1.0}
+    • STEP_EVALUATIONS: {"step_evaluations": [...]}
+    --
+    Criteria: LLMJudgeCriteria
+    Returns: float [0, max_score]
+}
+
+class ToolCallStrategy {
+    **Strategy name:** "tool_call"
+    --
+    Check if specific tools were called
+    during the episode trajectory.
+    --
+    Validates tool_name appears in
+    tool_steps with expected params.
+    --
+    Criteria: ToolCallCriteria
+    Returns: max_score or 0.0
+}
+
+class ToolCallCountStrategy {
+    **Strategy name:** "tool_call_count"
+    --
+    Count tool executions of specific
+    tool(s) during the episode.
+    --
+    Checks len(matching_steps) ≥
+    min_executions threshold.
+    --
+    Criteria: ToolCallCriteria
+    Returns: max_score or 0.0
+}
+
+class NoneStrategy {
+    **Strategy name:** "none"
+    --
+    No-op scorer, always returns 0.0.
+    Used for checkpoint-only scoring
+    where submission score is unused.
+    --
+    Criteria: (any)
+    Returns: 0.0
+}
+
+' ── Relationships ─────────────────────────────────────────────────
+SaberScoringStrategy <|.. StaticStrategy
+SaberScoringStrategy <|.. StaticJaccardStrategy
+SaberScoringStrategy <|.. LLMJudgeStrategy
+SaberScoringStrategy <|.. ToolCallStrategy
+SaberScoringStrategy <|.. ToolCallCountStrategy
+SaberScoringStrategy <|.. NoneStrategy
+
+ScoringStrategyRegistry o-- "6" SaberScoringStrategy : built-in
+
+' ── Input/Output ──────────────────────────────────────────────────
+class ScoringContext <<frozen>> {
+    submission: str
+    tool_steps: tuple[ToolStep, ...]
+    messages: tuple[ChatMessage, ...]
+    target_text: str
+    task_id: str
+    domain: str
+    metadata: dict
+    scorer: ScorerConfig | None
+}
+
+class Score <<inspect_ai>> {
+    value: float
+    answer: str
+    explanation: str
+}
+
+SaberScoringStrategy ..> ScoringContext : reads
+SaberScoringStrategy ..> Score : returns
+
+note bottom of ScoringStrategyRegistry
+  **Extension point for domains:**
+  extra_strategies={"my_scorer": MyStrategy()}
+  in create_task() registers alongside
+  built-ins. Task YAML then uses:
+  scoring:
+    my_scorer:
+      my_check: { criteria... }
+end note
+
+note right of LLMJudgeStrategy
+  LLM judge scorers are batched
+  by ScorerFactory — a single LLM
+  call evaluates all checkpoints
+  for one task. Results are cached
+  in state.metadata.
+end note
+
+@enduml

@@ -1,0 +1,90 @@
+@startuml yaml-config-cascade
+!theme plain
+title YAML Configuration Cascade — 3-Level Inheritance
+caption global.yaml → shared.yaml → task.yaml deep merge, then Pydantic validation.
+
+start
+
+partition "1. File Discovery" {
+    :ConfigLoader.__init__(domain_root);
+    :tasks_dir = domain_root / "tasks";
+    :_load_global_defaults()\nfrom tasks/global.yaml;
+    :_discover_task_files()\nall *.yaml except global.yaml, shared.yaml;
+}
+
+partition "2. Per-Task Merge" {
+    while (more task YAML files?) is (yes)
+        :Load task.yaml as raw dict;
+        :Find sibling shared.yaml\n(same directory as task);
+
+        if (shared.yaml exists?) then (yes)
+            :Load shared.yaml as raw dict;
+        else (no)
+            :shared = None;
+        endif
+
+        :Check task["inherit_shared"]\n(default: True);
+
+        partition "deep_merge() cascade" {
+            :result = deep_merge(global, {})
+            //"Start from global defaults"//;
+
+            if (inherit_shared ≠ false\nAND shared ≠ None?) then (yes)
+                :result = deep_merge(result, shared)
+                //"Layer shared context"//;
+            endif
+
+            :result = deep_merge(result, task)
+            //"Task overrides always win"//;
+
+            note right
+              **deep_merge() rules:**
+              • Scalars: override wins
+              • Lists: override replaces (no append)
+              • Dicts: recursive merge
+              • None in override: keep base value
+              • Keys in _REPLACE_KEYS (e.g. "tools"):
+                replaced entirely, no recursive merge
+            end note
+        }
+
+        :Remove "inherit_shared" key;
+
+        partition "3. Pydantic Validation" {
+            :TaskConfig(**merged_dict);
+
+            note right
+              Validators run:
+              • _reject_old_format_keys()
+              • _parse_scoring_block()
+                converts strategy-grouped
+                "scoring:" → list[ScorerConfig]
+            end note
+        }
+
+        :Append to configs list;
+    endwhile (no)
+}
+
+partition "4. Filter Application" {
+    if (task_filter provided?) then (yes)
+        :Apply glob/comma-separated filter\nagainst task_id using fnmatch;
+        :Remove non-matching tasks;
+    endif
+}
+
+:Return list[TaskConfig];
+
+stop
+
+legend right
+  **Example cascade:**
+
+  | Layer | File | Example |
+  | global.yaml | tasks/global.yaml | max_steps: 25, tools: {bash: {timeout: 180}} |
+  | shared.yaml | tasks/incident/shared.yaml | prompts: {instruction: "incident/..."} |
+  | task.yaml | tasks/incident/task_01.yaml | title: "Find malware", max_steps: 50 |
+  | **Result** | merged | max_steps: 50 (task), tools from global, prompts from shared |
+end legend
+
+@enduml

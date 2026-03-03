@@ -1,0 +1,116 @@
+@startuml high-level-architecture
+!theme plain
+title SABER High-Level Architecture
+caption SABER is a thin Python library (~7,865 LOC) bridging YAML task definitions to inspect_ai evaluation.
+
+skinparam componentStyle rectangle
+skinparam packageStyle frame
+
+' ── External systems ──────────────────────────────────────────────
+cloud "inspect_ai Framework" as inspect {
+    [Task / Dataset / Scorer] as inspect_core
+    [DockerSandboxEnvironment] as docker_sandbox
+    [Agent Solvers (react, sandbox_agent_bridge)] as solvers
+    [Approval System] as approval
+}
+
+database "Docker Engine" as docker {
+    [Sandbox Containers\n(per-sample)] as sandbox_ct
+    [Permanent Services\n(databases, caches)] as perm_ct
+}
+
+' ── SABER library boundary ────────────────────────────────────────
+package "saber (thin library)" as saber {
+    [task.py\ncreate_task()] as task_factory <<entry point>>
+
+    package "config/" {
+        [loader.py\nConfigLoader] as loader
+        [models.py\nTaskConfig, ScorerConfig, ...] as models
+        [converter.py\ntasks_to_samples()] as converter
+    }
+
+    package "scoring/" {
+        [factory.py\nScorerFactory] as scorer_factory
+        [strategies.py\n6 built-in strategies] as strategies
+        [context.py\nScoringContext, ToolStep] as scoring_ctx
+        [aggregation.py\nScore aggregation] as aggregation
+    }
+
+    package "agents/" {
+        [__init__.py\nAgentRegistry] as agent_reg
+        [solver_factory.py\ncreate_saber_solver()] as solver_fac
+        [bridge_utils.py\nBridged agent helpers] as bridge
+    }
+
+    package "tools/" {
+        [registry.py\nToolRegistry] as tool_reg
+        [security.py\nCommandSecurityValidator] as security
+    }
+
+    package "environments/" {
+        [__init__.py\nresolve_sandbox_spec()] as env_resolve
+        [sandbox.py\nSaberSandboxEnvironment] as saber_sandbox
+    }
+
+    [prompts/\nPromptRenderer (Jinja2)] as prompts
+}
+
+' ── Domain layer ──────────────────────────────────────────────────
+folder "domains/<domain>/" as domain {
+    file "eval.yaml" as eval_yaml
+    file "@task function\n(excytin.py)" as task_fn
+    folder "tasks/" as tasks_dir {
+        file "global.yaml" as global_yaml
+        file "shared.yaml" as shared_yaml
+        file "task_*.yaml" as task_yamls
+    }
+    folder "prompts/" as prompt_files
+    folder "compose/" as compose_files
+    folder "docker/" as docker_files
+}
+
+' ── Connections ───────────────────────────────────────────────────
+task_fn --> task_factory : calls\ncreate_task(domain_root)
+task_factory --> loader : 1. load YAML
+task_factory --> prompts : 2. render prompts
+task_factory --> converter : 3. tasks → samples
+task_factory --> scorer_factory : 4. create scorers
+task_factory --> tool_reg : 5. register tools
+task_factory --> agent_reg : 6. resolve agent
+task_factory --> solver_fac : 7. create solver
+task_factory --> env_resolve : 8. resolve sandbox
+task_factory --> security : 9. build approval
+
+loader --> global_yaml
+loader --> shared_yaml
+loader --> task_yamls
+loader --> models : validates into
+
+prompts --> prompt_files
+
+scorer_factory --> strategies
+scorer_factory --> scoring_ctx
+scorer_factory --> aggregation
+
+solver_fac --> bridge : copilot/claude_code
+
+env_resolve --> saber_sandbox : configures
+saber_sandbox --|> docker_sandbox : extends
+
+saber_sandbox --> sandbox_ct : per-sample
+saber_sandbox --> perm_ct : task lifecycle
+
+task_factory --> inspect_core : returns Task
+
+note right of task_factory
+  **Single entry point** for all domains.
+  Returns a fully-configured inspect_ai Task
+  with dataset, solver, scorer, sandbox, approval.
+end note
+
+note bottom of saber
+  All models use Pydantic v2
+  with ConfigDict(frozen=True).
+  No mutable state.
+end note
+@enduml

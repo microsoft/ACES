@@ -1,0 +1,135 @@
+@startuml scoring-context-models
+!theme plain
+title Scoring Context Models — Data Available to Scorers
+caption Immutable value objects passed to every SaberScoringStrategy.
+
+skinparam classAttributeIconSize 0
+
+' ── Central: ScoringContext ───────────────────────────────────────
+class ScoringContext <<frozen>> {
+    submission: str
+    tool_steps: tuple[ToolStep, ...]
+    messages: tuple[ChatMessage, ...]
+    target_text: str
+    task_id: str
+    domain: str
+    metadata: dict[str, object]
+    sandbox_name: str | None
+    scorer: ScorerConfig | None
+    --
+    //Built from TaskState in ScorerFactory//
+    //Passed to every strategy.score()//
+}
+
+' ── ToolStep ──────────────────────────────────────────────────────
+class ToolStep <<frozen>> {
+    step_number: int
+    tool_name: str
+    tool_input: dict[str, object]
+    output: str
+    is_error: bool
+    error_type: str | None
+    assistant_message: str | None
+    reasoning: str | None
+}
+
+' ── Judge Template Context ────────────────────────────────────────
+class JudgeTemplateContext <<frozen>> {
+    task_id: str
+    domain: str
+    question: str
+    episode: EpisodeContext
+    task: TaskMetadata
+    --
+    submission: str | None
+    golden_answer: str | None
+    --
+    objective: str | None
+    checkpoint_id: str | None
+    checkpoints: tuple[CheckpointObjective, ...]
+    --
+    chunk_index: int | None
+    total_chunks: int | None
+    --
+    //All fields available in//
+    //Jinja2 templates via {{ field }}//
+}
+
+' ── EpisodeContext ────────────────────────────────────────────────
+class EpisodeContext <<frozen>> {
+    steps: tuple[ToolStep, ...]
+    --
+    + step_count: int {property}
+    + get_step_count(): int
+    --
+    //Wraps tool steps with helpers//
+    //for judge template rendering//
+}
+
+' ── CheckpointObjective ──────────────────────────────────────────
+class CheckpointObjective <<frozen>> {
+    id: str
+    objective: str
+    title: str
+    description: str
+    hints: tuple[str, ...]
+}
+
+' ── TaskMetadata ──────────────────────────────────────────────────
+class TaskMetadata <<frozen, extra=allow>> {
+    task_id: str
+    title: str
+    description: str
+    --
+    //extra='allow' for domain-specific//
+    //fields accessible via model_extra//
+}
+
+' ── How ScoringContext is built ───────────────────────────────────
+class TaskState <<inspect_ai>> {
+    messages: list[ChatMessage]
+    output: ModelOutput
+    metadata: dict
+    scores: dict[str, Score]
+}
+
+class "extract_tool_steps()" as extract <<function>> {
+    Parses ChatMessage sequence
+    into tuple[ToolStep, ...]
+    --
+    Extracts from assistant tool_calls
+    + tool response messages
+}
+
+' ── Relationships ─────────────────────────────────────────────────
+ScoringContext *-- "0..*" ToolStep : tool_steps
+ScoringContext --> ScorerConfig : scorer (from TaskConfig)
+
+JudgeTemplateContext *-- EpisodeContext : episode
+JudgeTemplateContext *-- TaskMetadata : task
+JudgeTemplateContext *-- "0..*" CheckpointObjective : checkpoints
+
+EpisodeContext *-- "0..*" ToolStep : steps
+
+TaskState ..> ScoringContext : built from
+TaskState ..> extract : messages →
+extract ..> ToolStep : produces
+
+note right of ScoringContext
+  **Construction path:**
+  1. ScorerFactory receives TaskState
+  2. extract_tool_steps(state.messages) → tool_steps
+  3. state.output.completion → submission
+  4. ScorerConfig from TaskConfig.scorers
+  5. All wrapped into immutable ScoringContext
+end note
+
+note bottom of JudgeTemplateContext
+  **Used by LLM judge strategies:**
+  - LLMJudgeStrategy renders system + user
+    templates with this context
+  - Templates access {{ episode.steps }},
+    {{ task.description }}, {{ checkpoints }}, etc.
+end note
+
+@enduml

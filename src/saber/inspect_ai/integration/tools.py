@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING
 from inspect_ai.tool import Tool, ToolSource
 from inspect_ai.util import sandbox
 
-from ...logging_config import LogCategory, get_saber_logger
+from saber.logging import get_logger
 
-logger = get_saber_logger(LogCategory.AGENT, __name__)
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from .saber import SABERSandboxEnvironment  # noqa: F401

@@ -1,0 +1,127 @@
+@startuml sandbox-environment-lifecycle
+!theme plain
+title SaberSandboxEnvironment — State Machine & Lifecycle
+caption Extends DockerSandboxEnvironment with permanent services and preflight builds.
+
+skinparam stateAttributeIconSize 0
+
+' ── State Diagram ─────────────────────────────────────────────────
+
+[*] --> Unconfigured
+
+state Unconfigured {
+    Unconfigured : No compose files set
+    Unconfigured : All ClassVars at defaults
+}
+
+Unconfigured --> Configured : set_permanent_compose()\nset_keep_permanent()\nset_preflight_config()
+
+state Configured {
+    Configured : _permanent_compose = Path
+    Configured : _permanent_project = "saber-permanent"
+    Configured : _preflight_rebuild = RebuildMode
+    Configured : _keep_permanent = bool
+    Configured : Called by resolve_sandbox_spec()
+}
+
+Configured --> TaskInit : task_init(task_name, config)
+
+state TaskInit {
+    state "Preflight Build" as preflight {
+        preflight : async with _preflight_lock
+        preflight : build_domain_images(domain_root, rebuild)
+        preflight : Once per evaluation (lock + _preflight_done flag)
+        preflight : Stores _preflight_error on failure
+    }
+
+    state "Permanent Services" as perm_start {
+        perm_start : docker compose -p saber-permanent up -d
+        perm_start : Exponential backoff retry (5 attempts)
+        perm_start : Sets SABER_PROJECT env var
+    }
+
+    state "Parent Init" as parent_init {
+        parent_init : super().task_init()
+        parent_init : DockerSandboxEnvironment setup
+    }
+
+    preflight --> perm_start
+    perm_start --> parent_init
+}
+
+TaskInit --> SampleLoop : Ready for samples
+
+state SampleLoop {
+    state "sample_init" as si {
+        si : Inherited from DockerSandboxEnvironment
+        si : docker compose up (sandbox containers)
+        si : Per-sample isolated environment
+    }
+
+    state "Agent Execution" as exec {
+        exec : exec(), read_file(), write_file()
+        exec : All inherited unchanged
+        exec : Commands run in sandbox container
+    }
+
+    state "sample_cleanup" as sc {
+        sc : Inherited from DockerSandboxEnvironment
+        sc : docker compose down (sandbox)
+    }
+
+    si --> exec : sandbox ready
+    exec --> sc : agent done + scored
+    sc --> si : next sample
+}
+
+SampleLoop --> TaskCleanup : All samples complete
+
+state TaskCleanup {
+    state "Parent Cleanup" as parent_clean {
+        parent_clean : super().task_cleanup()
+    }
+
+    state "Permanent Teardown" as perm_stop {
+        perm_stop : if cleanup && !keep_permanent:
+        perm_stop :   docker compose down -v
+        perm_stop : else if keep_permanent:
+        perm_stop :   log "keeping alive"
+        perm_stop : os.environ.pop("SABER_PROJECT")
+    }
+
+    parent_clean --> perm_stop
+}
+
+TaskCleanup --> [*]
+
+' ── Error Recovery ────────────────────────────────────────────────
+TaskInit --> TaskCleanup : Error during init\n→ stop permanent, pop env var
+
+' ── Class Variables ───────────────────────────────────────────────
+note right of Configured
+  **ClassVar state (shared across samples):**
+  • _permanent_compose: Path | None
+  • _permanent_project: str
+  • _permanent_domain_root: Path | None
+  • _keep_permanent: bool
+  • _preflight_domain_root: Path | None
+  • _preflight_rebuild: RebuildMode | None
+  • _preflight_lock: asyncio.Lock
+  • _preflight_done: bool
+  • _preflight_error: RuntimeError | None
+end note
+
+note left of SampleLoop
+  **Per-sample behavior is 100%
+  inherited from DockerSandboxEnvironment.**
+  SABER only adds task-level lifecycle
+  for permanent services and preflight.
+end note
+
+note bottom of TaskCleanup
+  **_reset() method available for testing:**
+  Clears all ClassVar state to defaults.
+  Used in test fixtures to ensure clean state.
+end note
+
+@enduml

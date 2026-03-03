@@ -1,0 +1,161 @@
+@startuml tool-resolution-and-security
+!theme plain
+title Tool Resolution & Security — From YAML to Validated Execution
+caption ToolRegistry resolves tools; CommandSecurityValidator enforces per-tool security.
+
+skinparam componentStyle rectangle
+
+' ── YAML Source ───────────────────────────────────────────────────
+file "task.yaml\ntools:" as yaml {
+}
+
+note right of yaml
+  tools:
+    bash:
+      timeout: 180
+      security:
+        blocked_commands: [rm, dd]
+        dangerous_patterns: ["curl.*\\|.*sh"]
+        block_path_traversal: true
+    python:
+      timeout: 120
+    submit: {}
+end note
+
+' ── ToolRegistry ──────────────────────────────────────────────────
+package "ToolRegistry" as reg {
+    class ToolRegistry {
+        - _BUILTINS: {"bash": bash, "python": python}
+        - _custom: dict[str, Callable]
+        --
+        + register(name, factory): void
+        + resolve(tool_configs) → ResolvedTools
+        + available() → list[str]
+        --
+        //submit key is skipped//
+        //(handled by react agent)//
+    }
+
+    class ResolvedTools <<frozen>> {
+        tools: tuple[Tool, ...]
+        submit_enabled: bool
+        security_configs: Mapping[str, ToolSecurityConfig]
+    }
+}
+
+' ── Security Pipeline ─────────────────────────────────────────────
+package "Security Pipeline" as sec_pipeline {
+    class ToolSecurityConfig <<frozen>> {
+        blocked_commands: frozenset[str]
+        allowed_commands: frozenset[str]
+        dangerous_patterns: tuple[str, ...]
+        semicolon_patterns: tuple[str, ...]
+        max_content_length: int
+        allow_semicolons: bool
+        block_null_bytes: bool
+        block_control_chars: bool
+        block_path_traversal: bool
+        sensitive_directories: tuple[str, ...]
+        safe_path_prefixes: tuple[str, ...]
+        extend_defaults: bool
+    }
+
+    class CommandSecurityValidator {
+        - _effective_blocked: frozenset[str]
+        - _compiled_patterns: tuple[Pattern, ...]
+        --
+        + validate(content: str) → ValidationResult
+    }
+
+    class ValidationResult <<frozen>> {
+        is_safe: bool
+        reason: str | None
+        matched_pattern: str | None
+        blocked_command: str | None
+    }
+}
+
+' ── Validation Pipeline Steps ─────────────────────────────────────
+package "Validation Pipeline (7 steps)" as pipeline {
+    collections "1. Content length check\n   (max_content_length)" as step1
+    collections "2. Null byte check\n   (block_null_bytes)" as step2
+    collections "3. Control char check\n   (block_control_chars)" as step3
+    collections "4. Base command blocklist\n   (shlex.split → check\n    + proxy unwrapping)" as step4
+    collections "5. Dangerous pattern regexes\n   (compiled patterns)" as step5
+    collections "6. Semicolon injection\n   (allow_semicolons)" as step6
+    collections "7. Path traversal + shell\n   metachar check\n   (sensitive_directories)" as step7
+}
+
+' ── Default Security Constants ────────────────────────────────────
+class "Default Constants" as defaults {
+    90+ blocked commands
+    46+ dangerous patterns
+    10+ command proxies
+    (sudo, env, nice, timeout, ...)
+    --
+    extend_defaults: true merges
+    user config with defaults
+}
+
+' ── Approval System ───────────────────────────────────────────────
+package "Approval Integration" as approval_pkg {
+    class "build_tool_approval()" as build_approval <<function>> {
+        Input: dict[str, ToolSecurityConfig]
+        Output: list[ApprovalPolicy]
+        --
+        Creates per-tool ApprovalPolicy
+        using SaberToolApprover
+    }
+
+    class SaberToolApprover {
+        - _validators: dict[str, CommandSecurityValidator]
+        --
+        + approve(call, view, messages) → Approval
+        --
+        Delegates to ToolInspectorRegistry
+        to extract command from ToolCall args
+    }
+
+    class ToolInspectorRegistry {
+        Built-in inspectors:
+        • bash → extract "cmd" arg
+        • python → extract "code" arg
+        --
+        + get_inspector(tool_name)
+        + register(name, inspector)
+    }
+}
+
+' ── Flow ──────────────────────────────────────────────────────────
+yaml --> ToolRegistry : tools: dict[str, ToolConfig]
+ToolRegistry --> ResolvedTools : resolve()
+
+ResolvedTools ..> ToolSecurityConfig : carries security_configs
+
+ToolSecurityConfig --> CommandSecurityValidator : constructs
+CommandSecurityValidator --> step1
+step1 --> step2
+step2 --> step3
+step3 --> step4
+step4 --> step5
+step5 --> step6
+step6 --> step7
+step7 --> ValidationResult
+
+defaults ..> ToolSecurityConfig : extend_defaults=true\nmerges with
+
+build_approval --> SaberToolApprover : creates
+SaberToolApprover --> CommandSecurityValidator : per-tool validator
+SaberToolApprover --> ToolInspectorRegistry : extract command from args
+
+note bottom of pipeline
+  **Proxy unwrapping (Step 4):**
+  For commands like "sudo rm -rf /",
+  the validator strips the proxy command
+  ("sudo") and also checks the inner
+  command ("rm") against the blocklist.
+  Proxy commands: sudo, env, nice, timeout,
+  stdbuf, command, xargs, doas, su
+end note
+
+@enduml

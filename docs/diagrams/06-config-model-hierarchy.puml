@@ -1,0 +1,190 @@
+@startuml config-model-hierarchy
+!theme plain
+title Pydantic Configuration Model Hierarchy
+caption All models use ConfigDict(frozen=True). Central model is TaskConfig.
+
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+
+' ── Enums ─────────────────────────────────────────────────────────
+enum ScoreAggregation {
+    MAX
+    AVERAGE
+    WEIGHTED_SUM
+}
+
+enum ScorerTarget {
+    SUBMISSION
+    TRAJECTORY
+}
+
+enum LLMJudgeResponseFormat {
+    BINARY
+    CONTINUOUS
+    STEP_EVALUATIONS
+}
+
+' ── Criteria (discriminated by strategy) ──────────────────────────
+class StaticCriteria <<frozen>> {
+    expected_answers: list[str]
+}
+
+class LLMJudgeCriteria <<frozen>> {
+    model: str
+    system_template: str
+    user_template: str
+    golden_answer: str | None
+    steps_per_message: int | None
+    response_format: LLMJudgeResponseFormat
+}
+
+class ToolCallCriteria <<frozen>> {
+    tool_name: str
+    min_executions: int
+    expected_tools: list[str]
+    param_name: str | None
+}
+
+class DomainCriteria <<frozen, extra=allow>> {
+    //(arbitrary domain fields)//
+}
+
+' ── Scoring Config ────────────────────────────────────────────────
+class ScorerConfig <<frozen>> {
+    scorer_name: str
+    strategy: str
+    target: ScorerTarget
+    max_score: float (0, 100]
+    weight: float [0, 1]
+    title: str
+    description: str
+    hints: list[str]
+    ---
+    criteria: StaticCriteria | LLMJudgeCriteria\n        | ToolCallCriteria | DomainCriteria
+}
+
+class AggregationConfig <<frozen>> {
+    strategy: ScoreAggregation
+    scores: list[str | list[str]]
+    ---
+    //Supports strategy-as-key format//
+    //e.g. { max: { scores: [...] } }//
+}
+
+' ── Prompt & Tool Config ──────────────────────────────────────────
+class PromptPaths <<frozen>> {
+    instruction: str
+    assistant: str
+    submit: str
+    continue_prompt: str
+}
+
+class ToolConfig <<frozen>> {
+    timeout: int = 180
+    security: ToolSecurityConfig | None
+}
+
+class ToolSecurityConfig <<frozen>> {
+    blocked_commands: frozenset[str]
+    allowed_commands: frozenset[str]
+    dangerous_patterns: tuple[str, ...]
+    semicolon_patterns: tuple[str, ...]
+    max_content_length: int
+    allow_semicolons: bool
+    block_null_bytes: bool
+    block_control_chars: bool
+    block_path_traversal: bool
+    sensitive_directories: tuple[str, ...]
+    safe_path_prefixes: tuple[str, ...]
+    extend_defaults: bool
+}
+
+class InitialContext <<frozen, extra=allow>> {
+    //(domain-specific fields)//
+    ---
+    __contains__(): bool
+    __getitem__(): object
+}
+
+' ── Central: TaskConfig ───────────────────────────────────────────
+class TaskConfig <<frozen>> {
+    task_id: str
+    title: str
+    description: str
+    prompts: PromptPaths
+    sandbox: str | None
+    initial_context: InitialContext
+    initial_files: dict[str, str]
+    tools: dict[str, ToolConfig]
+    max_steps: int
+    timeout: int | None
+    scorers: tuple[ScorerConfig, ...]
+    scoring_aggregation: AggregationConfig | None
+    attempts: int
+    aggregation: ScoreAggregation
+    role: str | None
+    is_template: bool
+    dependency_template: str | None
+    ---
+    //model_validators://
+    _reject_old_format_keys()
+    _parse_scoring_block()
+}
+
+' ── Domain Config ─────────────────────────────────────────────────
+class DomainConfig <<frozen>> {
+    slug: str
+    name: str
+    description: str
+    version: str
+    images: dict[str, ImageConfig]
+    tags: list[str]
+    maintainer: str | None
+}
+
+class ImageConfig <<frozen>> {
+    tag: str
+    dockerfile: str
+    context: str | None
+    labels: dict[str, str]
+    build_args: dict[str, str]
+}
+
+' ── Relationships ─────────────────────────────────────────────────
+TaskConfig *-- PromptPaths : prompts
+TaskConfig *-- "0..*" ToolConfig : tools{}
+TaskConfig *-- "0..*" ScorerConfig : scorers
+TaskConfig *-- "0..1" AggregationConfig : scoring_aggregation
+TaskConfig *-- InitialContext : initial_context
+TaskConfig --> ScoreAggregation : aggregation
+
+ScorerConfig --> ScorerTarget : target
+ScorerConfig --> "1" StaticCriteria : criteria (static)
+ScorerConfig --> "1" LLMJudgeCriteria : criteria (llm_judge)
+ScorerConfig --> "1" ToolCallCriteria : criteria (tool_call)
+ScorerConfig --> "1" DomainCriteria : criteria (domain)
+
+LLMJudgeCriteria --> LLMJudgeResponseFormat
+
+ToolConfig *-- "0..1" ToolSecurityConfig : security
+
+AggregationConfig --> ScoreAggregation : strategy
+
+DomainConfig *-- "0..*" ImageConfig : images{}
+
+note right of TaskConfig
+  **Parsed from YAML scoring: block**
+  strategy-grouped format (new):
+  scoring:
+    static:
+      submission:
+        expected_answers: [...]
+    llm_judge:
+      checkpoint_1:
+        judge_system_template: ...
+
+  _parse_scoring_block() converts
+  this to list[ScorerConfig].
+end note
+
+@enduml

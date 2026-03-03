@@ -1,0 +1,140 @@
+@startuml agent-registry-and-solver
+!theme plain
+title Agent Registry & Solver Factory — Discovery, Registration, Invocation
+caption Auto-discovery from registry/ + two-level factory pattern for per-sample prompt injection.
+
+skinparam componentStyle rectangle
+
+' ── Agent Registry ────────────────────────────────────────────────
+package "agents/" {
+    class AgentRegistry <<module-level>> {
+        - _registry: dict[str, Callable]
+        --
+        + register(name, factory): void
+        + get(name): Callable | None
+        + list_agents(): list[str]
+        --
+        //Module-level auto-discovery://
+        //1. Scans agents/registry/*.py//
+        //2. Finds create_agent() functions//
+        //3. Extracts name from filename//
+        //4. Registers each automatically//
+    }
+
+    folder "registry/" {
+        file "react.py\ncreate_agent()" as react_file
+        file "copilot.py\ncreate_agent()" as copilot_file
+        file "claude_code.py\ncreate_agent()" as claude_file
+    }
+
+    class "resolve_agent()" as resolver <<function>> {
+        Input: agent_name (str)
+        Output: agent factory callable
+        --
+        Raises AgentNotFoundError
+        with helpful message listing
+        available agents
+    }
+
+    class AgentCapabilities <<frozen>> {
+        supports_tools: bool = True
+    }
+
+    class AgentPromptKwargs <<TypedDict>> {
+        instruction_prompt: str
+        assistant_prompt: str
+        continue_prompt: str
+    }
+}
+
+' ── Solver Factory ────────────────────────────────────────────────
+class "create_saber_solver()" as solver_factory <<function>> {
+    Input: agent_name, agent_factory, tool_registry
+    Output: Solver (saber_agent_solver)
+}
+
+class "saber_agent_solver" as solver <<@solver>> {
+    Per-sample solve(state, generate):
+    --
+    1. Extract prompts from state.metadata
+       (instruction_prompt, assistant_prompt,
+        continue_prompt)
+    2. Per-sample max_steps from metadata
+       → state.tool_call_limit
+    3. Per-sample tool resolution
+       from metadata["tools"]
+    4. Two-level factory call:
+       create_with_prompts = agent_factory()
+       agent_solver = create_with_prompts(**kwargs)
+    5. Capabilities-gated kwarg forwarding
+       (check AgentCapabilities.supports_tools)
+    6. Return await agent_solver(state, generate)
+}
+
+' ── Two-Level Factory Pattern ─────────────────────────────────────
+package "Two-Level Factory Pattern" as factory_pattern {
+    class "Level 1:\nagent_factory()" as level1 {
+        Called with no args.
+        Returns a callable that
+        accepts prompts + tools.
+        --
+        //e.g. react's create_agent()//
+        //returns a function//
+    }
+
+    class "Level 2:\ncreate_with_prompts(**kwargs)" as level2 {
+        Called with per-sample kwargs:
+        • instruction_prompt
+        • assistant_prompt
+        • continue_prompt
+        • tools (if supports_tools)
+        --
+        Returns: Solver instance
+    }
+}
+
+' ── bridge_utils (for copilot/claude_code) ────────────────────────
+class "bridge_utils.py" as bridge {
+    + build_system_prompt(instruction, assistant): str
+    + build_bridged_tools(tools): list[BridgedToolsSpec]
+    + build_user_prompt(messages): (str, bool)
+    + resolve_mcp_servers(configs): (json, tools)
+    + validate_model_availability(): void
+    + create_tool_call_limit_filter(): GenerateFilter
+}
+
+' ── Connections ───────────────────────────────────────────────────
+AgentRegistry --> react_file : auto-discovers
+AgentRegistry --> copilot_file : auto-discovers
+AgentRegistry --> claude_file : auto-discovers
+
+resolver --> AgentRegistry : looks up name
+
+solver_factory --> resolver : receives factory from
+solver_factory --> solver : creates
+solver_factory --> AgentCapabilities : checks
+
+solver --> level1 : calls factory()
+level1 --> level2 : returns callable
+solver --> level2 : calls with prompts+tools
+solver --> AgentPromptKwargs : extracts from metadata
+
+copilot_file ..> bridge : uses
+claude_file ..> bridge : uses
+
+note bottom of solver
+  **Key insight:**
+  Prompts are stored in Sample.metadata
+  by tasks_to_samples() during create_task().
+  The solver extracts them at solve-time,
+  enabling per-sample prompt customization.
+end note
+
+note right of factory_pattern
+  **Why two levels?**
+  Level 1: Agent-specific setup (model config, etc.)
+  Level 2: Per-sample customization (prompts, tools)
+  This separation enables caching at Level 1.
+end note
+
+@enduml

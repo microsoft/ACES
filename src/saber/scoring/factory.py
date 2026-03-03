@@ -1,0 +1,435 @@
+"""Scorer factory — creates inspect_ai ``@scorer`` instances from YAML task config.
+
+Each :class:`TaskConfig` produces N unit scorers + 1 aggregate scorer.
+All unit scorers share the same creation path via
+``_create_unit_scorer_from_config``.
+
+Batch optimization for LLM-judge checkpoint scorers lives exclusively
+in ``compute_task_aggregate`` (called by ``saber_overall``).  Individual
+unit scorers are cache-or-run: they check the unified cache first
+(populated by ``saber_overall``) and fall back to running their
+strategy directly when no cache exists.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import ClassVar
+
+from inspect_ai.scorer import Score, Scorer, Target, accuracy, mean, scorer, stderr
+from inspect_ai.solver import TaskState
+
+from saber.config.models import (
+    ScorerConfig,
+    ScorerTarget,
+    TaskConfig,
+)
+from saber.scoring.aggregation import (
+    aggregate_scorer_results,
+    build_scorer_summary,
+)
+from saber.scoring.context import ScoringContext, ToolStep
+from saber.scoring.registry import ScoringStrategyRegistry
+from saber.scoring.templates import TemplateRenderer
+from saber.scoring.trajectory import extract_tool_steps
+
+
+class StrategyName(StrEnum):
+    """Built-in scoring strategy names.
+
+    Used for factory-internal comparisons only.
+    ``ScorerConfig.strategy`` remains ``str`` for YAML flexibility.
+    """
+
+    STATIC = "static"
+    LLM_JUDGE = "llm_judge"
+    NONE = "none"
+    STATIC_JACCARD = "static_jaccard"
+    TOOL_CALL = "tool_call"
+    TOOL_CALL_COUNT = "tool_call_count"
+
+
+@dataclass(frozen=True)
+class CacheKeys:
+    """Namespaced metadata cache keys for the scoring pipeline."""
+
+    _UNIFIED_PREFIX: ClassVar[str] = "_saber_all_scores_"
+
+    @staticmethod
+    def unified_scores(task_id: str) -> str:
+        """Key for the unified per-scorer result cache in state.metadata."""
+        return f"{CacheKeys._UNIFIED_PREFIX}{task_id}"
+
+
+def _is_batch_eligible(sc: ScorerConfig) -> bool:
+    """Return True if *sc* should be scored via the batched LLM judge pipeline.
+
+    Only LLM judge checkpoint (non-submission) scorers qualify.
+    """
+    return bool(sc.strategy == StrategyName.LLM_JUDGE and sc.target != ScorerTarget.SUBMISSION)
+
+
+logger = logging.getLogger("saber.scoring.factory")
+
+
+def _make_scoring_context(
+    *,
+    state: TaskState,
+    target: Target,
+    task_id: str,
+    domain_slug: str,
+    scorer: ScorerConfig,
+    tool_steps: tuple[ToolStep, ...] | None = None,
+) -> ScoringContext:
+    """Build a ScoringContext from a TaskState.
+
+    DRY helper used by both ``ScorerFactory`` methods and the closures
+    created for unit / batch scorers.
+
+    Args:
+        state: Current TaskState for this sample.
+        target: The target answer.
+        task_id: Unique task identifier.
+        domain_slug: Domain name (directory basename).
+        scorer: Scorer configuration.
+        tool_steps: Pre-extracted tool steps; extracted from
+            ``state.messages`` when *None*.
+
+    Returns:
+        Fully-populated :class:`ScoringContext`.
+    """
+    return ScoringContext(
+        submission=state.output.completion if state.output else "",
+        tool_steps=(tool_steps if tool_steps is not None else tuple(extract_tool_steps(state.messages))),
+        messages=tuple(state.messages),
+        target=target.text,
+        task_id=task_id,
+        domain=domain_slug,
+        metadata=state.metadata or {},
+        scorer=scorer,
+    )
+
+
+class ScorerFactory:
+    """Creates inspect_ai ``@scorer`` instances from YAML task config.
+
+    Each :class:`TaskConfig` produces its own namespaced scorers.
+    Scorer names use dot-separated ``task_id.component`` format.
+    """
+
+    def __init__(
+        self,
+        domain_root: Path,
+        registry: ScoringStrategyRegistry | None = None,
+    ) -> None:
+        self._domain_root = domain_root
+        self._domain_slug = domain_root.name
+        self._registry = registry or ScoringStrategyRegistry()
+        self._renderer = TemplateRenderer(domain_root / "prompts")
+
+    def create_scorers(self, task: TaskConfig) -> list[Scorer]:
+        """Build all scorers for *task* from its YAML config.
+
+        Returns an ordered list — aggregate scorer is always last so it
+        can read ``state.scores`` populated by the preceding scorers.
+
+        Args:
+            task: The task configuration to build scorers for.
+
+        Returns:
+            Ordered list of :class:`Scorer` instances.
+        """
+        return self._create_scorers_from_config(task)
+
+    async def compute_task_aggregate(
+        self,
+        task: TaskConfig,
+        state: TaskState,
+        target: Target,
+    ) -> Score:
+        """Compute a task's aggregate score by running all strategies inline.
+
+        Unlike the aggregate ``@scorer`` (which reads ``state.scores``),
+        this method independently runs every scoring strategy and then
+        aggregates the results.  It is designed to be called from the
+        ``saber_overall`` scorer **before** individual per-task scorers
+        have populated ``state.scores``.
+
+        Results are written to a unified cache in ``state.metadata`` so
+        that individual per-task unit scorers hit the cache and avoid
+        duplicate strategy calls.
+
+        Args:
+            task: Task configuration with scorers and aggregation config.
+            state: Current TaskState for this sample.
+            target: The target answer.
+
+        Returns:
+            Aggregate :class:`Score` with normalized value.
+        """
+        from saber.scoring.batch import score_checkpoints_llm_batch
+
+        self._validate_strategies(task)
+
+        task_id = task.task_id
+        tool_steps = tuple(extract_tool_steps(state.messages))
+
+        # --- Run all strategies and collect per-scorer results -----------
+        individual_scores: dict[str, Score] = {}
+        llm_batch_configs: list[ScorerConfig] = []
+
+        for sc in task.scorers:
+            if _is_batch_eligible(sc):
+                # Checkpoint LLM judge scorers → batched
+                llm_batch_configs.append(sc)
+            else:
+                # Submission LLM judges, static, tool_call, etc. → individual
+                strategy = self._registry.get(sc.strategy)
+                ctx = _make_scoring_context(
+                    state=state,
+                    target=target,
+                    task_id=task_id,
+                    domain_slug=self._domain_slug,
+                    scorer=sc,
+                    tool_steps=tool_steps,
+                )
+                individual_scores[sc.scorer_name] = await strategy.score(ctx, renderer=self._renderer)
+
+        # Batch LLM judge checkpoint scorers
+        if llm_batch_configs:
+            contexts = [
+                _make_scoring_context(
+                    state=state,
+                    target=target,
+                    task_id=task_id,
+                    domain_slug=self._domain_slug,
+                    scorer=cfg,
+                    tool_steps=tool_steps,
+                )
+                for cfg in llm_batch_configs
+            ]
+            batch_results = await score_checkpoints_llm_batch(
+                contexts=contexts,
+                renderer=self._renderer,
+            )
+
+            for cfg in llm_batch_configs:
+                if cfg.scorer_name in batch_results:
+                    individual_scores[cfg.scorer_name] = batch_results[cfg.scorer_name]
+                else:
+                    logger.warning(
+                        "Scorer %r not found in batch results for task %r — defaulting to 0.0",
+                        cfg.scorer_name,
+                        task_id,
+                    )
+                    individual_scores[cfg.scorer_name] = Score(value=0.0)
+
+        # --- Cache ALL results for individual scorers to read ----------
+        state.metadata[CacheKeys.unified_scores(task_id)] = individual_scores
+
+        # --- Aggregate ---------------------------------------------------
+        raw_scores = {name: score.as_float() for name, score in individual_scores.items()}
+        agg_config = task.scoring_aggregation
+        normalized, scorer_details = aggregate_scorer_results(
+            scorer_configs=task.scorers,
+            raw_scores=raw_scores,
+            agg_config=agg_config,
+        )
+
+        return Score(
+            value=normalized,
+            answer=state.output.completion if state.output else "",
+            explanation=build_scorer_summary(scorer_details),
+            metadata={
+                "task_id": task_id,
+                "scorer_details": scorer_details,
+                "saber_score": normalized,
+                "aggregation": (agg_config.strategy.value if agg_config else "average"),
+            },
+        )
+
+    def _validate_strategies(self, task: TaskConfig) -> None:
+        """Fail fast if any scorer references an unregistered strategy.
+
+        Raises:
+            ValueError: If any scorer's strategy is not in the registry.
+        """
+        unknown = {s.strategy for s in task.scorers if s.strategy not in self._registry.available()}
+        if unknown:
+            raise ValueError(
+                f"Task {task.task_id!r} references unregistered scoring strategies: "
+                f"{sorted(unknown)}. Available: {self._registry.available()}. "
+                f"Register custom strategies via extra_strategies parameter."
+            )
+
+    def create_overall_scorer(self, tasks: list[TaskConfig]) -> Scorer:
+        """Create the ``saber_overall`` scorer — the headline metric.
+
+        This scorer is placed **first** in the scorer list so that
+        inspect_ai uses it as ``results.scores[0]`` (the headline).
+        It computes the per-task aggregate independently by running all
+        scoring strategies inline, then returns the aggregate value.
+
+        Because it runs **before** per-task scorers, it caches LLM-judge
+        results in ``state.metadata`` so subsequent batch scorers skip
+        duplicate LLM calls.
+
+        Args:
+            tasks: All task configurations in this evaluation.
+
+        Returns:
+            A :class:`Scorer` named ``saber_overall`` using ``mean()``
+            metric so the headline averages per-sample aggregate values.
+        """
+        task_map = {t.task_id: t for t in tasks}
+        factory = self
+
+        @scorer(metrics=[mean(), stderr()], name="saber_overall")  # type: ignore[misc]
+        def overall() -> Scorer:
+            async def do_score(state: TaskState, target: Target) -> Score:
+                sample_task_id = state.metadata.get("task_id", "")
+                task_cfg = task_map.get(sample_task_id)
+                if task_cfg is None:
+                    return Score(
+                        value=0.0,
+                        explanation=(f"No task config for {sample_task_id!r}"),
+                    )
+                return await factory.compute_task_aggregate(
+                    task_cfg,
+                    state,
+                    target,
+                )
+
+            return do_score
+
+        return overall()
+
+    def _validate_aggregation_refs(self, task: TaskConfig) -> None:
+        """Fail fast if aggregation references scorer names not in task.scorers.
+
+        Raises:
+            ValueError: If ``scoring_aggregation.scores`` contains a name
+                not present in ``task.scorers``.
+        """
+        if task.scoring_aggregation is None:
+            return
+        known = {sc.scorer_name for sc in task.scorers}
+        referenced: set[str] = set()
+        for entry in task.scoring_aggregation.scores:
+            if isinstance(entry, str):
+                referenced.add(entry)
+            else:
+                referenced.update(entry)
+        unknown = referenced - known
+        if unknown:
+            raise ValueError(
+                f"Task {task.task_id!r} aggregation references unknown scorer names: "
+                f"{sorted(unknown)}. Available scorers: {sorted(known)}."
+            )
+
+    def _create_scorers_from_config(self, task: TaskConfig) -> list[Scorer]:
+        """Build scorers from task.scorers config list.
+
+        Each :class:`ScorerConfig` produces one unit scorer via
+        ``_create_unit_scorer_from_config``.  An aggregate scorer is
+        appended last so it can read ``state.scores`` populated by
+        the preceding scorers.
+
+        Returns ordered list with aggregate scorer last.
+        """
+        self._validate_strategies(task)
+        self._validate_aggregation_refs(task)
+
+        scorers: list[Scorer] = []
+
+        for sc in task.scorers:
+            scorers.append(
+                self._create_unit_scorer_from_config(
+                    name=f"{task.task_id}.{sc.scorer_name}",
+                    scorer_config=sc,
+                    task=task,
+                )
+            )
+
+        scorers.append(self._create_aggregate_scorer_from_config(task))
+        return scorers
+
+    def _create_unit_scorer_from_config(
+        self,
+        name: str,
+        scorer_config: ScorerConfig,
+        task: TaskConfig,
+    ) -> Scorer:
+        """Create a single atomic scorer from a ScorerConfig."""
+        strategy = self._registry.get(scorer_config.strategy)
+        task_id = task.task_id
+        renderer = self._renderer
+        domain_slug = self._domain_slug
+
+        @scorer(metrics=[accuracy(), stderr()], name=name)  # type: ignore[misc]
+        def unit_scorer() -> Scorer:
+            async def do_score(state: TaskState, target: Target) -> Score | None:
+                if state.metadata.get("task_id") != task_id:
+                    return None
+
+                # Check unified cache (populated by saber_overall)
+                unified = state.metadata.get(CacheKeys.unified_scores(task_id))
+                if isinstance(unified, dict) and scorer_config.scorer_name in unified:
+                    return unified[scorer_config.scorer_name]
+
+                ctx = _make_scoring_context(
+                    state=state,
+                    target=target,
+                    task_id=task_id,
+                    domain_slug=domain_slug,
+                    scorer=scorer_config,
+                )
+                return await strategy.score(ctx, renderer=renderer)
+
+            return do_score
+
+        return unit_scorer()
+
+    def _create_aggregate_scorer_from_config(self, task: TaskConfig) -> Scorer:
+        """Create aggregate scorer using task.scorers and task.scoring_aggregation."""
+        task_id = task.task_id
+        agg_name = f"{task_id}.aggregate"
+        task_scorers = task.scorers
+        agg_config = task.scoring_aggregation
+
+        @scorer(metrics=[accuracy(), stderr()], name=agg_name)  # type: ignore[misc]
+        def aggregate() -> Scorer:
+            async def do_score(state: TaskState, target: Target) -> Score | None:
+                if state.metadata.get("task_id") != task_id:
+                    return None
+                scores = state.scores or {}
+
+                raw_scores = {
+                    sc.scorer_name: scores.get(f"{task_id}.{sc.scorer_name}", Score(value=0.0)).as_float()
+                    for sc in task_scorers
+                }
+                normalized, scorer_details = aggregate_scorer_results(
+                    scorer_configs=task_scorers,
+                    raw_scores=raw_scores,
+                    agg_config=agg_config,
+                )
+
+                answer = state.output.completion if state.output else ""
+                return Score(
+                    value=normalized,
+                    answer=answer,
+                    explanation=build_scorer_summary(scorer_details),
+                    metadata={
+                        "task_id": task_id,
+                        "scorer_details": scorer_details,
+                        "saber_score": normalized,
+                        "aggregation": (agg_config.strategy.value if agg_config else "average"),
+                    },
+                )
+
+            return do_score
+
+        return aggregate()

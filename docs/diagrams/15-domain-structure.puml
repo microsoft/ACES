@@ -1,0 +1,187 @@
+@startuml domain-structure
+!theme plain
+title Domain Directory Structure — What Goes Where
+caption Each domain is a self-contained benchmark with tasks, prompts, compose, and Docker files.
+
+skinparam packageStyle frame
+skinparam componentStyle rectangle
+
+' ── Domain Root ───────────────────────────────────────────────────
+package "domains/<domain>/" as domain_root {
+
+    file "eval.yaml" as eval_yaml
+    note right of eval_yaml
+      **inspect_ai task definition file**
+      Points to the @task entry point.
+      Consumed by: inspect eval CLI
+      Example:
+        task: excytin.py@excytin
+    end note
+
+    file "@task function\n(<domain>.py)" as task_fn
+    note right of task_fn
+      **Domain entry point**
+      Calls create_task(domain_root, ...)
+      Registers extra_tools, extra_strategies.
+      Consumed by: inspect_ai
+    end note
+
+    file "__init__.py" as init_py
+
+    ' ── tasks/ ────────────────────────────────────────────────────
+    package "tasks/" as tasks_dir {
+        file "global.yaml" as global_yaml
+        note bottom of global_yaml
+          Domain-wide defaults:
+          • max_steps, tools, prompts
+          • Tool security configs
+          Consumed by: ConfigLoader
+        end note
+
+        package "category/" as task_category {
+            file "shared.yaml" as shared_yaml
+            note bottom of shared_yaml
+              Category-level defaults.
+              Merged between global
+              and task YAML.
+              Consumed by: ConfigLoader
+            end note
+
+            file "task_001.yaml" as task_yaml
+            file "task_002.yaml" as task_yaml2
+            note bottom of task_yaml
+              Individual task definition:
+              • task_id, title, description
+              • prompts (template paths)
+              • scoring block
+              • initial_context
+              • sandbox_environment
+              Consumed by: ConfigLoader
+            end note
+        }
+    }
+
+    ' ── prompts/ ──────────────────────────────────────────────────
+    package "prompts/" as prompts_dir {
+        folder "instructions/" as instr_dir {
+            file "task_instruction.j2" as instr_template
+        }
+        folder "assistants/" as asst_dir {
+            file "inspect_assistant.j2" as asst_template
+        }
+        folder "submits/" as submit_dir {
+            file "inspect_submit.j2" as submit_template
+        }
+        folder "continues/" as cont_dir {
+            file "inspect_continue.j2" as cont_template
+        }
+        folder "judges/" as judge_dir {
+            file "system.j2" as judge_sys
+            file "user.j2" as judge_user
+        }
+    }
+    note right of prompts_dir
+      **Jinja2 templates**
+      Referenced by PromptPaths in YAML.
+      Template vars from TaskConfig:
+      {{ task_id }}, {{ description }},
+      {{ initial_context.field }}, etc.
+      Consumed by: PromptRenderer
+    end note
+
+    ' ── compose/ ──────────────────────────────────────────────────
+    package "compose/" as compose_dir {
+        file "sandbox.compose.yml" as sandbox_compose
+        note bottom of sandbox_compose
+          **Per-sample sandbox**
+          The main sandbox used for each
+          evaluation sample.
+          Consumed by: resolve_sandbox_spec()
+        end note
+
+        file "databases.compose.yml" as perm_compose
+        note bottom of perm_compose
+          **Permanent services** (optional)
+          Databases, caches shared across
+          all samples. Managed by
+          SaberSandboxEnvironment.
+          Consumed by: set_permanent_compose()
+        end note
+
+        file "custom.compose.yml" as custom_compose
+        note bottom of custom_compose
+          **Per-task sandbox** (optional)
+          Referenced by sandbox_environment
+          field in task YAML.
+          Consumed by: _resolve_sandbox()
+        end note
+    }
+
+    ' ── docker/ ───────────────────────────────────────────────────
+    package "docker/" as docker_dir {
+        file "Dockerfile.sandbox" as dockerfile1
+        file "Dockerfile.database" as dockerfile2
+    }
+    note right of docker_dir
+      Dockerfiles built during preflight.
+      Referenced by compose files.
+      Consumed by: build_domain_images()
+    end note
+
+    ' ── scoring/ (optional) ───────────────────────────────────────
+    package "scoring/ (optional)" as scoring_dir {
+        file "custom_strategy.py" as custom_scorer
+    }
+    note right of scoring_dir
+      Domain-specific scoring strategies.
+      Registered via extra_strategies
+      in create_task().
+      Consumed by: ScoringStrategyRegistry
+    end note
+
+    ' ── tools/ (optional) ─────────────────────────────────────────
+    package "tools/ (optional)" as tools_dir {
+        file "custom_tool.py" as custom_tool
+    }
+    note right of tools_dir
+      Domain-specific tools.
+      Registered via extra_tools
+      in create_task().
+      Consumed by: ToolRegistry
+    end note
+
+    ' ── data/ (optional) ──────────────────────────────────────────
+    package "data/ (optional)" as data_dir {
+        file "evidence.json" as data_file
+    }
+    note right of data_dir
+      Static data files injected
+      into sandbox containers via
+      initial_files in task YAML.
+      Consumed by: _resolve_files()
+    end note
+}
+
+' ── SABER components consuming each part ──────────────────────────
+package "SABER Components" as saber {
+    [ConfigLoader] as cl
+    [PromptRenderer] as pr
+    [ScorerFactory] as sf
+    [ToolRegistry] as tr
+    [resolve_sandbox_spec()] as rss
+    [SaberSandboxEnvironment] as sse
+    [tasks_to_samples()] as tts
+}
+
+cl --> global_yaml
+cl --> shared_yaml
+cl --> task_yaml
+pr --> instr_template
+pr --> judge_sys
+sf --> scoring_dir
+tr --> tools_dir
+rss --> sandbox_compose
+sse --> perm_compose
+tts --> data_dir
+
+@enduml

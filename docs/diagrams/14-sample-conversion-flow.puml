@@ -1,0 +1,103 @@
+@startuml sample-conversion-flow
+!theme plain
+title Sample Conversion — TaskConfig → inspect_ai Sample
+caption tasks_to_samples() transforms YAML-derived configs into inspect_ai evaluation objects.
+
+start
+
+:tasks_to_samples(tasks, domain_root, renderer);
+
+partition "Per TaskConfig → Sample" {
+
+    :rendered_prompts = renderer.render_all_prompts(\n  task.prompts, task\n);
+    note right
+      PromptRenderer uses Jinja2.
+      Template vars from TaskConfig:
+      • task_id, title, description
+      • initial_context (domain-specific)
+      • All model fields as template vars
+    end note
+
+    :rendered_instruction = rendered_prompts["instruction"];
+
+    partition "Build Sample.input" {
+        :ChatMessageSystem(content=rendered_instruction);
+        :ChatMessageUser(content=task.description);
+        :input = [system_msg, user_msg];
+    }
+
+    partition "Extract target answer" {
+        :Find first scorer with\ntarget == SUBMISSION;
+        if (StaticCriteria?) then (yes)
+            :target = expected_answers[0];
+        elseif (LLMJudgeCriteria?) then (yes)
+            :target = golden_answer;
+        else (no match)
+            :target = "";
+        endif
+    }
+
+    partition "Build metadata" {
+        :Common metadata:
+        • task_id, title, description
+        • initial_context (model_dump)
+        • prompts (model_dump)
+        • tools (model_dump per tool)
+        • max_steps, tool_call_limit;
+
+        :Prompt metadata (rendered strings):
+        • instruction_prompt
+        • assistant_prompt
+        • submit_prompt
+        • continue_prompt;
+        note right
+          **Key for solver_factory:**
+          saber_agent_solver reads these
+          from state.metadata at solve-time
+          for per-sample prompt injection.
+        end note
+
+        :Scoring metadata:
+        • scorers (list of model_dump)
+        • scoring_aggregation;
+    }
+
+    partition "Resolve sandbox" {
+        if (task.sandbox != None?) then (yes)
+            :sandbox = ("docker",\n  domain_root/compose/{name}.compose.yml);
+        else (no)
+            :sandbox = None;
+        endif
+    }
+
+    partition "Resolve files" {
+        if (task.initial_files not empty?) then (yes)
+            :files = {dest: domain_root/source\n  for dest, source in initial_files};
+        else (no)
+            :files = {};
+        endif
+    }
+
+    :Return Sample(\n  id=task_id,\n  input=[system, user],\n  target=target,\n  metadata=metadata,\n  sandbox=sandbox,\n  files=files\n);
+}
+
+:Return list[Sample];
+
+stop
+
+legend right
+  **Metadata keys read by downstream components:**
+  | Key | Consumer |
+  | instruction_prompt | saber_agent_solver |
+  | assistant_prompt | saber_agent_solver |
+  | continue_prompt | saber_agent_solver |
+  | tools | saber_agent_solver (per-sample resolution) |
+  | max_steps | saber_agent_solver (tool_call_limit) |
+  | task_id | ScorerFactory (scorer naming) |
+  | scorers | ScorerFactory (inline scorer creation) |
+  | scoring_aggregation | ScorerFactory (aggregate score) |
+  | description | JudgeTemplateContext |
+  | initial_context | PromptRenderer templates |
+end legend
+
+@enduml
