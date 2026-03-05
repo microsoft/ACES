@@ -62,7 +62,6 @@ class TestCopilotBridgeConfig:
 
         cfg = CopilotBridgeConfig()
         assert cfg.sandbox_name == "default"
-        assert cfg.timeout == 300
         assert cfg.max_steps == 50
         assert cfg.port_base == 3000
         assert cfg.model == "inspect"
@@ -71,8 +70,8 @@ class TestCopilotBridgeConfig:
         """from_kwargs extracts known fields and ignores unknowns."""
         from saber.agents.registry.copilot.solver import CopilotBridgeConfig
 
-        cfg = CopilotBridgeConfig.from_kwargs({"timeout": 600, "unknown": "ignored"})
-        assert cfg.timeout == 600
+        cfg = CopilotBridgeConfig.from_kwargs({"max_steps": 10, "unknown": "ignored"})
+        assert cfg.max_steps == 10
         assert cfg.sandbox_name == "default"
 
     def test_frozen(self) -> None:
@@ -83,7 +82,7 @@ class TestCopilotBridgeConfig:
 
         cfg = CopilotBridgeConfig()
         with pytest.raises(ValidationError):
-            cfg.timeout = 999  # type: ignore[misc]
+            cfg.max_steps = 999  # type: ignore[misc]
 
 
 class TestBuildSystemPrompt:
@@ -145,12 +144,11 @@ class TestBuildRunnerEnv:
             model="gpt-5",
             prompt="Do the task",
             mcp_configs=[],
-            timeout=300,
         )
         assert env["OPENAI_BASE_URL"] == "http://localhost:13131/v1"
         assert env["COPILOT_MODEL"] == "gpt-5"
         assert env["COPILOT_PROMPT"] == "Do the task"
-        assert env["COPILOT_TIMEOUT"] == "300"
+        assert "COPILOT_TIMEOUT" not in env
         assert "COPILOT_SYSTEM_PROMPT" not in env
 
     def test_mcp_config_serialized_as_json(self) -> None:
@@ -172,7 +170,6 @@ class TestBuildRunnerEnv:
             model="inspect",
             prompt="Go",
             mcp_configs=mcp_configs,
-            timeout=300,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
         assert len(parsed) == 1
@@ -187,7 +184,6 @@ class TestBuildRunnerEnv:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
         )
         assert env["COPILOT_MCP_CONFIG"] == "[]"
 
@@ -402,20 +398,18 @@ class TestCopilotBridgeConfigEdgeCases:
     """Phase 2 extended: CopilotBridgeConfig edge cases."""
 
     def test_from_kwargs_all_known_fields(self) -> None:
-        """from_kwargs accepts all 5 known fields."""
+        """from_kwargs accepts all known fields."""
         from saber.agents.registry.copilot.solver import CopilotBridgeConfig
 
         cfg = CopilotBridgeConfig.from_kwargs(
             {
                 "sandbox_name": "custom",
-                "timeout": 120,
                 "max_steps": 10,
                 "port_base": 4000,
                 "model": "gpt-4",
             }
         )
         assert cfg.sandbox_name == "custom"
-        assert cfg.timeout == 120
         assert cfg.max_steps == 10
         assert cfg.port_base == 4000
         assert cfg.model == "gpt-4"
@@ -426,15 +420,7 @@ class TestCopilotBridgeConfigEdgeCases:
 
         cfg = CopilotBridgeConfig.from_kwargs({"foo": "bar", "baz": 123})
         assert cfg.sandbox_name == "default"
-        assert cfg.timeout == 300
         assert cfg.max_steps == 50
-
-    def test_boundary_timeout_zero(self) -> None:
-        """timeout=0 is accepted (e.g. disabling timeout externally)."""
-        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
-
-        cfg = CopilotBridgeConfig(timeout=0)
-        assert cfg.timeout == 0
 
     def test_boundary_max_steps_one(self) -> None:
         """max_steps=1 is accepted."""
@@ -643,22 +629,8 @@ class TestBuildRunnerEnvEdgeCases:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
         )
         assert env["OPENAI_BASE_URL"] == "http://localhost:9999/v1"
-
-    def test_large_timeout_stringified(self) -> None:
-        """Large timeout values are correctly stringified."""
-        from saber.agents.registry.copilot.solver import _build_runner_env
-
-        env = _build_runner_env(
-            bridge_port=13131,
-            model="inspect",
-            prompt="Go",
-            mcp_configs=[],
-            timeout=86400,
-        )
-        assert env["COPILOT_TIMEOUT"] == "86400"
 
     def test_openai_api_key_is_placeholder(self) -> None:
         """OPENAI_API_KEY is always the bridge placeholder."""
@@ -669,7 +641,6 @@ class TestBuildRunnerEnvEdgeCases:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
         )
         assert env["OPENAI_API_KEY"] == "sk-placeholder-for-bridge"
 
@@ -686,7 +657,6 @@ class TestBuildRunnerEnvEdgeCases:
             model="inspect",
             prompt="Go",
             mcp_configs=mcp_configs,
-            timeout=300,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
         assert parsed[0]["url"] == ""
@@ -704,7 +674,6 @@ class TestBuildRunnerEnvEdgeCases:
             model="inspect",
             prompt="Go",
             mcp_configs=mcp_configs,
-            timeout=300,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
         assert parsed[0]["name"] == ""
@@ -725,7 +694,6 @@ class TestBuildRunnerEnvEdgeCases:
             model="inspect",
             prompt="Go",
             mcp_configs=mcp_configs,
-            timeout=300,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
         assert len(parsed) == 2
@@ -739,7 +707,6 @@ class TestBuildRunnerEnvEdgeCases:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
         )
         for key, value in env.items():
             assert isinstance(value, str), f"env[{key!r}] is {type(value).__name__}, expected str"
@@ -1206,7 +1173,6 @@ class TestBuildRunnerEnvPersonaSkills:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
         )
         assert env["COPILOT_PERSONA_PROMPT"] == ""
 
@@ -1220,7 +1186,6 @@ class TestBuildRunnerEnvPersonaSkills:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
             persona_prompt=data,
         )
         assert env["COPILOT_PERSONA_PROMPT"] == data
@@ -1234,7 +1199,6 @@ class TestBuildRunnerEnvPersonaSkills:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
         )
         assert env["COPILOT_SKILL_DIRECTORIES"] == "[]"
 
@@ -1248,7 +1212,6 @@ class TestBuildRunnerEnvPersonaSkills:
             model="inspect",
             prompt="Go",
             mcp_configs=[],
-            timeout=300,
             skill_directories_json=data,
         )
         assert env["COPILOT_SKILL_DIRECTORIES"] == data

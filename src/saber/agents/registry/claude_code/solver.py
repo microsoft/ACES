@@ -35,7 +35,6 @@ logger = get_logger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TIMEOUT = 300
 _DEFAULT_MAX_STEPS = 50
 _STORE_PORT_KEY = "claude_code_model_port"
 _DEFAULT_PORT_BASE = 3000
@@ -269,7 +268,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
             outer_kwargs.get("disallowed_tools", [])
         )
         max_steps: int = int(outer_kwargs.get("max_steps", _DEFAULT_MAX_STEPS))  # type: ignore[call-overload]
-        timeout: int = int(outer_kwargs.get("timeout", _DEFAULT_TIMEOUT))  # type: ignore[call-overload]
         _pf = outer_kwargs.get("persona_file")
         persona_file: str | None = str(_pf) if _pf else None
         _sd = outer_kwargs.get("skills_dir")
@@ -365,7 +363,13 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     )
                     await _seed_claude_config(sbox, _AUTH_TOKEN)
 
-                    # Execute with stdin protection
+                    # Execute with stdin protection.
+                    # No timeout — inspect_ai's --time-limit governs the
+                    # overall sample wall-clock budget.  A redundant
+                    # sbox.exec timeout can orphan the CLI process inside
+                    # the container (docker compose exec without a TTY
+                    # does not propagate signals) and trigger spurious
+                    # "session already in use" errors on retry.
                     agent_cmd = [claude_binary] + cmd_args
                     result = await sbox.exec(
                         [
@@ -376,7 +380,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         ]
                         + agent_cmd,
                         env=agent_env,
-                        timeout=timeout,
                     )
                     if result.returncode != 0:
                         stderr = result.stderr[:500] if result.stderr else "(no stderr)"

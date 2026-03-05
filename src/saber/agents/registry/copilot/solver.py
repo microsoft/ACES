@@ -43,7 +43,6 @@ logger = get_logger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TIMEOUT = 300
 _STORE_PORT_KEY = "copilot_model_port"
 _DEFAULT_PORT_BASE = 3000
 _RUNNER_PATH = "/tmp/_copilot_runner.py"
@@ -61,7 +60,6 @@ Reads configuration from environment variables:
 - COPILOT_MODEL: Model name to request (routed through bridge)
 - COPILOT_PROMPT: User prompt text (SABER system prompt prepended)
 - COPILOT_MCP_CONFIG: JSON string of MCP server configs (optional)
-- COPILOT_TIMEOUT: Timeout in seconds (default: 300)
 - COPILOT_PERSONA_PROMPT: Persona prompt text to append to system message (optional)
 """
 
@@ -95,7 +93,6 @@ async def main() -> int:
     model = os.environ.get("COPILOT_MODEL", "inspect")
     prompt = os.environ.get("COPILOT_PROMPT", "")
     mcp_config_str = os.environ.get("COPILOT_MCP_CONFIG", "")
-    timeout = int(os.environ.get("COPILOT_TIMEOUT", "300"))
 
     if not prompt:
         print("ERROR: COPILOT_PROMPT is required", file=sys.stderr)
@@ -160,14 +157,11 @@ async def main() -> int:
         try:
             response = await session.send_and_wait(
                 {"prompt": prompt},
-                timeout=timeout,
             )
             if response:
                 content = getattr(getattr(response, "data", None), "content", None)
                 if content:
                     print(f"COPILOT_RESPONSE: {content[:500]}", file=sys.stderr)
-        except asyncio.TimeoutError:
-            print(f"WARNING: Session timed out after {timeout}s", file=sys.stderr)
         except Exception as exc:
             print(f"ERROR: Session failed: {exc}", file=sys.stderr)
             return 1
@@ -194,13 +188,12 @@ class CopilotBridgeConfig(BaseModel):
     """Bridge-relevant configuration for the copilot agent.
 
     Minimal config — the bridge handles model routing, BridgedToolsSpec
-    handles tools.  Only sandbox/timeout/port configuration remains.
+    handles tools.  Only sandbox/port configuration remains.
     """
 
     model_config = ConfigDict(frozen=True)
 
     sandbox_name: str = "default"
-    timeout: int = _DEFAULT_TIMEOUT
     max_steps: int = 50
     port_base: int = _DEFAULT_PORT_BASE
     model: str = "inspect"
@@ -231,7 +224,6 @@ def _build_runner_env(
     model: str,
     prompt: str,
     mcp_configs: Sequence[object],
-    timeout: int,
     persona_prompt: str = "",
     skill_directories_json: str = "[]",
 ) -> dict[str, str]:
@@ -243,7 +235,6 @@ def _build_runner_env(
         prompt: User prompt text (SABER system prompt already prepended).
         mcp_configs: MCP server config objects from bridge
             (each with ``.name``, ``.url``, ``.type`` attributes).
-        timeout: Timeout in seconds for the runner.
         persona_prompt: Persona prompt text to append to the Copilot
             system message via ``system_message`` mode=append.
         skill_directories_json: JSON-serialized list of sandbox skill
@@ -266,7 +257,6 @@ def _build_runner_env(
         "COPILOT_MODEL": model,
         "COPILOT_PROMPT": prompt,
         "COPILOT_MCP_CONFIG": json.dumps(mcp_list),
-        "COPILOT_TIMEOUT": str(timeout),
         "COPILOT_PERSONA_PROMPT": persona_prompt,
         "COPILOT_SKILL_DIRECTORIES": skill_directories_json,
     }
@@ -392,12 +382,13 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         model=config.model,
                         prompt=user_prompt,
                         mcp_configs=bridge.mcp_server_configs,
-                        timeout=config.timeout,
                         persona_prompt=persona_prompt,
                         skill_directories_json=skill_directories_json,
                     )
 
-                    # Execute runner in sandbox (stdin closed to prevent hangs)
+                    # Execute runner in sandbox (stdin closed to prevent hangs).
+                    # No timeout — inspect_ai's --time-limit governs the
+                    # overall sample wall-clock budget.
                     result = await sbox.exec(
                         [
                             "bash",
@@ -408,7 +399,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                             _RUNNER_PATH,
                         ],
                         env=runner_env,
-                        timeout=config.timeout + 30,
                     )
 
                     if result.returncode != 0:
