@@ -650,3 +650,76 @@ class TestToolCallLimitRecovery:
 
         assert result is sentinel
         mock_inner_solver.assert_awaited_once_with(state, generate)
+
+    @pytest.mark.asyncio
+    async def test_limit_exceeded_patches_orphaned_tool_calls(self) -> None:
+        """When state.messages contains assistant tool_calls without
+        matching tool results, the solver injects dummy results before
+        calling generate() to avoid OpenAI API 400 errors."""
+        from inspect_ai.model import (
+            ChatMessageAssistant,
+            ChatMessageTool,
+            ChatMessageUser,
+        )
+        from inspect_ai.model._model_output import ModelOutput
+        from inspect_ai.tool import ToolCall
+        from inspect_ai.util._limit import LimitExceededError
+
+        async def failing_solver(state: object, generate: object) -> object:
+            raise LimitExceededError("tool_call", value=50, limit=50)
+
+        mock_create_with_prompts = MagicMock(return_value=failing_solver)
+        mock_factory = MagicMock(return_value=mock_create_with_prompts)
+
+        solver = create_saber_solver(agent_name="copilot", agent_factory=mock_factory)
+
+        # State has assistant with 3 tool calls, only 1 has a result
+        state = MagicMock()
+        state.metadata = {}
+        state.messages = [
+            ChatMessageUser(content="Investigate the incident"),
+            ChatMessageAssistant(
+                content="I'll run some queries",
+                tool_calls=[
+                    ToolCall(id="call_1", function="bash", arguments={"cmd": "ls"}, type="function"),
+                    ToolCall(id="call_2", function="report_intent", arguments={"intent": "test"}, type="function"),
+                    ToolCall(id="call_3", function="bash", arguments={"cmd": "pwd"}, type="function"),
+                ],
+            ),
+            ChatMessageTool(content="file1.txt", tool_call_id="call_1"),
+            # call_2 and call_3 are "orphaned" — no tool result
+        ]
+
+        fake_output = ModelOutput.from_content(
+            model="test", content="Final answer", stop_reason="stop"
+        )
+
+        with patch("saber.agents.solver_factory.get_model") as mock_get_model:
+            mock_model = AsyncMock()
+            mock_model.generate = AsyncMock(return_value=fake_output)
+            mock_get_model.return_value = mock_model
+
+            result = await solver(state, MagicMock())
+
+        # Verify dummy tool results were injected for orphaned calls
+        tool_msgs = [
+            m for m in state.messages if isinstance(m, ChatMessageTool)
+        ]
+        tool_call_ids = {m.tool_call_id for m in tool_msgs}
+        assert "call_1" in tool_call_ids  # original result preserved
+        assert "call_2" in tool_call_ids  # dummy result injected
+        assert "call_3" in tool_call_ids  # dummy result injected
+        assert len(tool_msgs) == 3
+
+        # Verify the generate was called (no 400 error)
+        mock_model.generate.assert_awaited_once()
+
+        # Verify the limit message comes AFTER the tool results
+        user_limit_msgs = [
+            m
+            for m in state.messages
+            if isinstance(m, ChatMessageUser) and "tool call limit" in str(m.content).lower()
+        ]
+        assert len(user_limit_msgs) == 1
+
+        assert result is state

@@ -125,6 +125,13 @@ def create_saber_solver(
                     "Tool call limit exceeded for agent '%s'. Injecting final-answer prompt.",
                     agent_name,
                 )
+                # Patch any orphaned tool calls (assistant messages with
+                # tool_calls that lack matching tool-result messages)
+                # before sending to the API.  Without this, the API
+                # rejects the request with a 400 error.
+                from saber.agents.message_utils import patch_orphaned_tool_calls
+
+                patch_orphaned_tool_calls(state.messages)
                 state.messages.append(ChatMessageUser(content=TOOL_CALL_LIMIT_MESSAGE))
                 state.output = await get_model().generate(
                     input=state.messages,

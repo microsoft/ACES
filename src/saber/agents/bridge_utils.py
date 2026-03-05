@@ -298,60 +298,6 @@ async def validate_model_availability() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_orphaned_tool_calls(messages: list[ChatMessage]) -> None:
-    """Inject dummy ``ChatMessageTool`` results for orphaned tool calls.
-
-    The OpenAI API requires every ``tool_call`` in an assistant message
-    to have a corresponding ``role: "tool"`` result with a matching
-    ``tool_call_id`` before any subsequent non-tool message.  When the
-    tool-call limit filter injects a user message (or strips tools)
-    after an assistant turn that has pending tool calls, the API rejects
-    the request with a 400 error.
-
-    This helper walks the *entire* message list, collects all
-    ``tool_call`` IDs from assistant messages and all resolved IDs from
-    tool-result messages, then appends a placeholder result for each
-    orphaned call.
-
-    The dummy results are appended at the **end** of the list so that
-    the caller can subsequently append a user message after them.
-
-    Args:
-        messages: The mutable conversation list.  Modified in place.
-    """
-    from inspect_ai.model import ChatMessageAssistant, ChatMessageTool
-
-    # Collect all tool_call IDs from assistant messages
-    all_call_ids: set[str] = set()
-    for msg in messages:
-        if isinstance(msg, ChatMessageAssistant) and msg.tool_calls:
-            for tc in msg.tool_calls:
-                all_call_ids.add(tc.id)
-
-    # Collect IDs that already have a tool-result message
-    resolved_ids: set[str] = set()
-    for msg in messages:
-        if isinstance(msg, ChatMessageTool) and msg.tool_call_id:
-            resolved_ids.add(msg.tool_call_id)
-
-    orphaned = all_call_ids - resolved_ids
-    if not orphaned:
-        return
-
-    logger.debug(
-        "Injecting %d dummy tool results for orphaned call IDs: %s",
-        len(orphaned),
-        orphaned,
-    )
-    for call_id in sorted(orphaned):
-        messages.append(
-            ChatMessageTool(
-                content="[Tool call limit reached \u2014 not executed]",
-                tool_call_id=call_id,
-            )
-        )
-
-
 def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
     """Create a GenerateFilter that records tool call usage for bridge agents.
 
@@ -423,7 +369,9 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
                 )
                 # Patch any orphaned tool calls so the API doesn't
                 # reject the request with a 400.
-                _patch_orphaned_tool_calls(messages)
+                from saber.agents.message_utils import patch_orphaned_tool_calls
+
+                patch_orphaned_tool_calls(messages)
                 # Return GenerateInput with empty tools so the real
                 # model generates text only (Bug 1 & Bug 2 fix).
                 return GenerateInput(  # type: ignore[no-any-return]
@@ -464,7 +412,9 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
                 # Inject dummy tool results for any orphaned tool
                 # calls so the API doesn't reject the request, then
                 # add a user message telling the agent to stop.
-                _patch_orphaned_tool_calls(messages)
+                from saber.agents.message_utils import patch_orphaned_tool_calls
+
+                patch_orphaned_tool_calls(messages)
                 messages.append(ChatMessageUser(content=_LIMIT_MESSAGE))
                 return GenerateInput(  # type: ignore[no-any-return]
                     input=messages,
