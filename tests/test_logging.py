@@ -8,7 +8,7 @@ import re
 import pytest
 
 import saber.logging as saber_logging
-from saber.logging import _has_inspect_handler, _resolve_level, configure_logging, get_logger
+from saber.logging import _has_inspect_handler, _resolve_level, configure_logging, display_progress, get_logger
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -258,3 +258,71 @@ class TestGetLogger:
 
         captured = capfd.readouterr()
         assert "child message via get_logger" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# display_progress
+# ---------------------------------------------------------------------------
+
+
+class TestDisplayProgress:
+    """Tests for display_progress() — user-visible progress messages."""
+
+    @pytest.mark.usefixtures("_with_inspect_handler")
+    def test_writes_to_stderr_under_inspect_ai(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Under inspect_ai, message is written directly to stderr."""
+        display_progress("Starting services...")
+
+        captured = capfd.readouterr()
+        assert "[SABER] Starting services..." in captured.err
+
+    @pytest.mark.usefixtures("_with_inspect_handler")
+    def test_logs_at_info_under_inspect_ai(self) -> None:
+        """Under inspect_ai, message is also logged at INFO level."""
+        # configure_logging detects the inspect handler and sets saber
+        # logger level to DEBUG so INFO messages propagate.
+        configure_logging()
+
+        received: list[logging.LogRecord] = []
+        for h in logging.getLogger().handlers:
+            if type(h).__name__ == "LogHandler":
+                original_emit = h.emit
+                h.emit = lambda record: received.append(record)
+                break
+
+        display_progress("test info log")
+
+        assert any(r.getMessage() == "test info log" for r in received)
+        assert any(r.levelno == logging.INFO for r in received)
+
+        h.emit = original_emit  # type: ignore[possibly-undefined]
+
+    def test_standalone_no_stderr_prefix(self, capfd: pytest.CaptureFixture[str]) -> None:
+        """Without inspect_ai handler, no [SABER] prefix written to stderr."""
+        configure_logging(logging.DEBUG)
+
+        display_progress("standalone message")
+
+        captured = capfd.readouterr()
+        # The message should appear via the saber StreamHandler (in stderr),
+        # but NOT with the [SABER] prefix (that's only for inspect_ai bypass).
+        assert "[SABER] standalone message" not in captured.err
+        # The logger INFO message should still appear via the StreamHandler.
+        assert "standalone message" in captured.err
+
+    def test_standalone_logs_at_info(self) -> None:
+        """Without inspect_ai handler, message is logged at INFO."""
+        configure_logging(logging.DEBUG)
+
+        received: list[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = lambda record: received.append(record)  # type: ignore[assignment]
+        logging.getLogger("saber").addHandler(handler)
+
+        try:
+            display_progress("standalone info")
+            assert any(
+                r.getMessage() == "standalone info" and r.levelno == logging.INFO for r in received
+            )
+        finally:
+            logging.getLogger("saber").removeHandler(handler)

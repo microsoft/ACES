@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 
 _CONFIGURED = False
 
@@ -118,3 +119,30 @@ def get_logger(name: str) -> logging.Logger:
     if name.startswith("saber.") or name == "saber":
         return logging.getLogger(name)
     return logging.getLogger(f"saber.{name}")
+
+
+def display_progress(message: str) -> None:
+    """Display a progress message that the user must see.
+
+    Under inspect_ai, ``logger.info()`` messages are invisible on the
+    console because inspect_ai's default ``INSPECT_LOG_LEVEL`` is
+    ``"warning"``.  This function writes directly to *stderr* so the
+    message always reaches the user, then also logs at ``INFO`` for the
+    eval transcript and trace file.
+
+    When running standalone (no inspect_ai handler), only the logger
+    is used because the saber ``StreamHandler`` already shows ``INFO``
+    messages on stderr — avoiding duplicate output.
+
+    Args:
+        message: The progress message to display.
+    """
+    saber_logger = logging.getLogger("saber")
+    if _has_inspect_handler():
+        # Bypass inspect_ai's LogHandler level filter and write directly.
+        sys.stderr.write(f"[SABER] {message}\n")
+        sys.stderr.flush()
+    # Always log at INFO so the message appears in the eval transcript
+    # and trace file.  Under standalone mode this also reaches stderr
+    # via the saber StreamHandler.
+    saber_logger.info(message)

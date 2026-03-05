@@ -248,6 +248,10 @@ async def build_image(
 def find_base_dockerfile(saber_root: Path | None = None) -> Path:
     """Locate the base SABER sandbox Dockerfile.
 
+    Searches in order:
+    1. ``saber_root / docker / Dockerfile.saber_sandbox`` (development / source checkout)
+    2. Bundled inside the installed package at ``saber/environments/_dockerfiles/``
+
     Args:
         saber_root: Explicit project root.  When *None*, auto-discovered
             relative to this source file.
@@ -256,19 +260,27 @@ def find_base_dockerfile(saber_root: Path | None = None) -> Path:
         Resolved ``Path`` to the Dockerfile.
 
     Raises:
-        FileNotFoundError: If the Dockerfile does not exist at the
+        FileNotFoundError: If the Dockerfile does not exist at any
             expected location.
     """
+    # 1. Check repo / source tree location
     if saber_root is None:
         saber_root = Path(__file__).parent.parent.parent.parent
 
-    path = saber_root / "docker" / BASE_DOCKERFILE_NAME
+    repo_path = saber_root / "docker" / BASE_DOCKERFILE_NAME
+    if repo_path.exists():
+        return repo_path.resolve()
 
-    if not path.exists():
-        msg = f"Base Dockerfile not found at {path}"
-        raise FileNotFoundError(msg)
+    # 2. Check package-bundled location (installed from wheel / ADO)
+    package_path = Path(__file__).parent / "_dockerfiles" / BASE_DOCKERFILE_NAME
+    if package_path.exists():
+        return package_path.resolve()
 
-    return path.resolve()
+    msg = (
+        f"Base Dockerfile not found at {repo_path} "
+        f"or bundled location {package_path}"
+    )
+    raise FileNotFoundError(msg)
 
 
 # ── PreflightResult ──────────────────────────────────────────────────

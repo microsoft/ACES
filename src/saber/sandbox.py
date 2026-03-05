@@ -21,7 +21,7 @@ from inspect_ai.util._sandbox.environment import SandboxEnvironmentConfigType
 from inspect_ai.util._sandbox.registry import sandboxenv
 
 from saber.environments.images import PreflightBuildError, RebuildMode, build_domain_images
-from saber.logging import get_logger
+from saber.logging import display_progress, get_logger
 
 __all__ = ["SaberSandboxEnvironment"]
 
@@ -114,6 +114,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
             if cls._preflight_error is not None:
                 raise cls._preflight_error
             if cls._preflight_domain_root and not cls._preflight_done:
+                display_progress("Building domain Docker images (preflight)...")
                 result = await build_domain_images(
                     cls._preflight_domain_root,
                     rebuild=cls._preflight_rebuild,
@@ -123,6 +124,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                     failed = [r for r in result.results if r.action == "failed"]
                     cls._preflight_error = PreflightBuildError(failed)
                     raise cls._preflight_error
+                display_progress("Docker image preflight complete.")
 
         if cls._permanent_compose and cls._permanent_compose.exists():
             domain_root = cls._permanent_domain_root or cls._permanent_compose.parent.parent
@@ -160,9 +162,8 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                 if cleanup and cls._permanent_compose and not cls._keep_permanent:
                     await _stop_permanent_services(cls._permanent_project)
                 elif cls._keep_permanent and cls._permanent_compose:
-                    logger.info(
-                        "Keeping permanent services alive (project=%s)",
-                        cls._permanent_project,
+                    display_progress(
+                        f"Keeping permanent services alive (project={cls._permanent_project})"
                     )
             except Exception:
                 logger.warning("Failed to stop permanent services during cleanup")
@@ -216,7 +217,7 @@ async def _start_permanent_services(
         cmd = (*cmd, "--project-directory", str(project_directory))
     cmd = (*cmd, "up", "-d", "--wait", "--build")
 
-    logger.info("Starting permanent services (project=%s)...", project)
+    display_progress(f"Starting permanent services (project={project})...")
 
     for attempt in range(max_retries):
         proc = await asyncio.create_subprocess_exec(
@@ -232,7 +233,7 @@ async def _start_permanent_services(
             with contextlib.suppress(asyncio.CancelledError):
                 await monitor
         if proc.returncode == 0:
-            logger.info("Permanent services started (project=%s)", project)
+            display_progress(f"Permanent services started (project={project})")
             return
         if attempt < max_retries - 1:
             delay = base_delay * (2**attempt)
@@ -266,7 +267,7 @@ async def _stop_permanent_services(project: str) -> None:
     )
     _stdout, stderr = await proc.communicate()
     if proc.returncode == 0:
-        logger.info("Permanent services stopped (project=%s)", project)
+        display_progress(f"Permanent services stopped (project={project})")
     else:
         logger.warning("Permanent service shutdown failed: %s", stderr.decode().strip())
 
@@ -330,4 +331,4 @@ async def _monitor_startup_progress(project: str, interval: float = _MONITOR_POL
             if health.lower() not in ("healthy", "") or state.lower() != "running"
         ]
         if waiting:
-            logger.info("Waiting for services: %s", ", ".join(waiting))
+            display_progress(f"Waiting for services: {', '.join(waiting)}")

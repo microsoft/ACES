@@ -383,17 +383,17 @@ class TestTaskCleanupKeepPermanent:
             mock_stop.assert_called_once_with("test-proj")
 
     @pytest.mark.asyncio
-    async def test_logs_when_keeping_permanent(self, caplog: pytest.LogCaptureFixture) -> None:
-        """When keep_permanent=True, logs an info message about keeping services."""
+    async def test_logs_when_keeping_permanent(self) -> None:
+        """When keep_permanent=True, display_progress outputs keeping services message."""
         SaberSandboxEnvironment.set_permanent_compose(Path("/tmp/c.yml"), "test-proj")
         SaberSandboxEnvironment.set_keep_permanent(True)
         with (
             patch("saber.sandbox._stop_permanent_services", new_callable=AsyncMock),
             patch.object(DockerSandboxEnvironment, "task_cleanup", new_callable=AsyncMock),
-            caplog.at_level(logging.INFO, logger="saber.sandbox"),
+            patch("saber.sandbox.display_progress") as mock_display,
         ):
             await SaberSandboxEnvironment.task_cleanup("test_task", None, True)
-        assert any("Keeping permanent services alive" in r.message for r in caplog.records)
+        assert any("Keeping permanent services alive" in str(c) for c in mock_display.call_args_list)
 
     @pytest.mark.asyncio
     async def test_env_var_cleared_even_when_keeping(self) -> None:
@@ -981,8 +981,8 @@ class TestMonitorStartupProgress:
     """_monitor_startup_progress logs waiting services periodically."""
 
     @pytest.mark.asyncio
-    async def test_logs_waiting_services(self, caplog: pytest.LogCaptureFixture) -> None:
-        """Non-healthy services are logged."""
+    async def test_logs_waiting_services(self) -> None:
+        """Non-healthy services are displayed via display_progress."""
         call_count = 0
 
         async def mock_poll(project: str) -> list[tuple[str, str, str]]:
@@ -997,13 +997,13 @@ class TestMonitorStartupProgress:
         with (
             patch("saber.sandbox._poll_service_health", side_effect=mock_poll),
             patch("saber.sandbox.asyncio.sleep", side_effect=mock_sleep),
-            caplog.at_level(logging.INFO, logger="saber.sandbox"),
+            patch("saber.sandbox.display_progress") as mock_display,
         ):
             task = asyncio.create_task(_monitor_startup_progress("test-proj", interval=15.0))
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-        assert any("Waiting for services: db (health: starting)" in r.message for r in caplog.records)
+        assert any("Waiting for services: db (health: starting)" in str(c) for c in mock_display.call_args_list)
 
     @pytest.mark.asyncio
     async def test_skips_log_when_all_healthy(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -1096,8 +1096,8 @@ class TestStartPermanentServicesProgress:
     """Progress monitoring integration in _start_permanent_services."""
 
     @pytest.mark.asyncio
-    async def test_logs_starting_message(self, caplog: pytest.LogCaptureFixture) -> None:
-        """REQ-001: Initial log message before docker compose runs."""
+    async def test_logs_starting_message(self) -> None:
+        """REQ-001: display_progress messages before and after docker compose."""
         mock_proc = AsyncMock()
         mock_proc.returncode = 0
         mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
@@ -1105,15 +1105,13 @@ class TestStartPermanentServicesProgress:
         with (
             patch("asyncio.create_subprocess_exec", return_value=mock_proc),
             patch("saber.sandbox._monitor_startup_progress", new_callable=AsyncMock),
-            caplog.at_level(logging.INFO, logger="saber.sandbox"),
+            patch("saber.sandbox.display_progress") as mock_display,
         ):
             await _start_permanent_services(Path("/tmp/compose.yml"), "test-proj")
 
-        messages = [r.message for r in caplog.records]
-        starting = [m for m in messages if "Starting permanent services" in m]
-        started = [m for m in messages if "Permanent services started" in m]
-        assert starting, "Should log 'Starting permanent services' message"
-        assert started, "Should log 'Permanent services started' message"
+        messages = [str(c) for c in mock_display.call_args_list]
+        assert any("Starting permanent services" in m for m in messages)
+        assert any("Permanent services started" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_monitor_task_launched(self) -> None:
