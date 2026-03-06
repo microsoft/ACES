@@ -61,6 +61,7 @@ Reads configuration from environment variables:
 - COPILOT_PROMPT: User prompt text (SABER system prompt prepended)
 - COPILOT_MCP_CONFIG: JSON string of MCP server configs (optional)
 - COPILOT_PERSONA_PROMPT: Persona prompt text to append to system message (optional)
+- COPILOT_TIMEOUT: Timeout in seconds for session.send_and_wait (default: 3600)
 """
 
 import asyncio
@@ -93,6 +94,7 @@ async def main() -> int:
     model = os.environ.get("COPILOT_MODEL", "inspect")
     prompt = os.environ.get("COPILOT_PROMPT", "")
     mcp_config_str = os.environ.get("COPILOT_MCP_CONFIG", "")
+    timeout = int(os.environ.get("COPILOT_TIMEOUT", "3600"))
 
     if not prompt:
         print("ERROR: COPILOT_PROMPT is required", file=sys.stderr)
@@ -157,6 +159,7 @@ async def main() -> int:
         try:
             response = await session.send_and_wait(
                 {"prompt": prompt},
+                timeout=timeout,
             )
             if response:
                 content = getattr(getattr(response, "data", None), "content", None)
