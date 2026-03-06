@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -20,8 +21,12 @@ from saber.environments.images import (
 )
 from saber.sandbox import (
     SaberSandboxEnvironment,
+    _cleanup_stale_containers,
     _monitor_startup_progress,
+    _parse_docker_timestamp,
     _poll_service_health,
+    _remove_conflicting_containers,
+    _sanitize_task_name,
     _start_permanent_services,
     _stop_permanent_services,
 )
@@ -1144,3 +1149,589 @@ class TestStartPermanentServicesProgress:
                 await _start_permanent_services(Path("/tmp/compose.yml"), "test-proj", max_retries=1)
 
         mock_monitor.assert_called()
+
+
+class TestSanitizeTaskName:
+    """_sanitize_task_name matches inspect_ai's task_project_name logic."""
+
+    def test_simple_name(self) -> None:
+        assert _sanitize_task_name("excytin") == "excytin"
+
+    def test_uppercase_lowered(self) -> None:
+        assert _sanitize_task_name("ExCyTiN") == "excytin"
+
+    def test_special_chars_replaced(self) -> None:
+        # "My.Complex/Task_Name!" -> "my-complex-task_name-" -> first 12 -> "my-complex-t"
+        assert _sanitize_task_name("My.Complex/Task_Name!") == "my-complex-t"
+
+    def test_trailing_underscore_stripped(self) -> None:
+        assert _sanitize_task_name("abcdefghijk_") == "abcdefghijk"
+
+    def test_collapsed_dashes(self) -> None:
+        assert _sanitize_task_name("a--b---c") == "a-b-c"
+
+    def test_truncated_to_12_chars(self) -> None:
+        result = _sanitize_task_name("abcdefghijklmnop")
+        assert len(result) <= 12
+        assert result == "abcdefghijkl"
+
+
+class TestParseDockerTimestamp:
+    """_parse_docker_timestamp handles Docker's timestamp format."""
+
+    def test_parses_standard_format(self) -> None:
+        ts = "2026-03-06 05:58:30 +0000 UTC"
+        result = _parse_docker_timestamp(ts)
+        assert result.year == 2026
+        assert result.month == 3
+        assert result.day == 6
+        assert result.hour == 5
+        assert result.minute == 58
+        assert result.second == 30
+
+    def test_returns_utc_aware(self) -> None:
+        ts = "2026-03-06 05:58:30 +0000 UTC"
+        result = _parse_docker_timestamp(ts)
+        assert result.tzinfo is not None
+
+    def test_raises_on_garbage(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_docker_timestamp("not a timestamp")
+
+
+class TestCleanupStaleContainers:
+    """_cleanup_stale_containers removes zombie Docker containers."""
+
+    def _old_timestamp(self, minutes: int = 10) -> str:
+        """Create a Docker-formatted timestamp `minutes` in the past."""
+        ts = datetime.now(tz=UTC) - timedelta(minutes=minutes)
+        return ts.strftime("%Y-%m-%d %H:%M:%S %z") + " UTC"
+
+    def _recent_timestamp(self, seconds: int = 30) -> str:
+        """Create a Docker-formatted timestamp `seconds` in the past."""
+        ts = datetime.now(tz=UTC) - timedelta(seconds=seconds)
+        return ts.strftime("%Y-%m-%d %H:%M:%S %z") + " UTC"
+
+    @pytest.mark.asyncio
+    async def test_removes_old_containers_only(self) -> None:
+        """Only containers older than min_age_seconds are removed."""
+        old_ts = self._old_timestamp(minutes=10)
+        recent_ts = self._recent_timestamp(seconds=30)
+        ps_output = f"abc123 {old_ts}\ndef456 {recent_ts}\n".encode()
+
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(ps_output, b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[find_proc, rm_proc]) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        # Only the old container should be removed
+        rm_call = mock_exec.call_args_list[1]
+        rm_args = rm_call[0]
+        assert "abc123" in rm_args
+        assert "def456" not in rm_args
+
+    @pytest.mark.asyncio
+    async def test_removes_all_old_containers(self) -> None:
+        """All containers exceeding the age threshold are removed."""
+        old_ts1 = self._old_timestamp(minutes=5)
+        old_ts2 = self._old_timestamp(minutes=20)
+        ps_output = f"aaa111 {old_ts1}\nbbb222 {old_ts2}\n".encode()
+
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(ps_output, b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[find_proc, rm_proc]) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        rm_call = mock_exec.call_args_list[1]
+        rm_args = rm_call[0]
+        assert "aaa111" in rm_args
+        assert "bbb222" in rm_args
+
+    @pytest.mark.asyncio
+    async def test_skips_all_young_containers(self) -> None:
+        """When all containers are younger than threshold, none are removed."""
+        recent_ts = self._recent_timestamp(seconds=30)
+        ps_output = f"abc123 {recent_ts}\n".encode()
+
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(ps_output, b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=find_proc) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        # Only the find call; no rm call
+        assert mock_exec.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_containers_found_skips_removal(self) -> None:
+        """When no stale containers exist, docker rm is not called."""
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=find_proc) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        assert mock_exec.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_errors_are_logged_not_raised(self) -> None:
+        """Exceptions during cleanup are caught and logged, not propagated."""
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=OSError("docker not found"),
+        ):
+            await _cleanup_stale_containers("excytin")
+
+    @pytest.mark.asyncio
+    async def test_errors_are_logged_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Exceptions during cleanup produce a warning log."""
+        with patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=OSError("docker not found"),
+        ):
+            with caplog.at_level(logging.WARNING):
+                await _cleanup_stale_containers("excytin")
+
+        assert any("stale" in r.message.lower() or "cleanup" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_uses_correct_name_filter(self) -> None:
+        """Docker ps filter uses the sanitized task name pattern."""
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=find_proc) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        find_args = mock_exec.call_args_list[0][0]
+        filter_args = [a for a in find_args if a.startswith("name=")]
+        assert filter_args == ["name=inspect-excytin-"]
+
+    @pytest.mark.asyncio
+    async def test_uses_created_and_dead_status_filters(self) -> None:
+        """Docker ps is called with both 'created' and 'dead' status filters."""
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=find_proc) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        find_args = mock_exec.call_args_list[0][0]
+        status_filters = [a for a in find_args if a.startswith("status=")]
+        assert "status=created" in status_filters
+        assert "status=dead" in status_filters
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_when_stale_found(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A warning is logged when stale containers are found and removed."""
+        old_ts = self._old_timestamp(minutes=10)
+        ps_output = f"abc123 {old_ts}\n".encode()
+
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(ps_output, b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[find_proc, rm_proc]):
+            with caplog.at_level(logging.WARNING):
+                await _cleanup_stale_containers("excytin")
+
+        assert any("stale" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unparseable_timestamp_treated_as_stale(self) -> None:
+        """Containers with unparseable timestamps are removed (safe default)."""
+        ps_output = b"abc123 NOT_A_TIMESTAMP\n"
+
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(ps_output, b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[find_proc, rm_proc]) as mock_exec:
+            await _cleanup_stale_containers("excytin")
+
+        rm_call = mock_exec.call_args_list[1]
+        assert "abc123" in rm_call[0]
+
+    @pytest.mark.asyncio
+    async def test_custom_min_age_seconds(self) -> None:
+        """The min_age_seconds parameter overrides the default threshold."""
+        # Container is 2 minutes old
+        ts = self._old_timestamp(minutes=2)
+        ps_output = f"abc123 {ts}\n".encode()
+
+        find_proc = AsyncMock()
+        find_proc.returncode = 0
+        find_proc.communicate = AsyncMock(return_value=(ps_output, b""))
+
+        # With default 180s threshold, this 2-min container is NOT stale
+        with patch("asyncio.create_subprocess_exec", return_value=find_proc) as mock_exec:
+            await _cleanup_stale_containers("excytin", min_age_seconds=180)
+
+        assert mock_exec.call_count == 1  # no rm call
+
+        # With a 60s threshold, the same container IS stale
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[find_proc, rm_proc]) as mock_exec:
+            await _cleanup_stale_containers("excytin", min_age_seconds=60)
+
+        assert mock_exec.call_count == 2  # find + rm
+
+
+class TestTaskInitStaleContainerCleanup:
+    """task_init calls _cleanup_stale_containers before super()."""
+
+    @pytest.mark.asyncio
+    async def test_cleans_stale_containers_before_super(self) -> None:
+        """_cleanup_stale_containers runs before super().task_init()."""
+        order: list[str] = []
+
+        async def track_cleanup(*_args: object, **_kwargs: object) -> None:
+            order.append("cleanup_stale")
+
+        async def track_super(*_args: object, **_kwargs: object) -> None:
+            order.append("super_init")
+
+        with (
+            patch(
+                "saber.sandbox._cleanup_stale_containers",
+                side_effect=track_cleanup,
+            ),
+            patch.object(
+                DockerSandboxEnvironment,
+                "task_init",
+                side_effect=track_super,
+            ),
+        ):
+            await SaberSandboxEnvironment.task_init("test_task", None)
+            assert "cleanup_stale" in order
+            assert "super_init" in order
+            assert order.index("cleanup_stale") < order.index("super_init")
+
+    @pytest.mark.asyncio
+    async def test_cleanup_called_with_task_name(self) -> None:
+        """_cleanup_stale_containers receives the task_name argument."""
+        with (
+            patch(
+                "saber.sandbox._cleanup_stale_containers",
+                new_callable=AsyncMock,
+            ) as mock_cleanup,
+            patch.object(DockerSandboxEnvironment, "task_init", new_callable=AsyncMock),
+        ):
+            await SaberSandboxEnvironment.task_init("my_task", None)
+            mock_cleanup.assert_called_once_with("my_task")
+
+    @pytest.mark.asyncio
+    async def test_cleanup_failure_does_not_block_init(self) -> None:
+        """If _cleanup_stale_containers raises, task_init still proceeds."""
+        with (
+            patch(
+                "saber.sandbox._cleanup_stale_containers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("cleanup failed"),
+            ),
+            patch.object(DockerSandboxEnvironment, "task_init", new_callable=AsyncMock) as mock_super,
+        ):
+            await SaberSandboxEnvironment.task_init("test_task", None)
+            mock_super.assert_called_once()
+
+
+class TestRemoveConflictingContainers:
+    """_remove_conflicting_containers validates staleness before removal."""
+
+    _CONFLICT_MSG = (
+        'Container inspect-excytin-i6gkber-default-1  Creating\n'
+        'Error response from daemon: Conflict. The container name '
+        '"/inspect-excytin-i6gkber-default-1" is already in use by '
+        'container "f782a09e458bbbd81200918afbd06c96c6155feb04026c326344d0ed1590b405". '
+        'You have to remove (or rename) that container to be able to reuse that name.'
+    )
+
+    def _old_iso_timestamp(self, minutes: int = 10) -> str:
+        """Return a Docker-inspect-style ISO timestamp `minutes` ago."""
+        ts = datetime.now(tz=UTC) - timedelta(minutes=minutes)
+        return ts.strftime("%Y-%m-%dT%H:%M:%S") + ".000000000Z"
+
+    def _recent_iso_timestamp(self, seconds: int = 30) -> str:
+        """Return a Docker-inspect-style ISO timestamp `seconds` ago."""
+        ts = datetime.now(tz=UTC) - timedelta(seconds=seconds)
+        return ts.strftime("%Y-%m-%dT%H:%M:%S") + ".000000000Z"
+
+    @pytest.mark.asyncio
+    async def test_removes_stale_created_container(self) -> None:
+        """A container in 'created' state older than threshold is removed."""
+        old_ts = self._old_iso_timestamp(minutes=10)
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(f"created {old_ts}".encode(), b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[inspect_proc, rm_proc]) as mock_exec:
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert result is True
+        rm_call = mock_exec.call_args_list[1]
+        assert "docker" in rm_call[0]
+        assert "rm" in rm_call[0]
+        assert "-f" in rm_call[0]
+
+    @pytest.mark.asyncio
+    async def test_skips_running_container(self) -> None:
+        """A container in 'running' state is NOT removed."""
+        old_ts = self._old_iso_timestamp(minutes=10)
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(f"running {old_ts}".encode(), b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=inspect_proc) as mock_exec:
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert result is False
+        assert mock_exec.call_count == 1  # inspect only, no rm
+
+    @pytest.mark.asyncio
+    async def test_skips_young_container(self) -> None:
+        """A container younger than min_age_seconds is NOT removed."""
+        recent_ts = self._recent_iso_timestamp(seconds=30)
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(f"created {recent_ts}".encode(), b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=inspect_proc) as mock_exec:
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert result is False
+        assert mock_exec.call_count == 1  # inspect only, no rm
+
+    @pytest.mark.asyncio
+    async def test_removes_dead_container(self) -> None:
+        """A container in 'dead' state older than threshold is removed."""
+        old_ts = self._old_iso_timestamp(minutes=10)
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(f"dead {old_ts}".encode(), b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[inspect_proc, rm_proc]):
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_no_conflict_ids_returns_false(self) -> None:
+        """When error message has no parseable container IDs, returns False."""
+        result = await _remove_conflicting_containers("some unrelated error")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_inspect_failure_skips_container(self) -> None:
+        """If docker inspect fails (container gone), it's skipped."""
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 1
+        inspect_proc.communicate = AsyncMock(return_value=(b"", b"No such container"))
+
+        with patch("asyncio.create_subprocess_exec", return_value=inspect_proc):
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_unparseable_timestamp_treated_as_stale(self) -> None:
+        """Container with unparseable Created timestamp is treated as stale."""
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(b"created GARBAGE", b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[inspect_proc, rm_proc]):
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_custom_min_age(self) -> None:
+        """The min_age_seconds parameter controls the threshold."""
+        # 2 minutes old - default 180s threshold should skip
+        ts = self._old_iso_timestamp(minutes=2)
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(f"created {ts}".encode(), b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=inspect_proc):
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG, min_age_seconds=180)
+
+        assert result is False
+
+        # Same container with 60s threshold should now be removed
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[inspect_proc, rm_proc]):
+            result = await _remove_conflicting_containers(self._CONFLICT_MSG, min_age_seconds=60)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_logs_warning_on_removal(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A warning is logged when stale conflicting containers are removed."""
+        old_ts = self._old_iso_timestamp(minutes=10)
+        inspect_proc = AsyncMock()
+        inspect_proc.returncode = 0
+        inspect_proc.communicate = AsyncMock(return_value=(f"created {old_ts}".encode(), b""))
+
+        rm_proc = AsyncMock()
+        rm_proc.returncode = 0
+        rm_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        with patch("asyncio.create_subprocess_exec", side_effect=[inspect_proc, rm_proc]):
+            with caplog.at_level(logging.WARNING):
+                await _remove_conflicting_containers(self._CONFLICT_MSG)
+
+        assert any("conflicting" in r.message.lower() for r in caplog.records)
+
+
+class TestSampleInitConflictRetry:
+    """sample_init retries on container name conflicts."""
+
+    _CONFLICT_ERROR = RuntimeError(
+        'No services started.\n'
+        'Compose up stderr:  Container inspect-excytin-i6gkber-default-1  Creating\n'
+        'Error response from daemon: Conflict. The container name '
+        '"/inspect-excytin-i6gkber-default-1" is already in use by '
+        'container "f782a09e458b". You have to remove (or rename) that '
+        'container to be able to reuse that name.'
+    )
+
+    @pytest.mark.asyncio
+    async def test_retries_on_conflict_and_succeeds(self) -> None:
+        """sample_init retries after removing conflicting container."""
+        call_count = 0
+        sentinel = AsyncMock()
+
+        async def mock_sample_init(*args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise self._CONFLICT_ERROR
+            return {"default": sentinel}
+
+        with (
+            patch.object(
+                DockerSandboxEnvironment,
+                "sample_init",
+                side_effect=mock_sample_init,
+            ),
+            patch(
+                "saber.sandbox._remove_conflicting_containers",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_remove,
+        ):
+            result = await SaberSandboxEnvironment.sample_init("test", None, {})
+
+        assert result == {"default": sentinel}
+        mock_remove.assert_called_once()
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_if_not_conflict_error(self) -> None:
+        """Non-conflict RuntimeErrors are raised immediately without retry."""
+        with patch.object(
+            DockerSandboxEnvironment,
+            "sample_init",
+            side_effect=RuntimeError("something else"),
+        ):
+            with pytest.raises(RuntimeError, match="something else"):
+                await SaberSandboxEnvironment.sample_init("test", None, {})
+
+    @pytest.mark.asyncio
+    async def test_raises_if_no_containers_removed(self) -> None:
+        """If _remove_conflicting_containers can't remove anything, error is raised."""
+        with (
+            patch.object(
+                DockerSandboxEnvironment,
+                "sample_init",
+                side_effect=self._CONFLICT_ERROR,
+            ),
+            patch(
+                "saber.sandbox._remove_conflicting_containers",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="already in use"):
+                await SaberSandboxEnvironment.sample_init("test", None, {})
+
+    @pytest.mark.asyncio
+    async def test_no_retry_on_success(self) -> None:
+        """When sample_init succeeds first try, no removal is attempted."""
+        with (
+            patch.object(
+                DockerSandboxEnvironment,
+                "sample_init",
+                new_callable=AsyncMock,
+                return_value={"default": AsyncMock()},
+            ) as mock_super,
+            patch(
+                "saber.sandbox._remove_conflicting_containers",
+                new_callable=AsyncMock,
+            ) as mock_remove,
+        ):
+            await SaberSandboxEnvironment.sample_init("test", None, {})
+
+        mock_super.assert_called_once()
+        mock_remove.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_respects_max_retries(self) -> None:
+        """After max retries, the conflict error is raised."""
+        with (
+            patch.object(
+                DockerSandboxEnvironment,
+                "sample_init",
+                side_effect=self._CONFLICT_ERROR,
+            ),
+            patch(
+                "saber.sandbox._remove_conflicting_containers",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="already in use"):
+                await SaberSandboxEnvironment.sample_init("test", None, {})

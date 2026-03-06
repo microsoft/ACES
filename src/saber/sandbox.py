@@ -13,12 +13,18 @@ import asyncio
 import contextlib
 import json
 import os
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
 from inspect_ai.util._sandbox.docker.docker import DockerSandboxEnvironment
-from inspect_ai.util._sandbox.environment import SandboxEnvironmentConfigType
+from inspect_ai.util._sandbox.environment import (
+    SandboxEnvironment,
+    SandboxEnvironmentConfigType,
+)
 from inspect_ai.util._sandbox.registry import sandboxenv
+from typing_extensions import override
 
 from saber.environments.images import PreflightBuildError, RebuildMode, build_domain_images
 from saber.logging import display_progress, get_logger
@@ -26,6 +32,11 @@ from saber.logging import display_progress, get_logger
 __all__ = ["SaberSandboxEnvironment"]
 
 _MONITOR_POLL_INTERVAL: float = 15.0
+_STALE_CONTAINER_MIN_AGE_SECONDS: int = 180  # 3 minutes
+_CONTAINER_CONFLICT_PATTERN: re.Pattern[str] = re.compile(
+    r'container "([0-9a-f]+)"\. You have to remove',
+)
+_MAX_SAMPLE_INIT_RETRIES: int = 2
 
 logger = get_logger(__name__)
 
@@ -109,6 +120,12 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
             task_name: Name of the task being evaluated.
             config: Sandbox configuration forwarded to the parent class.
         """
+        # Remove stale containers from previous failed runs
+        try:
+            await _cleanup_stale_containers(task_name)
+        except Exception:
+            logger.warning("Stale container cleanup failed, continuing with task_init")
+
         # Preflight image build (lock ensures only one concurrent run)
         async with cls._preflight_lock:
             if cls._preflight_error is not None:
@@ -145,6 +162,49 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                 except Exception:
                     logger.warning("Failed to stop permanent services during init recovery")
             raise
+
+    @override
+    @classmethod
+    async def sample_init(
+        cls,
+        task_name: str,
+        config: SandboxEnvironmentConfigType | None,
+        metadata: dict[str, str],
+    ) -> dict[str, SandboxEnvironment]:
+        """Start per-sample sandbox with conflict-aware retry.
+
+        Wraps the parent ``sample_init`` to handle Docker container name
+        collisions caused by stale containers from previous crashed runs.
+        When a "Conflict" error is detected, the offending container is
+        force-removed and the operation is retried.
+
+        Args:
+            task_name: Name of the task being evaluated.
+            config: Sandbox configuration forwarded to the parent class.
+            metadata: Sample metadata dict.
+
+        Returns:
+            Mapping of service name to :class:`SandboxEnvironment`.
+        """
+        last_error: BaseException | None = None
+        for attempt in range(_MAX_SAMPLE_INIT_RETRIES + 1):
+            try:
+                return await super().sample_init(task_name, config, metadata)
+            except RuntimeError as exc:
+                err_msg = str(exc)
+                if "already in use" not in err_msg:
+                    raise
+                last_error = exc
+                removed = await _remove_conflicting_containers(err_msg)
+                if not removed:
+                    raise
+                logger.warning(
+                    "Removed conflicting container(s) on attempt %d/%d, retrying sample_init",
+                    attempt + 1,
+                    _MAX_SAMPLE_INIT_RETRIES + 1,
+                )
+        # Should not reach here, but satisfy the type checker
+        raise last_error  # type: ignore[misc]
 
     @classmethod
     async def task_cleanup(cls, task_name: str, config: SandboxEnvironmentConfigType | None, cleanup: bool) -> None:
@@ -183,6 +243,229 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         cls._preflight_error = None
         cls._preflight_lock = asyncio.Lock()
         os.environ.pop("SABER_PROJECT", None)
+
+
+def _sanitize_task_name(task_name: str) -> str:
+    """Sanitize a task name the same way inspect_ai's ``task_project_name`` does.
+
+    Args:
+        task_name: Raw task name string.
+
+    Returns:
+        Sanitized name suitable for Docker project name matching.
+    """
+    sanitized = task_name.lower()
+    sanitized = re.sub(r"[^a-z\d\-_]", "-", sanitized)
+    sanitized = re.sub(r"-+", "-", sanitized)
+    return sanitized[:12].rstrip("_")
+
+
+def _parse_docker_timestamp(timestamp: str) -> datetime:
+    """Parse a Docker ``CreatedAt`` timestamp into a timezone-aware datetime.
+
+    Docker outputs timestamps like ``2026-03-06 05:58:30 +0000 UTC``.
+    The trailing ``UTC`` is stripped before parsing.
+
+    Args:
+        timestamp: Raw timestamp string from ``docker ps --format``.
+
+    Returns:
+        Parsed UTC datetime.
+    """
+    cleaned = timestamp.strip().removesuffix(" UTC").strip()
+    return datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S %z")
+
+
+async def _cleanup_stale_containers(
+    task_name: str,
+    min_age_seconds: int = _STALE_CONTAINER_MIN_AGE_SECONDS,
+) -> None:
+    """Remove stale Docker containers left by killed compose-up processes.
+
+    Finds containers in "Created" or "Dead" state whose names match the
+    inspect_ai naming pattern for the given task, filters to only those
+    older than ``min_age_seconds``, and force-removes them.  This avoids
+    accidentally killing containers that are legitimately starting up
+    from concurrent evaluation runs.
+
+    Args:
+        task_name: The task name used to derive the container name filter.
+        min_age_seconds: Minimum container age in seconds before it is
+            considered stale.  Defaults to ``_STALE_CONTAINER_MIN_AGE_SECONDS``
+            (180 s / 3 minutes).
+
+    Note:
+        Errors are caught and logged so cleanup never blocks evaluation.
+    """
+    try:
+        name_filter = f"inspect-{_sanitize_task_name(task_name)}-"
+
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"name={name_filter}",
+            "--filter",
+            "status=created",
+            "--filter",
+            "status=dead",
+            "--format",
+            "{{.ID}} {{.CreatedAt}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _stderr = await proc.communicate()
+        lines = [line for line in stdout.decode().strip().splitlines() if line.strip()]
+
+        if not lines:
+            return
+
+        now = datetime.now(tz=UTC)
+        stale_ids: list[str] = []
+        for line in lines:
+            # Format: "<id> <timestamp...>"  — split on first space only
+            parts = line.split(" ", 1)
+            if len(parts) != 2:
+                continue
+            container_id, created_at_str = parts
+            try:
+                created_at = _parse_docker_timestamp(created_at_str)
+                age = (now - created_at).total_seconds()
+                if age >= min_age_seconds:
+                    stale_ids.append(container_id)
+            except (ValueError, TypeError):
+                # Cannot parse timestamp — treat as stale to be safe
+                stale_ids.append(container_id)
+
+        if not stale_ids:
+            return
+
+        logger.warning(
+            "Found %d stale container(s) matching '%s' (older than %ds), removing: %s",
+            len(stale_ids),
+            name_filter,
+            min_age_seconds,
+            ", ".join(stale_ids),
+        )
+
+        rm_proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "rm",
+            "-f",
+            *stale_ids,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await rm_proc.communicate()
+    except Exception:
+        logger.warning("Failed to cleanup stale containers for task '%s'", task_name, exc_info=True)
+
+
+async def _remove_conflicting_containers(
+    error_message: str,
+    min_age_seconds: int = _STALE_CONTAINER_MIN_AGE_SECONDS,
+) -> bool:
+    """Extract and force-remove conflicting container(s) from a Docker error.
+
+    Parses the Docker daemon "Conflict" error message to find the
+    container ID(s) blocking creation.  Before removing, each container
+    is inspected to verify it is genuinely stale — i.e. in a non-running
+    state (``created`` or ``dead``) **and** older than
+    ``min_age_seconds``.  Containers that appear healthy or too young
+    are left untouched.
+
+    Args:
+        error_message: The full error message from a failed ``compose up``.
+        min_age_seconds: Minimum container age in seconds before it is
+            considered safe to remove.
+
+    Returns:
+        ``True`` if at least one stale container was found and removal
+        was attempted; ``False`` if no container IDs could be parsed or
+        none qualified as stale.
+    """
+    container_ids = _CONTAINER_CONFLICT_PATTERN.findall(error_message)
+    if not container_ids:
+        return False
+
+    removable: list[str] = []
+    now = datetime.now(tz=UTC)
+
+    for cid in container_ids:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker",
+                "inspect",
+                "--format",
+                "{{.State.Status}} {{.Created}}",
+                cid,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                # Container may already be gone — safe to skip
+                continue
+            output = stdout.decode().strip()
+            parts = output.split(" ", 1)
+            if len(parts) != 2:
+                continue
+            status, created_str = parts
+
+            # Only remove non-running containers
+            if status not in ("created", "dead", "exited"):
+                logger.info(
+                    "Conflicting container %s is in '%s' state — skipping removal",
+                    cid[:12],
+                    status,
+                )
+                continue
+
+            # Verify age threshold
+            try:
+                # Docker inspect uses ISO-8601: 2026-03-06T05:58:30.123456789Z
+                created_at = datetime.fromisoformat(
+                    created_str.replace("Z", "+00:00").split(".")[0] + "+00:00"
+                )
+                age = (now - created_at).total_seconds()
+                if age < min_age_seconds:
+                    logger.info(
+                        "Conflicting container %s is only %ds old (threshold %ds) — skipping removal",
+                        cid[:12],
+                        int(age),
+                        min_age_seconds,
+                    )
+                    continue
+            except (ValueError, TypeError):
+                # Cannot parse timestamp — treat as stale to be safe
+                pass
+
+            removable.append(cid)
+        except Exception:
+            logger.warning("Failed to inspect conflicting container %s", cid[:12], exc_info=True)
+
+    if not removable:
+        return False
+
+    logger.warning(
+        "Removing %d stale conflicting container(s): %s",
+        len(removable),
+        ", ".join(c[:12] for c in removable),
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            "rm",
+            "-f",
+            *removable,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await proc.communicate()
+    except Exception:
+        logger.warning("Failed to remove conflicting containers", exc_info=True)
+    return True
 
 
 async def _start_permanent_services(
