@@ -18,6 +18,7 @@ from saber.agents.bridge_utils import (
     build_system_prompt,
     build_user_prompt,
     create_tool_call_limit_filter,
+    parse_bridge_stderr,
     resolve_mcp_servers,
     upload_skills_to_sandbox,
     validate_model_availability,
@@ -382,12 +383,39 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         env=agent_env,
                     )
                     if result.returncode != 0:
-                        stderr = result.stderr[:500] if result.stderr else "(no stderr)"
-                        stdout = result.stdout[:500] if result.stdout else ""
-                        detail = stderr if stderr != "(no stderr)" else stdout
+                        stderr = result.stderr or ""
+                        stdout = result.stdout or ""
+
+                        # Parse bridge proxy errors for structured diagnostics
+                        diagnostics = parse_bridge_stderr(stderr)
+                        if diagnostics:
+                            logger.error(
+                                "Bridge proxy error detected in Claude Code CLI:\n%s",
+                                diagnostics,
+                            )
+
+                        # Log full stderr at debug level for forensics
+                        if stderr:
+                            logger.debug(
+                                "Claude Code CLI full stderr (%d chars):\n%s",
+                                len(stderr),
+                                stderr[:2000],
+                            )
+
+                        # Truncated detail for the exception message
+                        detail = stderr[:500] if stderr else stdout[:500] if stdout else "(no output)"
                         msg = f"Claude Code CLI exited with code {result.returncode}: {detail}"
                         logger.error(msg)
                         raise RuntimeError(msg)
+
+                    # Log bridge warnings even on success
+                    if result.returncode == 0 and result.stderr:
+                        warnings = parse_bridge_stderr(result.stderr)
+                        if warnings:
+                            logger.warning(
+                                "Bridge proxy warnings in Claude Code CLI (exit 0):\n%s",
+                                warnings,
+                            )
 
                     # Raise LimitExceededError in the main flow if the
                     # tool-call limit was hit so that apply_limits handles

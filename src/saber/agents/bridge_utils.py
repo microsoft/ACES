@@ -6,6 +6,7 @@ Common helpers used by both ``claude_code`` and ``copilot`` solvers.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +39,91 @@ COPILOT_NATIVE_TOOLS: frozenset[str] = frozenset(
         "python",
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Bridge stderr error parsing
+# ---------------------------------------------------------------------------
+
+# Compiled patterns for bridge proxy error detection.
+_BRIDGE_ERROR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "BadRequestError",
+        re.compile(r"BadRequestError\('Error code: (\d+) - (.+?)'\)", re.DOTALL),
+    ),
+    (
+        "CAPIError",
+        re.compile(r"CAPIError:\s*(.+?)(?:\n|$)"),
+    ),
+    (
+        "ErrorCallingMethod",
+        re.compile(r"Error calling method (\w+):", re.DOTALL),
+    ),
+    (
+        "UnexpectedProxyError",
+        re.compile(r"Unexpected error during model proxy call:\s*(.+?)(?:\n|$)"),
+    ),
+    (
+        "RuntimeError",
+        re.compile(r"RuntimeError:\s*(.+?)(?:\nTraceback|\n\n|\n|$)", re.DOTALL),
+    ),
+    (
+        "ConnectionError",
+        re.compile(r"Connection error:\s*(.+?)(?:\n|$)"),
+    ),
+]
+
+# Keywords that indicate an error even without a structured pattern.
+_BRIDGE_ERROR_KEYWORDS: tuple[str, ...] = (
+    "Unknown parameter",
+    "invalid_request_error",
+    "Connection error",
+)
+
+
+def parse_bridge_stderr(stderr: str) -> str:
+    """Parse bridge proxy stderr for structured error diagnostics.
+
+    The bridge proxy's error messages often contain the full model request
+    body before the actual error, causing the real error to be truncated
+    in logs. This function extracts known error patterns to surface the
+    root cause.
+
+    Args:
+        stderr: Raw stderr from the agent CLI subprocess.
+
+    Returns:
+        A diagnostic summary string. Empty string if no known patterns found.
+    """
+    if not stderr:
+        return ""
+
+    findings: list[str] = []
+    # Track raw matched text for dedup against keyword scan
+    matched_text: list[str] = []
+
+    for label, pattern in _BRIDGE_ERROR_PATTERNS:
+        match = pattern.search(stderr)
+        if match:
+            matched_text.append(match.group(0))
+            groups = match.groups()
+            # Strip newlines from detail to prevent multi-line findings
+            detail = " | ".join(g.strip().replace("\n", " ")[:300] for g in groups if g)
+            findings.append(f"[{label}] {detail}")
+
+    # Keyword scan for indicators not caught by structured patterns.
+    for keyword in _BRIDGE_ERROR_KEYWORDS:
+        if keyword in stderr:
+            # Avoid duplicate reporting if a structured pattern already
+            # captured this keyword in its match span.
+            if not any(keyword in span for span in matched_text):
+                # Extract the line containing the keyword for context.
+                for line in stderr.splitlines():
+                    if keyword in line:
+                        findings.append(f"[Keyword] {line.strip()[:300]}")
+                        break
+
+    return "\n".join(findings)
 
 
 def build_system_prompt(

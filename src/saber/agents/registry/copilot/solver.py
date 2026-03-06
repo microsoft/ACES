@@ -28,6 +28,7 @@ from saber.agents.bridge_utils import (
     build_system_prompt,
     build_user_prompt,
     create_tool_call_limit_filter,
+    parse_bridge_stderr,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
@@ -405,15 +406,39 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     )
 
                     if result.returncode != 0:
-                        stderr = result.stderr[:500] if result.stderr else "(no stderr)"
-                        # Combine stdout and stderr for the full error picture.
-                        # The runner prints tracebacks to stdout when Python
-                        # itself crashes (e.g. ModuleNotFoundError).
-                        stdout = result.stdout[:500] if result.stdout else ""
-                        detail = stderr if stderr != "(no stderr)" else stdout
+                        stderr = result.stderr or ""
+                        stdout = result.stdout or ""
+
+                        # Parse bridge proxy errors for structured diagnostics
+                        diagnostics = parse_bridge_stderr(stderr)
+                        if diagnostics:
+                            logger.error(
+                                "Bridge proxy error detected in Copilot runner:\n%s",
+                                diagnostics,
+                            )
+
+                        # Log full stderr at debug level for forensics
+                        if stderr:
+                            logger.debug(
+                                "Copilot runner full stderr (%d chars):\n%s",
+                                len(stderr),
+                                stderr[:2000],
+                            )
+
+                        # Truncated detail for the exception message
+                        detail = stderr[:500] if stderr else stdout[:500] if stdout else "(no output)"
                         msg = f"Copilot runner exited with code {result.returncode}: {detail}"
                         logger.error(msg)
                         raise RuntimeError(msg)
+
+                    # Log bridge warnings even on success
+                    if result.returncode == 0 and result.stderr:
+                        warnings = parse_bridge_stderr(result.stderr)
+                        if warnings:
+                            logger.warning(
+                                "Bridge proxy warnings in Copilot runner (exit 0):\n%s",
+                                warnings,
+                            )
 
                     # Raise LimitExceededError in the main flow if the
                     # tool-call limit was hit so that apply_limits handles
