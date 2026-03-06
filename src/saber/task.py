@@ -262,6 +262,11 @@ def create_task(
         if all_security_configs:
             effective_approval = build_tool_approval(all_security_configs)
 
+    # Default per-sample time limit (seconds).  Can be overridden from
+    # the CLI with ``--time-limit``.  The value propagates automatically
+    # to bridge-based agents (copilot, claude_code) via sample_limits().
+    _DEFAULT_TIME_LIMIT = 3600
+
     return Task(
         dataset=samples,
         solver=solver,
@@ -271,6 +276,7 @@ def create_task(
         # Use max across all tasks as the ceiling; per-sample tightening
         # happens in the solver via state.tool_call_limit from metadata.
         tool_call_limit=max(t.max_steps for t in tasks),
+        time_limit=_DEFAULT_TIME_LIMIT,
         # Empty reducer list suppresses the spurious "(mean)" display
         # suffix caused by an inspect_ai variable-shadowing bug in
         # resolve_reducer().  With reducer=[], metrics are computed

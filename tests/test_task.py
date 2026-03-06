@@ -142,6 +142,21 @@ class TestCreateTask:
 
         assert isinstance(task, InspectTask)
 
+    def test_task_has_default_time_limit(self, tmp_path: Path) -> None:
+        """create_task sets a default time_limit of 3600 on the Task."""
+        _write_minimal_domain(tmp_path)
+
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        with patch("saber.task.resolve_agent", return_value=mock_factory):
+            task = create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+            )
+
+        assert task.time_limit == 3600
+
     def test_task_has_samples(self, tmp_path: Path) -> None:
         """The returned Task has the expected samples from YAML."""
         _write_minimal_domain(tmp_path)

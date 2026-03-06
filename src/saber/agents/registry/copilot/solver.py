@@ -47,6 +47,8 @@ logger = get_logger(__name__)
 _STORE_PORT_KEY = "copilot_model_port"
 _DEFAULT_PORT_BASE = 3000
 _RUNNER_PATH = "/tmp/_copilot_runner.py"
+_DEFAULT_TIMEOUT = 3600
+_MIN_TIMEOUT = 30  # Floor to allow graceful completion
 
 # ---------------------------------------------------------------------------
 # Embedded runner script (executed inside the Docker sandbox)
@@ -228,6 +230,7 @@ def _build_runner_env(
     model: str,
     prompt: str,
     mcp_configs: Sequence[object],
+    timeout: int = _DEFAULT_TIMEOUT,
     persona_prompt: str = "",
     skill_directories_json: str = "[]",
 ) -> dict[str, str]:
@@ -239,6 +242,9 @@ def _build_runner_env(
         prompt: User prompt text (SABER system prompt already prepended).
         mcp_configs: MCP server config objects from bridge
             (each with ``.name``, ``.url``, ``.type`` attributes).
+        timeout: Timeout in seconds for ``session.send_and_wait()``.
+            Derived from inspect_ai's ``sample_limits().time.remaining``
+            so the runner respects the overall sample time budget.
         persona_prompt: Persona prompt text to append to the Copilot
             system message via ``system_message`` mode=append.
         skill_directories_json: JSON-serialized list of sandbox skill
@@ -261,6 +267,7 @@ def _build_runner_env(
         "COPILOT_MODEL": model,
         "COPILOT_PROMPT": prompt,
         "COPILOT_MCP_CONFIG": json.dumps(mcp_list),
+        "COPILOT_TIMEOUT": str(timeout),
         "COPILOT_PERSONA_PROMPT": persona_prompt,
         "COPILOT_SKILL_DIRECTORIES": skill_directories_json,
     }
@@ -380,12 +387,31 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         sandbox_skills = await upload_skills_to_sandbox(sbox, config.skills_dir, ".github/skills")
                         skill_directories_json = json.dumps([sandbox_skills])
 
+                    # Derive timeout from inspect_ai's sample time limit.
+                    # sample_limits().time.remaining gives the seconds left
+                    # in the current sample's time budget (set by Task(
+                    # time_limit=...) or --time-limit CLI flag).
+                    # Import deferred to avoid import-time context errors.
+                    from inspect_ai.util import sample_limits
+
+                    try:
+                        remaining = sample_limits().time.remaining
+                        runner_timeout = (
+                            max(int(remaining), _MIN_TIMEOUT)
+                            if remaining is not None
+                            else _DEFAULT_TIMEOUT
+                        )
+                    except RuntimeError:
+                        # No active sample context (e.g. during testing)
+                        runner_timeout = _DEFAULT_TIMEOUT
+
                     # Build environment
                     runner_env = _build_runner_env(
                         bridge_port=bridge.port,
                         model=config.model,
                         prompt=user_prompt,
                         mcp_configs=bridge.mcp_server_configs,
+                        timeout=runner_timeout,
                         persona_prompt=persona_prompt,
                         skill_directories_json=skill_directories_json,
                     )

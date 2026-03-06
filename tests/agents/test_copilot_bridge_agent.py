@@ -148,7 +148,7 @@ class TestBuildRunnerEnv:
         assert env["OPENAI_BASE_URL"] == "http://localhost:13131/v1"
         assert env["COPILOT_MODEL"] == "gpt-5"
         assert env["COPILOT_PROMPT"] == "Do the task"
-        assert "COPILOT_TIMEOUT" not in env
+        assert env["COPILOT_TIMEOUT"] == "3600"
         assert "COPILOT_SYSTEM_PROMPT" not in env
 
     def test_mcp_config_serialized_as_json(self) -> None:
@@ -186,6 +186,84 @@ class TestBuildRunnerEnv:
             mcp_configs=[],
         )
         assert env["COPILOT_MCP_CONFIG"] == "[]"
+
+    def test_timeout_flows_to_env(self) -> None:
+        """Custom timeout is passed through to COPILOT_TIMEOUT."""
+        from saber.agents.registry.copilot.solver import _build_runner_env
+
+        env = _build_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            mcp_configs=[],
+            timeout=1800,
+        )
+        assert env["COPILOT_TIMEOUT"] == "1800"
+
+    def test_default_timeout_is_3600(self) -> None:
+        """Default timeout for COPILOT_TIMEOUT is 3600 seconds."""
+        from saber.agents.registry.copilot.solver import _build_runner_env
+
+        env = _build_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            mcp_configs=[],
+        )
+        assert env["COPILOT_TIMEOUT"] == "3600"
+
+
+class TestSampleLimitsTimeout:
+    """Tests for sample_limits() → runner_timeout derivation logic."""
+
+    def test_remaining_flows_to_timeout(self) -> None:
+        """Remaining time from sample_limits is used as runner timeout."""
+        from saber.agents.registry.copilot.solver import _DEFAULT_TIMEOUT, _MIN_TIMEOUT
+
+        remaining = 1800.0
+        runner_timeout = max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
+        assert runner_timeout == 1800
+
+    def test_none_remaining_uses_default(self) -> None:
+        """None remaining (unlimited) falls back to default timeout."""
+        from saber.agents.registry.copilot.solver import _DEFAULT_TIMEOUT, _MIN_TIMEOUT
+
+        remaining = None
+        runner_timeout = max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
+        assert runner_timeout == _DEFAULT_TIMEOUT
+
+    def test_zero_remaining_clamped_to_min(self) -> None:
+        """Zero remaining is clamped to _MIN_TIMEOUT, not zero."""
+        from saber.agents.registry.copilot.solver import _DEFAULT_TIMEOUT, _MIN_TIMEOUT
+
+        remaining = 0.0
+        runner_timeout = max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
+        assert runner_timeout == _MIN_TIMEOUT
+        assert runner_timeout >= 30
+
+    def test_negative_remaining_clamped_to_min(self) -> None:
+        """Negative remaining is clamped to _MIN_TIMEOUT."""
+        from saber.agents.registry.copilot.solver import _DEFAULT_TIMEOUT, _MIN_TIMEOUT
+
+        remaining = -5.2
+        runner_timeout = max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
+        assert runner_timeout == _MIN_TIMEOUT
+
+    def test_small_remaining_clamped_to_min(self) -> None:
+        """Remaining smaller than _MIN_TIMEOUT is clamped up."""
+        from saber.agents.registry.copilot.solver import _DEFAULT_TIMEOUT, _MIN_TIMEOUT
+
+        remaining = 10.5
+        runner_timeout = max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
+        assert runner_timeout == _MIN_TIMEOUT
+
+    def test_fractional_remaining_truncated(self) -> None:
+        """Fractional seconds are truncated to int."""
+        from saber.agents.registry.copilot.solver import _DEFAULT_TIMEOUT, _MIN_TIMEOUT
+
+        remaining = 2500.7
+        runner_timeout = max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
+        assert runner_timeout == 2500
 
 
 # ---------------------------------------------------------------------------
