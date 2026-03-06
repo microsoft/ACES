@@ -104,11 +104,16 @@ def build(
 
 
 async def _list_compose_projects() -> list[ComposeProject]:
-    """Run ``docker compose ls --format json`` and parse output."""
+    """Run ``docker compose ls -a --format json`` and parse output.
+
+    Uses ``-a`` to include stopped/exited projects that still have
+    leftover containers (e.g. orphaned Inspect AI sandboxes).
+    """
     proc = await asyncio.create_subprocess_exec(
         "docker",
         "compose",
         "ls",
+        "-a",
         "--format",
         "json",
         stdout=asyncio.subprocess.PIPE,
@@ -146,11 +151,20 @@ async def _teardown_project(project_name: str) -> tuple[bool, str]:
 
 
 def _is_saber_project(name: str, known_slugs: frozenset[str]) -> bool:
-    """Check if a Docker Compose project name belongs to SABER."""
-    if "saber" in name.lower():
+    """Check if a Docker Compose project name belongs to SABER.
+
+    Matches projects that:
+    - Contain "saber" in the name (e.g. ``saber-sandbox-abc123``)
+    - Are ``{slug}-databases`` permanent-service projects
+    - Are ``inspect-{slug}-*`` projects created by Inspect AI sandboxes
+    """
+    lower = name.lower()
+    if "saber" in lower:
         return True
     for slug in known_slugs:
         if name == f"{slug}-databases":
+            return True
+        if lower.startswith(f"inspect-{slug}-"):
             return True
     return False
 

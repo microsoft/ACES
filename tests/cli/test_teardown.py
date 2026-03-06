@@ -33,6 +33,22 @@ class TestIsSaberProject:
         """Only exact {slug}-databases matches, not partial."""
         assert _is_saber_project("excytin-other", frozenset({"excytin"})) is False
 
+    def test_matches_inspect_sandbox_project(self) -> None:
+        """inspect-{slug}-{id} projects from Inspect AI should be recognised."""
+        assert _is_saber_project("inspect-excytin-i4hzaht", frozenset({"excytin"})) is True
+
+    def test_matches_inspect_sandbox_various_ids(self) -> None:
+        """Different random IDs after inspect-{slug}- should match."""
+        assert _is_saber_project("inspect-cybench-iab1234", frozenset({"cybench"})) is True
+
+    def test_rejects_inspect_without_known_slug(self) -> None:
+        """inspect-* projects for unknown domains should not match."""
+        assert _is_saber_project("inspect-unknown-iab1234", frozenset({"excytin"})) is False
+
+    def test_rejects_inspect_prefix_only(self) -> None:
+        """Bare 'inspect-excytin' (no trailing id segment) should not match."""
+        assert _is_saber_project("inspect-excytin", frozenset({"excytin"})) is False
+
 
 class TestFilterByDomain:
     """Tests for _filter_by_domain."""
@@ -79,6 +95,7 @@ class TestTeardownCommand:
         projects = [
             ComposeProject(name="excytin-databases", status="running(2)"),
             ComposeProject(name="saber-sandbox-123", status="running(1)"),
+            ComposeProject(name="inspect-excytin-i4hzaht", status="exited(1)"),
             ComposeProject(name="unrelated-app", status="running(1)"),
         ]
         domains = [make_domain(slug="excytin", name="Excytin")]
@@ -91,11 +108,13 @@ class TestTeardownCommand:
         ):
             result = runner.invoke(app, ["teardown", "--yes"])
         assert result.exit_code == 0
-        # Should tear down excytin-databases and saber-sandbox-123, NOT unrelated-app
-        assert mock_td.call_count == 2
+        # Should tear down excytin-databases, saber-sandbox-123, and inspect sandbox
+        # but NOT unrelated-app
+        assert mock_td.call_count == 3
         torn_down = {call.args[0] for call in mock_td.call_args_list}
         assert "excytin-databases" in torn_down
         assert "saber-sandbox-123" in torn_down
+        assert "inspect-excytin-i4hzaht" in torn_down
         assert "unrelated-app" not in torn_down
 
     def test_teardown_single_domain(self) -> None:
