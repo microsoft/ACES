@@ -68,6 +68,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
     _preflight_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
     _preflight_done: ClassVar[bool] = False
     _preflight_error: ClassVar[RuntimeError | None] = None
+    _sandbox_tools_patched: ClassVar[bool] = False
 
     @classmethod
     def set_permanent_compose(
@@ -130,6 +131,14 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         async with cls._preflight_lock:
             if cls._preflight_error is not None:
                 raise cls._preflight_error
+
+            # Auto-patch sandbox-tools binary (once per process)
+            if not cls._sandbox_tools_patched:
+                from saber.environments.sandbox_tools_patch import patch_sandbox_tools_binary
+
+                patch_sandbox_tools_binary()
+                cls._sandbox_tools_patched = True
+
             if cls._preflight_domain_root and not cls._preflight_done:
                 display_progress("Building domain Docker images (preflight)...")
                 result = await build_domain_images(
@@ -222,9 +231,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                 if cleanup and cls._permanent_compose and not cls._keep_permanent:
                     await _stop_permanent_services(cls._permanent_project)
                 elif cls._keep_permanent and cls._permanent_compose:
-                    display_progress(
-                        f"Keeping permanent services alive (project={cls._permanent_project})"
-                    )
+                    display_progress(f"Keeping permanent services alive (project={cls._permanent_project})")
             except Exception:
                 logger.warning("Failed to stop permanent services during cleanup")
             finally:
