@@ -1348,3 +1348,207 @@ class TestCopilotPersonaSkillsWiring:
         assert callable(factory)
         solver = factory(instruction_prompt="Do it")
         assert isinstance(solver, Solver)
+
+
+# ---------------------------------------------------------------------------
+# Activity-Aware Timeout & Metrics
+# ---------------------------------------------------------------------------
+
+
+class TestRunnerScriptActivityTimeout:
+    """Verify RUNNER_SCRIPT has activity-aware timeout and metrics."""
+
+    def test_runner_reads_idle_timeout_env(self) -> None:
+        """RUNNER_SCRIPT reads COPILOT_IDLE_TIMEOUT env var."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "COPILOT_IDLE_TIMEOUT" in RUNNER_SCRIPT
+
+    def test_runner_uses_session_send_not_send_and_wait(self) -> None:
+        """RUNNER_SCRIPT uses session.send() not session.send_and_wait()."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "session.send(" in RUNNER_SCRIPT
+        assert "send_and_wait" not in RUNNER_SCRIPT
+
+    def test_runner_emits_metrics_json(self) -> None:
+        """RUNNER_SCRIPT prints COPILOT_METRICS: JSON line."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "COPILOT_METRICS:" in RUNNER_SCRIPT
+
+    def test_runner_tracks_activity_events(self) -> None:
+        """RUNNER_SCRIPT tracks activity events for idle detection."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "ACTIVITY_EVENTS" in RUNNER_SCRIPT
+        assert "last_activity_time" in RUNNER_SCRIPT
+
+    def test_runner_emits_idle_timeout_marker(self) -> None:
+        """RUNNER_SCRIPT emits COPILOT_RUNNER_IDLE_TIMEOUT on idle timeout."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "COPILOT_RUNNER_IDLE_TIMEOUT" in RUNNER_SCRIPT
+
+    def test_runner_emits_max_timeout_marker(self) -> None:
+        """RUNNER_SCRIPT emits COPILOT_RUNNER_MAX_TIMEOUT on max timeout."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "COPILOT_RUNNER_MAX_TIMEOUT" in RUNNER_SCRIPT
+
+    def test_runner_imports_session_event_type(self) -> None:
+        """RUNNER_SCRIPT imports SessionEventType for event tracking."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "SessionEventType" in RUNNER_SCRIPT
+
+    def test_runner_uses_time_monotonic(self) -> None:
+        """RUNNER_SCRIPT uses time.monotonic() for timing."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "time.monotonic()" in RUNNER_SCRIPT
+
+    def test_runner_tracks_all_required_metrics(self) -> None:
+        """RUNNER_SCRIPT tracks all required metric fields."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        for field in [
+            "total_events",
+            "assistant_messages",
+            "tool_calls_started",
+            "tool_calls_completed",
+            "turn_count",
+            "last_event_type",
+            "elapsed_seconds",
+            "idle_seconds",
+            "exit_reason",
+        ]:
+            assert field in RUNNER_SCRIPT, f"Missing metric field: {field}"
+
+
+class TestCopilotBridgeConfigIdleTimeout:
+    """CopilotBridgeConfig idle_timeout field."""
+
+    def test_idle_timeout_default(self) -> None:
+        """Default idle_timeout is 300."""
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        cfg = CopilotBridgeConfig()
+        assert cfg.idle_timeout == 300
+
+    def test_from_kwargs_with_idle_timeout(self) -> None:
+        """from_kwargs extracts idle_timeout."""
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        cfg = CopilotBridgeConfig.from_kwargs({"idle_timeout": 600})
+        assert cfg.idle_timeout == 600
+
+
+class TestBuildRunnerEnvIdleTimeout:
+    """_build_runner_env idle_timeout parameter."""
+
+    def test_idle_timeout_env_var_default(self) -> None:
+        """Default idle_timeout produces COPILOT_IDLE_TIMEOUT='300'."""
+        from saber.agents.registry.copilot.solver import _build_runner_env
+
+        env = _build_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            mcp_configs=[],
+        )
+        assert env["COPILOT_IDLE_TIMEOUT"] == "300"
+
+    def test_idle_timeout_env_var_custom(self) -> None:
+        """Custom idle_timeout is passed through."""
+        from saber.agents.registry.copilot.solver import _build_runner_env
+
+        env = _build_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            mcp_configs=[],
+            idle_timeout=600,
+        )
+        assert env["COPILOT_IDLE_TIMEOUT"] == "600"
+
+
+class TestParseRunnerMetrics:
+    """Tests for parse_runner_metrics in bridge_utils."""
+
+    def test_parses_valid_metrics_json(self) -> None:
+        """Parses valid COPILOT_METRICS JSON from stderr."""
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        stderr = (
+            'Some log line\n'
+            'COPILOT_METRICS: {"total_events": 42, "exit_reason": "completed"}\n'
+            'More output\n'
+        )
+        result = parse_runner_metrics(stderr)
+        assert result is not None
+        assert result["total_events"] == 42
+        assert result["exit_reason"] == "completed"
+
+    def test_returns_none_for_no_metrics(self) -> None:
+        """Returns None when no COPILOT_METRICS line found."""
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        result = parse_runner_metrics("some random stderr output\n")
+        assert result is None
+
+    def test_returns_none_for_empty_string(self) -> None:
+        """Returns None for empty stderr."""
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        assert parse_runner_metrics("") is None
+
+    def test_returns_none_for_none_input(self) -> None:
+        """Returns None when passed None (via falsy check)."""
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        assert parse_runner_metrics("") is None
+
+    def test_returns_none_for_invalid_json(self) -> None:
+        """Returns None when COPILOT_METRICS line has invalid JSON."""
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        stderr = "COPILOT_METRICS: {not valid json}\n"
+        result = parse_runner_metrics(stderr)
+        assert result is None
+
+    def test_parses_full_metrics(self) -> None:
+        """Parses a complete COPILOT_METRICS payload."""
+        import json
+
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        metrics = {
+            "total_events": 150,
+            "assistant_messages": 10,
+            "tool_calls_started": 25,
+            "tool_calls_completed": 24,
+            "turns": 8,
+            "elapsed_seconds": 1200.5,
+            "idle_seconds": 3.2,
+            "exit_reason": "completed",
+            "last_event_type": "session.idle",
+        }
+        stderr = f"COPILOT_METRICS: {json.dumps(metrics)}\n"
+        result = parse_runner_metrics(stderr)
+        assert result is not None
+        assert result["total_events"] == 150
+        assert result["turns"] == 8
+        assert result["exit_reason"] == "completed"
+
+    def test_first_metrics_line_wins(self) -> None:
+        """When multiple COPILOT_METRICS lines exist, first one is returned."""
+        from saber.agents.bridge_utils import parse_runner_metrics
+
+        stderr = (
+            'COPILOT_METRICS: {"exit_reason": "first"}\n'
+            'COPILOT_METRICS: {"exit_reason": "second"}\n'
+        )
+        result = parse_runner_metrics(stderr)
+        assert result is not None
+        assert result["exit_reason"] == "first"

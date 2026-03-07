@@ -580,3 +580,36 @@ async def upload_skills_to_sandbox(
 
     logger.debug("Uploaded %d skill files to sandbox at %s", uploaded, sandbox_base)
     return sandbox_base
+
+
+# ---------------------------------------------------------------------------
+# Runner metrics parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_runner_metrics(stderr: str) -> dict[str, object] | None:
+    """Parse COPILOT_METRICS JSON from runner stderr.
+
+    Searches for a line starting with ``COPILOT_METRICS:`` and parses the
+    JSON payload after the prefix.
+
+    Args:
+        stderr: Raw stderr from the runner subprocess.
+
+    Returns:
+        Parsed metrics dict, or None if no metrics line found.
+    """
+    if not stderr:
+        return None
+
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("COPILOT_METRICS:"):
+            json_str = stripped[len("COPILOT_METRICS:") :].strip()
+            try:
+                return json.loads(json_str)  # type: ignore[no-any-return]
+            except (json.JSONDecodeError, ValueError):
+                logger.debug("Failed to parse COPILOT_METRICS JSON: %s", json_str[:200])
+                return None
+
+    return None

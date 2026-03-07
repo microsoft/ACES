@@ -29,6 +29,7 @@ from saber.agents.bridge_utils import (
     build_user_prompt,
     create_tool_call_limit_filter,
     parse_bridge_stderr,
+    parse_runner_metrics,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
@@ -64,7 +65,8 @@ Reads configuration from environment variables:
 - COPILOT_PROMPT: User prompt text (SABER system prompt prepended)
 - COPILOT_MCP_CONFIG: JSON string of MCP server configs (optional)
 - COPILOT_PERSONA_PROMPT: Persona prompt text to append to system message (optional)
-- COPILOT_TIMEOUT: Timeout in seconds for session.send_and_wait (default: 3600)
+- COPILOT_TIMEOUT: Max wall-clock timeout in seconds (default: 3600)
+- COPILOT_IDLE_TIMEOUT: Max idle time with no activity events (default: 300)
 """
 
 import asyncio
@@ -90,14 +92,17 @@ def _approve_all(
 
 async def main() -> int:
     """Run Copilot session with bridge-routed model."""
+    import time
     from copilot import CopilotClient
+    from copilot.generated.session_events import SessionEventType
 
     base_url = os.environ.get("OPENAI_BASE_URL", "http://localhost:13131/v1")
     api_key = os.environ.get("OPENAI_API_KEY", "sk-placeholder")
     model = os.environ.get("COPILOT_MODEL", "inspect")
     prompt = os.environ.get("COPILOT_PROMPT", "")
     mcp_config_str = os.environ.get("COPILOT_MCP_CONFIG", "")
-    timeout = int(os.environ.get("COPILOT_TIMEOUT", "3600"))
+    max_timeout = int(os.environ.get("COPILOT_TIMEOUT", "3600"))
+    idle_timeout = int(os.environ.get("COPILOT_IDLE_TIMEOUT", "300"))
 
     if not prompt:
         print("ERROR: COPILOT_PROMPT is required", file=sys.stderr)
@@ -154,25 +159,146 @@ async def main() -> int:
             print(f"ERROR: Invalid COPILOT_SKILL_DIRECTORIES: {skill_dirs_str} — {exc}", file=sys.stderr)
             return 1
 
+    # Activity tracking
+    start_time = time.monotonic()
+    last_activity_time = start_time
+    total_events = 0
+    assistant_messages = 0
+    tool_calls_started = 0
+    tool_calls_completed = 0
+    turn_count = 0
+    last_event_type = ""
+    idle_event = asyncio.Event()
+    session_error_msg = ""
+    last_response = None
+
+    # Event types that count as "activity" (agent is doing work)
+    ACTIVITY_EVENTS = {
+        SessionEventType.ASSISTANT_MESSAGE,
+        SessionEventType.ASSISTANT_MESSAGE_DELTA,
+        SessionEventType.TOOL_EXECUTION_START,
+        SessionEventType.TOOL_EXECUTION_COMPLETE,
+        SessionEventType.TOOL_EXECUTION_PROGRESS,
+        SessionEventType.ASSISTANT_TURN_START,
+        SessionEventType.ASSISTANT_TURN_END,
+        SessionEventType.ASSISTANT_REASONING,
+        SessionEventType.ASSISTANT_REASONING_DELTA,
+        SessionEventType.ASSISTANT_INTENT,
+        SessionEventType.SESSION_COMPACTION_START,
+        SessionEventType.SESSION_COMPACTION_COMPLETE,
+        SessionEventType.ASSISTANT_USAGE,
+    }
+
+    def _on_event(event):
+        nonlocal last_activity_time, total_events, assistant_messages
+        nonlocal tool_calls_started, tool_calls_completed, turn_count
+        nonlocal last_event_type, session_error_msg, last_response
+
+        total_events += 1
+        last_event_type = str(event.type.value) if hasattr(event.type, 'value') else str(event.type)
+
+        if event.type in ACTIVITY_EVENTS:
+            last_activity_time = time.monotonic()
+
+        if event.type == SessionEventType.ASSISTANT_MESSAGE:
+            assistant_messages += 1
+            last_response = event
+        elif event.type == SessionEventType.TOOL_EXECUTION_START:
+            tool_calls_started += 1
+        elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
+            tool_calls_completed += 1
+        elif event.type == SessionEventType.ASSISTANT_TURN_END:
+            turn_count += 1
+        elif event.type == SessionEventType.SESSION_IDLE:
+            idle_event.set()
+        elif event.type == SessionEventType.SESSION_ERROR:
+            session_error_msg = str(getattr(getattr(event, 'data', None), 'message', event.data))
+            idle_event.set()
+
+    def _build_metrics(exit_reason):
+        now = time.monotonic()
+        return {
+            "total_events": total_events,
+            "assistant_messages": assistant_messages,
+            "tool_calls_started": tool_calls_started,
+            "tool_calls_completed": tool_calls_completed,
+            "turns": turn_count,
+            "elapsed_seconds": round(now - start_time, 1),
+            "idle_seconds": round(now - last_activity_time, 1),
+            "exit_reason": exit_reason,
+            "last_event_type": last_event_type,
+        }
+
+    def _print_metrics(exit_reason):
+        metrics = _build_metrics(exit_reason)
+        print(f"COPILOT_METRICS: {json.dumps(metrics)}", file=sys.stderr)
+
     client = CopilotClient()
     try:
         await client.start()
         session = await client.create_session(session_config)
 
         try:
-            response = await session.send_and_wait(
-                {"prompt": prompt},
-                timeout=timeout,
-            )
-            if response:
-                content = getattr(getattr(response, "data", None), "content", None)
-                if content:
-                    print(f"COPILOT_RESPONSE: {content[:500]}", file=sys.stderr)
-        except Exception as exc:
-            print(f"ERROR: Session failed: {exc}", file=sys.stderr)
-            return 1
+            unsubscribe = session.on(_on_event)
+            try:
+                await session.send({"prompt": prompt})
+                last_activity_time = time.monotonic()  # Reset after send
+
+                # Poll loop with activity-aware timeout
+                while not idle_event.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(idle_event.wait()),
+                            timeout=5.0,
+                        )
+                    except asyncio.TimeoutError:
+                        pass  # Check timeouts below
+
+                    if idle_event.is_set():
+                        break
+
+                    now = time.monotonic()
+                    idle_elapsed = now - last_activity_time
+                    total_elapsed = now - start_time
+
+                    if idle_elapsed > idle_timeout:
+                        print(
+                            f"COPILOT_RUNNER_IDLE_TIMEOUT: No activity for "
+                            f"{idle_elapsed:.0f}s (limit: {idle_timeout}s)",
+                            file=sys.stderr,
+                        )
+                        _print_metrics("idle_timeout")
+                        break
+
+                    if total_elapsed > max_timeout:
+                        print(
+                            f"COPILOT_RUNNER_MAX_TIMEOUT: Session active for "
+                            f"{total_elapsed:.0f}s (limit: {max_timeout}s)",
+                            file=sys.stderr,
+                        )
+                        _print_metrics("max_timeout")
+                        break
+
+                else:
+                    # idle_event was set — normal completion or session error
+                    if session_error_msg:
+                        print(f"COPILOT_SESSION_ERROR: {session_error_msg}", file=sys.stderr)
+                        _print_metrics("session_error")
+                    else:
+                        if last_response:
+                            content = getattr(getattr(last_response, "data", None), "content", None)
+                            if content:
+                                print(f"COPILOT_RESPONSE: {content[:500]}", file=sys.stderr)
+                        _print_metrics("completed")
+
+            finally:
+                unsubscribe()
         finally:
             await session.destroy()
+    except Exception as exc:
+        # Non-timeout exceptions (session creation failure, etc.)
+        print(f"ERROR: Session failed: {exc}", file=sys.stderr)
+        return 1
     finally:
         await client.stop()
 
@@ -205,6 +331,7 @@ class CopilotBridgeConfig(BaseModel):
     model: str = "inspect"
     persona_file: str | None = None
     skills_dir: str | None = None
+    idle_timeout: int = 300
 
     @classmethod
     def from_kwargs(cls, kwargs: "dict[str, object]") -> "CopilotBridgeConfig":
@@ -233,6 +360,7 @@ def _build_runner_env(
     timeout: int = _DEFAULT_TIMEOUT,
     persona_prompt: str = "",
     skill_directories_json: str = "[]",
+    idle_timeout: int = 300,
 ) -> dict[str, str]:
     """Build environment variables for the runner script.
 
@@ -249,6 +377,8 @@ def _build_runner_env(
             system message via ``system_message`` mode=append.
         skill_directories_json: JSON-serialized list of sandbox skill
             directory paths.
+        idle_timeout: Maximum idle time (no activity events) in seconds
+            before the runner exits gracefully.
 
     Returns:
         Dict of env vars to pass to ``sbox.exec()``.
@@ -270,6 +400,7 @@ def _build_runner_env(
         "COPILOT_TIMEOUT": str(timeout),
         "COPILOT_PERSONA_PROMPT": persona_prompt,
         "COPILOT_SKILL_DIRECTORIES": skill_directories_json,
+        "COPILOT_IDLE_TIMEOUT": str(idle_timeout),
     }
 
 
@@ -412,6 +543,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         timeout=runner_timeout,
                         persona_prompt=persona_prompt,
                         skill_directories_json=skill_directories_json,
+                        idle_timeout=config.idle_timeout,
                     )
 
                     # Execute runner in sandbox (stdin closed to prevent hangs).
@@ -432,6 +564,16 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     if result.returncode != 0:
                         stderr = result.stderr or ""
                         stdout = result.stdout or ""
+
+                        # Check if this is a timeout from the old-style
+                        # runner ("Timeout after ...s waiting for session.idle")
+                        # — treat as non-fatal so partial scoring can proceed.
+                        if "Timeout after" in stderr and "session.idle" in stderr:
+                            logger.warning(
+                                "Copilot runner timed out (non-fatal, returning partial transcript): %s",
+                                stderr[:500],
+                            )
+                            return bridge.state
 
                         # Parse bridge proxy errors for structured diagnostics
                         diagnostics = parse_bridge_stderr(stderr)
@@ -455,8 +597,27 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         logger.error(msg)
                         raise RuntimeError(msg)
 
-                    # Log bridge warnings even on success
+                    # Parse and log runner metrics on success
                     if result.returncode == 0 and result.stderr:
+                        metrics = parse_runner_metrics(result.stderr)
+                        if metrics:
+                            logger.info(
+                                "Copilot runner metrics: %s",
+                                json.dumps(metrics),
+                            )
+
+                        if "COPILOT_RUNNER_IDLE_TIMEOUT" in result.stderr:
+                            logger.warning(
+                                "Copilot session appeared orphaned (idle timeout). "
+                                "Returning partial transcript for scoring.",
+                            )
+                        elif "COPILOT_RUNNER_MAX_TIMEOUT" in result.stderr:
+                            logger.info(
+                                "Copilot session hit max time limit but was actively working. "
+                                "Returning partial transcript for scoring.",
+                            )
+
+                        # Log bridge warnings even on success
                         warnings = parse_bridge_stderr(result.stderr)
                         if warnings:
                             logger.warning(
