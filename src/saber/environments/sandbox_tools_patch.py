@@ -32,6 +32,31 @@ __all__ = [
 
 logger = get_logger(__name__)
 
+
+def _find_repo_root() -> Path | None:
+    """Locate the oss_saber repository root by searching for marker files.
+
+    Walks up from the current working directory looking for a directory
+    that contains both ``external/inspect_ai`` and ``pyproject.toml``.
+    Falls back to walking up from this file's location (works when the
+    saber package is installed editable from the repo).
+
+    Returns:
+        The repo root path, or ``None`` if not found.
+    """
+    # Try cwd first (most reliable for non-editable installs)
+    for start in (Path.cwd(), Path(__file__).resolve().parent):
+        current = start
+        for _ in range(10):  # Max 10 levels up
+            if (current / "external" / "inspect_ai").is_dir() and (current / "pyproject.toml").is_file():
+                return current
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+    return None
+
+
 PatchAction = Literal[
     "patched",
     "already_current",
@@ -116,8 +141,10 @@ def _find_installed_binary(binary_name: str) -> Path | None:
         import inspect_ai  # noqa: WPS433 — runtime import to find site-packages path
 
         binaries_dir = Path(inspect_ai.__file__).parent / "binaries"
-        if binaries_dir.is_dir():
-            return binaries_dir / binary_name
+        if not binaries_dir.is_dir():
+            binaries_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug("Created missing binaries dir: %s", binaries_dir)
+        return binaries_dir / binary_name
     except ImportError:
         pass
     return None
@@ -149,9 +176,14 @@ def patch_sandbox_tools_binary(
         A :class:`SandboxToolsPatchResult` describing what happened.
     """
     if repo_root is None:
-        # .../external/saber/src/saber/environments/sandbox_tools_patch.py
-        # parents: [environments, saber, src, saber(ext), external, REPO_ROOT]
-        repo_root = Path(__file__).resolve().parents[5]
+        repo_root = _find_repo_root()
+        if repo_root is None:
+            msg = (
+                "Cannot auto-detect repo root. Pass repo_root explicitly "
+                "or run from within the oss_saber repository directory."
+            )
+            logger.warning(msg)
+            return SandboxToolsPatchResult(action="no_source", message=msg)
 
     source, binary_name = _find_source_binary(repo_root)
 
@@ -241,7 +273,14 @@ def patch_bridge_source_files(
         :data:`_BRIDGE_FILES_TO_PATCH`.
     """
     if repo_root is None:
-        repo_root = Path(__file__).resolve().parents[5]
+        repo_root = _find_repo_root()
+        if repo_root is None:
+            msg = (
+                "Cannot auto-detect repo root. Pass repo_root explicitly "
+                "or run from within the oss_saber repository directory."
+            )
+            logger.warning(msg)
+            return [SandboxToolsPatchResult(action="no_source", message=msg)]
 
     try:
         import inspect_ai  # noqa: WPS433
