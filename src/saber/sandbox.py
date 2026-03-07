@@ -13,6 +13,7 @@ import asyncio
 import contextlib
 import json
 import os
+import random
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,7 +37,10 @@ _STALE_CONTAINER_MIN_AGE_SECONDS: int = 180  # 3 minutes
 _CONTAINER_CONFLICT_PATTERN: re.Pattern[str] = re.compile(
     r'container "([0-9a-f]+)"\. You have to remove',
 )
-_MAX_SAMPLE_INIT_RETRIES: int = 2
+_MAX_SAMPLE_INIT_RETRIES: int = 5
+_RETRY_BACKOFF_BASE: float = 2.0  # seconds — doubled each retry
+_RETRY_BACKOFF_MAX: float = 30.0  # seconds — cap per-retry delay
+_RETRY_JITTER: float = 1.0  # seconds — uniform random [0, jitter) added
 
 logger = get_logger(__name__)
 
@@ -183,9 +187,14 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         """Start per-sample sandbox with conflict-aware retry.
 
         Wraps the parent ``sample_init`` to handle Docker container name
-        collisions caused by stale containers from previous crashed runs.
-        When a "Conflict" error is detected, the offending container is
-        force-removed and the operation is retried.
+        collisions caused by stale containers from previous crashed runs
+        or by Docker daemon contention under high concurrency.
+
+        When a "Conflict" error is detected the offending container is
+        best-effort removed and the operation is retried after an
+        exponential backoff with random jitter.  The backoff gives the
+        Docker daemon breathing room when many samples compete for
+        container creation simultaneously.
 
         Args:
             task_name: Name of the task being evaluated.
@@ -195,7 +204,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         Returns:
             Mapping of service name to :class:`SandboxEnvironment`.
         """
-        last_error: BaseException | None = None
+        last_error: RuntimeError | None = None
         for attempt in range(_MAX_SAMPLE_INIT_RETRIES + 1):
             try:
                 return await super().sample_init(task_name, config, metadata)
@@ -204,15 +213,27 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                 if "already in use" not in err_msg:
                     raise
                 last_error = exc
-                removed = await _remove_conflicting_containers(err_msg)
-                if not removed:
-                    raise
+                # Best-effort removal — the container may already be gone
+                # because inspect_ai's own project_cleanup runs before the
+                # error reaches us.  Either way we retry, because each
+                # attempt generates a fresh project name via
+                # task_project_name().
+                await _remove_conflicting_containers(err_msg, min_age_seconds=0)
+
+                # Exponential backoff with jitter to avoid thundering herd
+                # when many samples fail simultaneously.
+                delay = min(
+                    _RETRY_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, _RETRY_JITTER),
+                    _RETRY_BACKOFF_MAX,
+                )
                 logger.warning(
-                    "Removed conflicting container(s) on attempt %d/%d, retrying sample_init",
+                    "Docker container conflict on attempt %d/%d, retrying in %.1fs",
                     attempt + 1,
                     _MAX_SAMPLE_INIT_RETRIES + 1,
+                    delay,
                 )
-        # Should not reach here, but satisfy the type checker
+                await asyncio.sleep(delay)
+        # All retries exhausted
         raise last_error  # type: ignore[misc]
 
     @classmethod

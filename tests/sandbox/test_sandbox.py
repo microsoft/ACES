@@ -1627,7 +1627,7 @@ class TestRemoveConflictingContainers:
 
 
 class TestSampleInitConflictRetry:
-    """sample_init retries on container name conflicts."""
+    """sample_init retries on container name conflicts with backoff."""
 
     _CONFLICT_ERROR = RuntimeError(
         'No services started.\n'
@@ -1640,7 +1640,7 @@ class TestSampleInitConflictRetry:
 
     @pytest.mark.asyncio
     async def test_retries_on_conflict_and_succeeds(self) -> None:
-        """sample_init retries after removing conflicting container."""
+        """sample_init retries after conflict, even if container already gone."""
         call_count = 0
         sentinel = AsyncMock()
 
@@ -1660,14 +1660,19 @@ class TestSampleInitConflictRetry:
             patch(
                 "saber.sandbox._remove_conflicting_containers",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value=False,  # container already gone (inspect_ai cleaned it)
             ) as mock_remove,
+            patch("saber.sandbox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
         ):
             result = await SaberSandboxEnvironment.sample_init("test", None, {})
 
         assert result == {"default": sentinel}
-        mock_remove.assert_called_once()
+        mock_remove.assert_called_once_with(str(self._CONFLICT_ERROR), min_age_seconds=0)
         assert call_count == 2
+        # Verify backoff sleep was called
+        mock_sleep.assert_called_once()
+        delay = mock_sleep.call_args[0][0]
+        assert delay > 0
 
     @pytest.mark.asyncio
     async def test_raises_if_not_conflict_error(self) -> None:
@@ -1681,22 +1686,40 @@ class TestSampleInitConflictRetry:
                 await SaberSandboxEnvironment.sample_init("test", None, {})
 
     @pytest.mark.asyncio
-    async def test_raises_if_no_containers_removed(self) -> None:
-        """If _remove_conflicting_containers can't remove anything, error is raised."""
+    async def test_retries_even_when_removal_returns_false(self) -> None:
+        """Retry happens even when _remove_conflicting_containers returns False.
+
+        inspect_ai's project_cleanup may already remove the container before
+        our code sees the error.  Since each retry generates a fresh project
+        name, the retry should still succeed.
+        """
+        call_count = 0
+        sentinel = AsyncMock()
+
+        async def mock_sample_init(*args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise self._CONFLICT_ERROR
+            return {"default": sentinel}
+
         with (
             patch.object(
                 DockerSandboxEnvironment,
                 "sample_init",
-                side_effect=self._CONFLICT_ERROR,
+                side_effect=mock_sample_init,
             ),
             patch(
                 "saber.sandbox._remove_conflicting_containers",
                 new_callable=AsyncMock,
                 return_value=False,
             ),
+            patch("saber.sandbox.asyncio.sleep", new_callable=AsyncMock),
         ):
-            with pytest.raises(RuntimeError, match="already in use"):
-                await SaberSandboxEnvironment.sample_init("test", None, {})
+            result = await SaberSandboxEnvironment.sample_init("test", None, {})
+
+        assert result == {"default": sentinel}
+        assert call_count == 2
 
     @pytest.mark.asyncio
     async def test_no_retry_on_success(self) -> None:
@@ -1730,8 +1753,49 @@ class TestSampleInitConflictRetry:
             patch(
                 "saber.sandbox._remove_conflicting_containers",
                 new_callable=AsyncMock,
-                return_value=True,
+                return_value=False,
             ),
+            patch("saber.sandbox.asyncio.sleep", new_callable=AsyncMock),
         ):
             with pytest.raises(RuntimeError, match="already in use"):
                 await SaberSandboxEnvironment.sample_init("test", None, {})
+
+    @pytest.mark.asyncio
+    async def test_backoff_increases_with_attempts(self) -> None:
+        """Each retry waits longer than the previous one."""
+        call_count = 0
+        sentinel = AsyncMock()
+
+        async def mock_sample_init(*args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 3:
+                raise self._CONFLICT_ERROR
+            return {"default": sentinel}
+
+        sleep_delays: list[float] = []
+
+        async def capture_sleep(delay: float) -> None:
+            sleep_delays.append(delay)
+
+        with (
+            patch.object(
+                DockerSandboxEnvironment,
+                "sample_init",
+                side_effect=mock_sample_init,
+            ),
+            patch(
+                "saber.sandbox._remove_conflicting_containers",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("saber.sandbox.asyncio.sleep", side_effect=capture_sleep),
+            patch("saber.sandbox.random.uniform", return_value=0.0),  # remove jitter for determinism
+        ):
+            await SaberSandboxEnvironment.sample_init("test", None, {})
+
+        assert call_count == 4  # 3 failures + 1 success
+        assert len(sleep_delays) == 3
+        # Delays should be monotonically increasing (exponential backoff)
+        for i in range(1, len(sleep_delays)):
+            assert sleep_delays[i] > sleep_delays[i - 1]
