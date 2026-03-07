@@ -8,8 +8,6 @@ global_defaults:
   prompts:
     instruction: "instructions/excytin_demo.md"
     assistant: "assistants/inspect_assistant.md"
-    submit: "submits/inspect_submit.md"
-    continue: "continues/inspect_continue.md"
 
   max_steps: 15
 

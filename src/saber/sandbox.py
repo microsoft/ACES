@@ -25,7 +25,6 @@ from inspect_ai.util._sandbox.environment import (
     SandboxEnvironmentConfigType,
 )
 from inspect_ai.util._sandbox.registry import sandboxenv
-from typing_extensions import override
 
 from saber.environments.images import PreflightBuildError, RebuildMode, build_domain_images
 from saber.logging import display_progress, get_logger
@@ -136,11 +135,15 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
             if cls._preflight_error is not None:
                 raise cls._preflight_error
 
-            # Auto-patch sandbox-tools binary (once per process)
+            # Auto-patch sandbox-tools binary and bridge files (once per process)
             if not cls._sandbox_tools_patched:
-                from saber.environments.sandbox_tools_patch import patch_sandbox_tools_binary
+                from saber.environments.sandbox_tools_patch import (
+                    patch_bridge_source_files,
+                    patch_sandbox_tools_binary,
+                )
 
                 patch_sandbox_tools_binary()
+                patch_bridge_source_files()
                 cls._sandbox_tools_patched = True
 
             if cls._preflight_domain_root and not cls._preflight_done:
@@ -176,7 +179,6 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                     logger.warning("Failed to stop permanent services during init recovery")
             raise
 
-    @override
     @classmethod
     async def sample_init(
         cls,
@@ -207,7 +209,8 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         last_error: RuntimeError | None = None
         for attempt in range(_MAX_SAMPLE_INIT_RETRIES + 1):
             try:
-                return await super().sample_init(task_name, config, metadata)
+                result: dict[str, SandboxEnvironment] = await super().sample_init(task_name, config, metadata)
+                return result
             except RuntimeError as exc:
                 err_msg = str(exc)
                 if "already in use" not in err_msg:
@@ -453,9 +456,7 @@ async def _remove_conflicting_containers(
             # Verify age threshold
             try:
                 # Docker inspect uses ISO-8601: 2026-03-06T05:58:30.123456789Z
-                created_at = datetime.fromisoformat(
-                    created_str.replace("Z", "+00:00").split(".")[0] + "+00:00"
-                )
+                created_at = datetime.fromisoformat(created_str.replace("Z", "+00:00").split(".")[0] + "+00:00")
                 age = (now - created_at).total_seconds()
                 if age < min_age_seconds:
                     logger.info(

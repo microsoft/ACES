@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 class PromptTemplateContext(BaseModel):
-    """Typed context for prompt template rendering (instruction/assistant/submit/continue)."""
+    """Typed context for prompt template rendering (instruction/assistant)."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -122,8 +122,7 @@ class PromptRenderer:
 
         Returns:
             A dict mapping prompt name to rendered string with keys:
-            ``instruction``, ``assistant``, ``submit`` (if configured),
-            ``continue_prompt``.
+            ``instruction``, ``assistant``.
         """
         ctx = self.build_task_context(task)
         ctx_dict = to_template_vars(ctx)
@@ -131,8 +130,6 @@ class PromptRenderer:
         _PROMPT_ATTR_MAP: dict[str, str] = {
             "instruction": "instruction",
             "assistant": "assistant",
-            "submit": "submit",
-            "continue_prompt": "continue_prompt",
         }
 
         result: dict[str, str] = {}

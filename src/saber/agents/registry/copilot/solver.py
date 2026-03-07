@@ -397,9 +397,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     try:
                         remaining = sample_limits().time.remaining
                         runner_timeout = (
-                            max(int(remaining), _MIN_TIMEOUT)
-                            if remaining is not None
-                            else _DEFAULT_TIMEOUT
+                            max(int(remaining), _MIN_TIMEOUT) if remaining is not None else _DEFAULT_TIMEOUT
                         )
                     except RuntimeError:
                         # No active sample context (e.g. during testing)

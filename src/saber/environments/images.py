@@ -276,10 +276,7 @@ def find_base_dockerfile(saber_root: Path | None = None) -> Path:
     if package_path.exists():
         return package_path.resolve()
 
-    msg = (
-        f"Base Dockerfile not found at {repo_path} "
-        f"or bundled location {package_path}"
-    )
+    msg = f"Base Dockerfile not found at {repo_path} or bundled location {package_path}"
     raise FileNotFoundError(msg)
 
 

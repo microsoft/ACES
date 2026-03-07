@@ -12,8 +12,6 @@ class AgentPromptKwargs(TypedDict, total=False):
 
     instruction_prompt: str
     assistant_prompt: str
-    submit_prompt: str
-    continue_prompt: str
 
 
 class AgentCapabilities(BaseModel):

@@ -252,8 +252,6 @@ def temp_config_dir_helper():
         instructions_dir.mkdir(exist_ok=True)
         assistants_dir = prompts_dir / "assistants"
         assistants_dir.mkdir(exist_ok=True)
-        submits_dir = prompts_dir / "submits"
-        submits_dir.mkdir(exist_ok=True)
 
         # Create multi-prompt template files
         multi_prompt_templates = [

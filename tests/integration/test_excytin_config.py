@@ -124,8 +124,6 @@ class TestIncident5TaskFields:
     def test_prompt_paths_from_global(self, incident_5_task: TaskConfig) -> None:
         assert incident_5_task.prompts.instruction == "instructions/excytin_demo.md"
         assert incident_5_task.prompts.assistant == "assistants/inspect_assistant.md"
-        assert incident_5_task.prompts.submit == "submits/inspect_submit.md"
-        assert incident_5_task.prompts.continue_prompt == "continues/inspect_continue.md"
 
     def test_initial_context_has_database_connection(self, incident_5_task: TaskConfig) -> None:
         assert "database_connection" in incident_5_task.initial_context
@@ -171,9 +169,6 @@ class TestPromptRendererExcytin:
         result = renderer.render_all_prompts(incident_5_task.prompts, incident_5_task)
         assert len(result["instruction"]) > 0
         assert len(result["assistant"]) > 0
-        assert "submit" in result
-        assert len(result["submit"]) > 0
-        assert len(result["continue_prompt"]) > 0
 
 
 # ── Test 4: tasks_to_samples produces valid samples ─────────────────

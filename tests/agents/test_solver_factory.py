@@ -79,7 +79,6 @@ class TestSaberSolverBehavior:
         state.metadata = {
             "instruction_prompt": "Do X",
             "assistant_prompt": "You are Y",
-            "continue_prompt": "Keep going",
         }
         generate = MagicMock()
 
@@ -92,7 +91,6 @@ class TestSaberSolverBehavior:
         call_kwargs = mock_create_with_prompts.call_args[1]
         assert call_kwargs["instruction_prompt"] == "Do X"
         assert call_kwargs["assistant_prompt"] == "You are Y"
-        assert call_kwargs["continue_prompt"] == "Keep going"
 
     @pytest.mark.asyncio
     async def test_solve_calls_inner_solver(self) -> None:
@@ -135,7 +133,6 @@ class TestSaberSolverBehavior:
         # None values should become "" (not "None")
         assert call_kwargs["instruction_prompt"] == ""
         assert call_kwargs["assistant_prompt"] == ""
-        assert call_kwargs["continue_prompt"] == ""
 
     @pytest.mark.asyncio
     async def test_solve_missing_metadata_defaults_empty(self) -> None:
@@ -155,7 +152,6 @@ class TestSaberSolverBehavior:
         call_kwargs = mock_create_with_prompts.call_args[1]
         assert call_kwargs["instruction_prompt"] == ""
         assert call_kwargs["assistant_prompt"] == ""
-        assert call_kwargs["continue_prompt"] == ""
 
 
 class TestKwargsPassthrough:

@@ -227,15 +227,10 @@ _STRATEGY_TO_CRITERIA: types.MappingProxyType[str, type[BaseModel]] = types.Mapp
 class PromptPaths(BaseModel):
     """Paths to prompt template files."""
 
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    model_config = ConfigDict(frozen=True)
 
     instruction: str
     assistant: str = "assistants/inspect_assistant.j2"
-    submit: str | None = None
-    continue_prompt: str = Field(
-        default="continues/inspect_continue.j2",
-        alias="continue",
-    )
 
 
 # ── Tool Config ─────────────────────────────────────────────────────

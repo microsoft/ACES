@@ -816,15 +816,6 @@ class TestCopilotCreateAgentEdgeCases:
         solver = create_agent()(instruction_prompt="X", unknown_kwarg="ignored")
         assert isinstance(solver, Solver)
 
-    def test_continue_prompt_absorbed_via_extra_kwargs(self) -> None:
-        """continue_prompt kwarg is absorbed via **extra_kwargs without error."""
-        from inspect_ai.solver import Solver
-
-        from saber.agents.registry.copilot.solver import create_agent
-
-        solver = create_agent()(continue_prompt="Keep going")
-        assert isinstance(solver, Solver)
-
 
 # ---------------------------------------------------------------------------
 # Phase 8 — AgentCapabilities model

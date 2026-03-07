@@ -1,13 +1,15 @@
-"""Auto-patch inspect-sandbox-tools binary in site-packages.
+"""Auto-patch inspect-ai artefacts in site-packages.
 
 When inspect-ai is installed as a git VCS reference (not editable), the
-sandbox-tools binary in site-packages may be outdated.  This module
-compares a locally-built binary from ``external/inspect_ai`` against the
-installed copy and overwrites it when they differ.
+sandbox-tools binary and bridge source files in site-packages may be
+outdated.  This module compares locally-built / locally-edited artefacts
+from ``external/inspect_ai`` against installed copies and overwrites them
+when they differ.
 
-The entry point :func:`patch_sandbox_tools_binary` is called once from
+The entry points :func:`patch_sandbox_tools_binary` and
+:func:`patch_bridge_source_files` are called once from
 :meth:`SaberSandboxEnvironment.task_init` so every evaluation
-automatically gets the correct binary without a manual copy step.
+automatically gets the correct artefacts without a manual copy step.
 """
 
 from __future__ import annotations
@@ -22,7 +24,11 @@ from pydantic import BaseModel, ConfigDict
 
 from saber.logging import get_logger
 
-__all__ = ["SandboxToolsPatchResult", "patch_sandbox_tools_binary"]
+__all__ = [
+    "SandboxToolsPatchResult",
+    "patch_sandbox_tools_binary",
+    "patch_bridge_source_files",
+]
 
 logger = get_logger(__name__)
 
@@ -198,3 +204,117 @@ def patch_sandbox_tools_binary(
             dest_path=dest,
             message=msg,
         )
+
+
+# ---------------------------------------------------------------------------
+# Bridge source file patching
+# ---------------------------------------------------------------------------
+
+# Relative path from the ``inspect_ai`` package root to each file that
+# needs patching.  Source lives under ``external/inspect_ai/src/``.
+_BRIDGE_FILES_TO_PATCH: list[str] = [
+    "agent/_bridge/anthropic_api_impl.py",
+    "agent/_bridge/sandbox/proxy.py",
+]
+
+
+def _file_text_sha256(path: Path) -> str:
+    """SHA-256 digest of the UTF-8 text content of *path*."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def patch_bridge_source_files(
+    repo_root: Path | None = None,
+) -> list[SandboxToolsPatchResult]:
+    """Copy edited bridge source files from the repo into site-packages.
+
+    Compares SHA-256 digests and only overwrites when they differ.  This
+    ensures fixes to the host-side bridge (e.g.  stop-reason mapping,
+    proxy SSE handlers) survive ``uv sync`` / venv recreation.
+
+    Args:
+        repo_root: Repository root containing ``external/inspect_ai/``.
+            Auto-detected when ``None``.
+
+    Returns:
+        One :class:`SandboxToolsPatchResult` per file in
+        :data:`_BRIDGE_FILES_TO_PATCH`.
+    """
+    if repo_root is None:
+        repo_root = Path(__file__).resolve().parents[5]
+
+    try:
+        import inspect_ai  # noqa: WPS433
+
+        pkg_root = Path(inspect_ai.__file__).resolve().parent
+    except ImportError:
+        msg = "inspect_ai not importable; cannot patch bridge source files."
+        logger.warning(msg)
+        return [SandboxToolsPatchResult(action="no_destination", message=msg)]
+
+    results: list[SandboxToolsPatchResult] = []
+    src_root = repo_root / "external" / "inspect_ai" / "src" / "inspect_ai"
+
+    for rel_path in _BRIDGE_FILES_TO_PATCH:
+        source = src_root / rel_path
+        dest = pkg_root / rel_path
+
+        if not source.exists():
+            msg = f"Source not found: {source}"
+            logger.debug(msg)
+            results.append(SandboxToolsPatchResult(action="no_source", message=msg))
+            continue
+
+        if not dest.exists():
+            msg = f"Destination not found: {dest}"
+            logger.debug(msg)
+            results.append(
+                SandboxToolsPatchResult(
+                    action="no_destination",
+                    source_path=source,
+                    message=msg,
+                )
+            )
+            continue
+
+        if _file_text_sha256(source) == _file_text_sha256(dest):
+            results.append(
+                SandboxToolsPatchResult(
+                    action="already_current",
+                    source_path=source,
+                    dest_path=dest,
+                    message=f"{rel_path} already matches source.",
+                )
+            )
+            continue
+
+        try:
+            shutil.copy2(source, dest)
+            # Remove stale bytecode so Python picks up the new source
+            pyc_dir = dest.parent / "__pycache__"
+            if pyc_dir.is_dir():
+                for pyc in pyc_dir.glob(f"{dest.stem}.*"):
+                    pyc.unlink(missing_ok=True)
+            msg = f"Patched bridge file: {rel_path}"
+            logger.info(msg)
+            results.append(
+                SandboxToolsPatchResult(
+                    action="patched",
+                    source_path=source,
+                    dest_path=dest,
+                    message=msg,
+                )
+            )
+        except OSError as exc:
+            msg = f"Failed to patch {rel_path}: {exc}"
+            logger.error(msg)
+            results.append(
+                SandboxToolsPatchResult(
+                    action="error",
+                    source_path=source,
+                    dest_path=dest,
+                    message=msg,
+                )
+            )
+
+    return results

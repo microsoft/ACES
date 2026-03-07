@@ -53,10 +53,6 @@ def prompts_dir(tmp_path: Path) -> Path:
     assistants.mkdir()
     (assistants / "inspect_assistant.j2").write_text("You are an assistant.\n")
 
-    continues = tmp_path / "continues"
-    continues.mkdir()
-    (continues / "inspect_continue.j2").write_text("Continue working.\n")
-
     judge = tmp_path / "judge"
     judge.mkdir()
     (judge / "system.txt").write_text("Judge system prompt.\n")
@@ -87,7 +83,6 @@ def _minimal_task(
         prompts=PromptPaths(
             instruction="instructions/task_ctx.j2",
             assistant="assistants/inspect_assistant.j2",
-            **{"continue": "continues/inspect_continue.j2"},
         ),
         initial_context={"incident": "breach"},
         tools={"run_command": ToolConfig(), "read_file": ToolConfig(timeout=60)},
@@ -316,14 +311,13 @@ class TestTaskContext:
 class TestRenderAllPrompts:
     """Tests for rendering all four prompt types for a task."""
 
-    def test_returns_dict_with_three_keys(self, renderer: PromptRenderer, prompts_dir: Path) -> None:
+    def test_returns_dict_with_expected_keys(self, renderer: PromptRenderer, prompts_dir: Path) -> None:
         task = _minimal_task(prompts_dir)
         result = renderer.render_all_prompts(task.prompts, task)
         assert isinstance(result, dict)
         assert set(result.keys()) == {
             "instruction",
             "assistant",
-            "continue_prompt",
         }
         for value in result.values():
             assert isinstance(value, str)
@@ -344,7 +338,6 @@ class TestRenderAllPrompts:
             prompts=PromptPaths(
                 instruction="instructions/ctx_demo.j2",
                 assistant="assistants/inspect_assistant.j2",
-                **{"continue": "continues/inspect_continue.j2"},
             ),
         )
         renderer = PromptRenderer(prompts_dir)
@@ -352,7 +345,6 @@ class TestRenderAllPrompts:
         assert result["instruction"] == "Task: ctx-task — Context Test\n"
         assert result["assistant"] == "You are an assistant.\n"
         assert "submit" not in result
-        assert result["continue_prompt"] == "Continue working.\n"
 
     def test_context_includes_all_expected_keys(self, renderer: PromptRenderer, prompts_dir: Path) -> None:
         """Ensure render_all_prompts merges full task context."""
@@ -364,7 +356,6 @@ class TestRenderAllPrompts:
             prompts=PromptPaths(
                 instruction="instructions/keys.j2",
                 assistant="assistants/inspect_assistant.j2",
-                **{"continue": "continues/inspect_continue.j2"},
             ),
             tools={"a": ToolConfig(), "b": ToolConfig()},
             max_steps=10,
@@ -388,7 +379,6 @@ class TestPromptContextNew:
             prompts=PromptPaths(
                 instruction="instructions/task_ctx.j2",
                 assistant="assistants/inspect_assistant.j2",
-                **{"continue": "continues/inspect_continue.j2"},
             ),
             scorers=(
                 ScorerConfig(

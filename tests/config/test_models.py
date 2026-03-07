@@ -269,18 +269,6 @@ class TestPromptPaths:
         pp = PromptPaths(instruction="instructions/task.j2")
         assert pp.instruction == "instructions/task.j2"
         assert pp.assistant == "assistants/inspect_assistant.j2"
-        assert pp.submit is None
-        assert pp.continue_prompt == "continues/inspect_continue.j2"
-
-    def test_alias_continue(self) -> None:
-        """The 'continue' alias maps to continue_prompt."""
-        pp = PromptPaths(**{"instruction": "x", "continue": "custom_continue.j2"})
-        assert pp.continue_prompt == "custom_continue.j2"
-
-    def test_prompt_paths_populate_by_field_name(self) -> None:
-        """continue_prompt field name should work thanks to populate_by_name."""
-        pp = PromptPaths(instruction="i.j2", continue_prompt="custom.j2")
-        assert pp.continue_prompt == "custom.j2"
 
     def test_frozen(self) -> None:
         pp = PromptPaths(instruction="x")

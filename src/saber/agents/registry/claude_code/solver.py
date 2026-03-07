@@ -402,6 +402,23 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                                 stderr[:2000],
                             )
 
+                        # If the bridge has accumulated conversation state
+                        # (at least one successful model call), salvage it
+                        # instead of crashing.  This handles transient
+                        # failures like ECONNREFUSED on a follow-up call
+                        # after the main conversation already completed.
+                        if bridge.state.messages:
+                            detail = stderr[:300] if stderr else stdout[:300] if stdout else "(no output)"
+                            logger.warning(
+                                "Claude Code CLI exited with code %d but bridge "
+                                "has %d messages — returning salvaged state. "
+                                "Detail: %s",
+                                result.returncode,
+                                len(bridge.state.messages),
+                                detail,
+                            )
+                            return bridge.state
+
                         # Truncated detail for the exception message
                         detail = stderr[:500] if stderr else stdout[:500] if stdout else "(no output)"
                         msg = f"Claude Code CLI exited with code {result.returncode}: {detail}"

@@ -64,15 +64,11 @@ def create_saber_solver(
             metadata = state.metadata or {}
             instruction = metadata.get("instruction_prompt") or ""
             assistant = metadata.get("assistant_prompt") or ""
-            submit_prompt = metadata.get("submit_prompt") or ""
-            continue_prompt = metadata.get("continue_prompt") or ""
 
             # Build agent kwargs
             agent_kwargs: AgentPromptKwargs = {
                 "instruction_prompt": instruction,
                 "assistant_prompt": assistant,
-                "submit_prompt": submit_prompt,
-                "continue_prompt": continue_prompt,
             }
 
             # Per-sample max_steps from metadata
@@ -105,7 +101,6 @@ def create_saber_solver(
             if resolved is not None and caps.supports_tools:
                 agent_solver = create_with_prompts(
                     tools=list(resolved.tools),
-                    submit=resolved.submit_enabled,
                     **agent_kwargs,
                 )
             else:

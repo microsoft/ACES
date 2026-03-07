@@ -38,8 +38,6 @@ def _minimal_prompts() -> PromptPaths:
     return PromptPaths(
         instruction="instructions/demo.md",
         assistant="assistants/inspect_assistant.md",
-        submit="submits/inspect_submit.md",
-        continue_prompt="continues/inspect_continue.md",
     )
 
 
@@ -86,7 +84,7 @@ def _mock_renderer(rendered_instruction: str = "mocked instruction") -> PromptRe
 
     def _mock_render_all(prompts: object, task: object) -> dict[str, str]:
         result: dict[str, str] = {}
-        for key in ("instruction", "assistant", "submit", "continue_prompt"):
+        for key in ("instruction", "assistant"):
             path = getattr(prompts, key, None)
             if path:
                 result[key] = rendered_instruction
@@ -111,7 +109,7 @@ def _mock_renderer_per_path() -> PromptRenderer:
 
     def _mock_render_all(prompts: object, task: object) -> dict[str, str]:
         result: dict[str, str] = {}
-        for key in ("instruction", "assistant", "submit", "continue_prompt"):
+        for key in ("instruction", "assistant"):
             path = getattr(prompts, key, None)
             if path:
                 result[key] = f"rendered:{path}"
@@ -385,8 +383,6 @@ class TestTasksToSamples:
             # Rendered prompt strings for solver_factory
             "instruction_prompt",
             "assistant_prompt",
-            "submit_prompt",
-            "continue_prompt",
             # Scorer configuration
             "scorers",
             "scoring_aggregation",
@@ -602,15 +598,13 @@ class TestEdgeCases:
 class TestRenderAllPrompts:
     """Tests for PromptRenderer.render_all_prompts via mock."""
 
-    def test_renders_all_four_prompts(self) -> None:
+    def test_renders_all_prompts(self) -> None:
         task = _minimal_task()
         renderer = _mock_renderer_per_path()
         result = renderer.render_all_prompts(task.prompts, task)
 
         assert "instruction" in result
         assert "assistant" in result
-        assert "submit" in result
-        assert "continue_prompt" in result
 
     def test_rendered_values_come_from_renderer(self) -> None:
         task = _minimal_task()
@@ -619,15 +613,11 @@ class TestRenderAllPrompts:
 
         assert result["instruction"] == "rendered:instructions/demo.md"
         assert result["assistant"] == "rendered:assistants/inspect_assistant.md"
-        assert result["submit"] == "rendered:submits/inspect_submit.md"
-        assert result["continue_prompt"] == "rendered:continues/inspect_continue.md"
 
     def test_custom_prompt_paths(self) -> None:
         prompts = PromptPaths(
             instruction="custom/inst.md",
             assistant="custom/asst.md",
-            submit="custom/sub.md",
-            **{"continue": "custom/cont.md"},
         )
         task = TaskConfig(
             task_id="custom_prompts",
@@ -640,8 +630,6 @@ class TestRenderAllPrompts:
 
         assert result["instruction"] == "rendered:custom/inst.md"
         assert result["assistant"] == "rendered:custom/asst.md"
-        assert result["submit"] == "rendered:custom/sub.md"
-        assert result["continue_prompt"] == "rendered:custom/cont.md"
 
 
 class TestBuildMetadataWithRenderedPrompts:
@@ -652,15 +640,11 @@ class TestBuildMetadataWithRenderedPrompts:
         rendered = {
             "instruction": "You are a security analyst...",
             "assistant": "Assistant prompt text",
-            "submit": "Submit your findings",
-            "continue_prompt": "Continue investigating",
         }
         metadata = _build_metadata(task, rendered)
 
         assert metadata["instruction_prompt"] == "You are a security analyst..."
         assert metadata["assistant_prompt"] == "Assistant prompt text"
-        assert metadata["submit_prompt"] == "Submit your findings"
-        assert metadata["continue_prompt"] == "Continue investigating"
 
     def test_metadata_empty_rendered_prompts_default_to_empty_string(self) -> None:
         task = _minimal_task()
@@ -669,8 +653,6 @@ class TestBuildMetadataWithRenderedPrompts:
 
         assert metadata["instruction_prompt"] == ""
         assert metadata["assistant_prompt"] == ""
-        assert metadata["submit_prompt"] == ""
-        assert metadata["continue_prompt"] == ""
 
     def test_metadata_still_has_prompt_paths(self) -> None:
         task = _minimal_task()
@@ -694,7 +676,7 @@ class TestBuildMetadataWithRenderedPrompts:
 class TestRenderedPromptsEndToEnd:
     """Integration tests: rendered prompts flow through tasks_to_samples."""
 
-    def test_all_four_rendered_prompts_in_sample_metadata(self, tmp_path: Path) -> None:
+    def test_all_rendered_prompts_in_sample_metadata(self, tmp_path: Path) -> None:
         task = _minimal_task()
         renderer = _mock_renderer_per_path()
         sample = tasks_to_samples([task], tmp_path, renderer)[0]
@@ -702,8 +684,6 @@ class TestRenderedPromptsEndToEnd:
         assert sample.metadata is not None
         assert sample.metadata["instruction_prompt"] == "rendered:instructions/demo.md"
         assert sample.metadata["assistant_prompt"] == "rendered:assistants/inspect_assistant.md"
-        assert sample.metadata["submit_prompt"] == "rendered:submits/inspect_submit.md"
-        assert sample.metadata["continue_prompt"] == "rendered:continues/inspect_continue.md"
 
     def test_solver_factory_keys_present(self, tmp_path: Path) -> None:
         """Verify the metadata keys match what solver_factory.py reads."""
@@ -716,8 +696,6 @@ class TestRenderedPromptsEndToEnd:
         for key in (
             "instruction_prompt",
             "assistant_prompt",
-            "submit_prompt",
-            "continue_prompt",
         ):
             assert key in sample.metadata
             assert isinstance(sample.metadata[key], str)
@@ -726,13 +704,11 @@ class TestRenderedPromptsEndToEnd:
 class TestPromptFieldMap:
     """Tests for _PROMPT_FIELD_MAP consistency."""
 
-    def test_map_has_all_four_prompt_fields(self) -> None:
-        """The mapping covers all four prompt types."""
+    def test_map_has_all_prompt_fields(self) -> None:
+        """The mapping covers all prompt types."""
         assert set(_PROMPT_FIELD_MAP.keys()) == {
             "instruction",
             "assistant",
-            "submit",
-            "continue_prompt",
         }
 
     def test_map_values_end_with_prompt(self) -> None:

@@ -65,16 +65,13 @@ class ToolRegistry:
         return factory()
 
     def resolve(self, tool_configs: dict[str, ToolConfig]) -> ResolvedTools:
-        """Resolve tool name→config mapping to a ResolvedTools bundle.
-
-        The ``submit`` key is reserved — it is skipped (not instantiated)
-        because submit is handled by the react agent's AgentSubmit.
+        """Resolve tool name->config mapping to a ResolvedTools bundle.
 
         Args:
             tool_configs: Mapping of tool names to their ToolConfig.
 
         Returns:
-            ResolvedTools containing tool instances, submit flag, and security configs.
+            ResolvedTools containing tool instances and security configs.
 
         Raises:
             ValueError: If a tool name is not found in builtins or custom.
@@ -83,10 +80,6 @@ class ToolRegistry:
         security_configs: dict[str, ToolSecurityConfig] = {}
 
         for name, config in tool_configs.items():
-            if name == "submit":
-                # submit is handled by react agent, not tool registry
-                continue
-
             if name in self._BUILTINS:
                 tools.append(self._create_tool(self._BUILTINS[name], config))
             elif name in self._custom:
@@ -101,7 +94,6 @@ class ToolRegistry:
 
         return ResolvedTools(
             tools=tuple(tools),
-            submit_enabled="submit" in tool_configs,
             security_configs=MappingProxyType(security_configs),
         )
 
@@ -111,12 +103,11 @@ class ToolRegistry:
 
 
 class ResolvedTools(BaseModel):
-    """Result of ToolRegistry.resolve() — tools + submit flag + security configs."""
+    """Result of ToolRegistry.resolve() — tools + security configs."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     tools: tuple[Tool, ...]
-    submit_enabled: bool
     security_configs: Mapping[str, ToolSecurityConfig] = Field(default_factory=lambda: MappingProxyType({}))
 
     @model_validator(mode="after")

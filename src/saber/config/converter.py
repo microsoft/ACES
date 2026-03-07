@@ -26,8 +26,6 @@ from saber.prompts.renderer import PromptRenderer
 _PROMPT_FIELD_MAP: dict[str, str] = {
     "instruction": "instruction_prompt",
     "assistant": "assistant_prompt",
-    "submit": "submit_prompt",
-    "continue_prompt": "continue_prompt",
 }
 # Mapping from render key (used in ``PromptRenderer.render_all_prompts``) to metadata key.
 

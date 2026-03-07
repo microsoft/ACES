@@ -12,7 +12,7 @@ import re
 import shlex
 from pathlib import Path, PurePosixPath
 
-from inspect_ai.approval import Approval, ApprovalPolicy
+from inspect_ai.approval import Approval, ApprovalPolicy, Approver, approver
 from inspect_ai.model import ChatMessage
 from inspect_ai.tool import ToolCall, ToolCallView
 from pydantic import BaseModel, ConfigDict, Field
@@ -596,51 +596,55 @@ def build_tool_approval(
         effective = _merge_with_defaults(config) if config.extend_defaults else config
         tool_validators[tool_name] = CommandSecurityValidator(effective)
 
-    async def approve(
-        message: str,
-        call: ToolCall,
-        view: ToolCallView,
-        history: list[ChatMessage],
-    ) -> Approval:
-        # Auto-approve tools with no executable content
-        if call.function in _AUTO_APPROVE_TOOLS:
+    @approver(name="saber_security")  # type: ignore[misc]
+    def _make_approver() -> Approver:
+        async def approve(
+            message: str,
+            call: ToolCall,
+            view: ToolCallView,
+            history: list[ChatMessage],
+        ) -> Approval:
+            # Auto-approve tools with no executable content
+            if call.function in _AUTO_APPROVE_TOOLS:
+                return Approval(decision="approve")
+
+            # No config for this tool → security OFF (approve)
+            if call.function not in tool_validators:
+                return Approval(decision="approve")
+
+            # Extract content to validate from the tool call
+            inspector = registry.get(call.function)
+            contents = inspector.extract_content(call.arguments)
+
+            # If no inspectable content found, approve
+            if not contents:
+                return Approval(decision="approve")
+
+            validator = tool_validators[call.function]
+
+            # Validate each content string
+            for content in contents:
+                result = validator.validate(content)
+                if not result.is_safe:
+                    explanation_parts: list[str] = [f"Blocked: {result.reason}"]
+                    if result.blocked_command:
+                        explanation_parts.append(f"Command: {result.blocked_command}")
+                    if result.matched_pattern:
+                        explanation_parts.append(f"Pattern: {result.matched_pattern}")
+                    logger.warning(
+                        "Rejected tool call '%s' (id=%s): %s",
+                        call.function,
+                        call.id,
+                        " | ".join(explanation_parts),
+                    )
+                    return Approval(
+                        decision="reject",
+                        explanation=" | ".join(explanation_parts),
+                    )
+
+            logger.debug("Approved tool call '%s' (id=%s)", call.function, call.id)
             return Approval(decision="approve")
 
-        # No config for this tool → security OFF (approve)
-        if call.function not in tool_validators:
-            return Approval(decision="approve")
+        return approve
 
-        # Extract content to validate from the tool call
-        inspector = registry.get(call.function)
-        contents = inspector.extract_content(call.arguments)
-
-        # If no inspectable content found, approve
-        if not contents:
-            return Approval(decision="approve")
-
-        validator = tool_validators[call.function]
-
-        # Validate each content string
-        for content in contents:
-            result = validator.validate(content)
-            if not result.is_safe:
-                explanation_parts: list[str] = [f"Blocked: {result.reason}"]
-                if result.blocked_command:
-                    explanation_parts.append(f"Command: {result.blocked_command}")
-                if result.matched_pattern:
-                    explanation_parts.append(f"Pattern: {result.matched_pattern}")
-                logger.warning(
-                    "Rejected tool call '%s' (id=%s): %s",
-                    call.function,
-                    call.id,
-                    " | ".join(explanation_parts),
-                )
-                return Approval(
-                    decision="reject",
-                    explanation=" | ".join(explanation_parts),
-                )
-
-        logger.debug("Approved tool call '%s' (id=%s)", call.function, call.id)
-        return Approval(decision="approve")
-
-    return [ApprovalPolicy(approver=approve, tools="*")]
+    return [ApprovalPolicy(approver=_make_approver(), tools="*")]
