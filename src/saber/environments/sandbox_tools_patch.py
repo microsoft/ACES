@@ -34,21 +34,22 @@ logger = get_logger(__name__)
 
 
 def _find_repo_root() -> Path | None:
-    """Locate the oss_saber repository root by searching for marker files.
+    """Locate the repository root by searching for marker files.
 
-    Walks up from the current working directory looking for a directory
-    that contains both ``external/inspect_ai`` and ``pyproject.toml``.
-    Falls back to walking up from this file's location (works when the
-    saber package is installed editable from the repo).
+    Works for both installation modes:
+    - **Editable** (``external/saber``): walks up from this file's location.
+    - **Non-editable** (ADO/pip): walks up from ``cwd``.
+
+    Looks for a directory containing ``pyproject.toml`` and a ``domains/``
+    subdirectory — markers present in both oss_saber and the full SABER repo.
 
     Returns:
         The repo root path, or ``None`` if not found.
     """
-    # Try cwd first (most reliable for non-editable installs)
     for start in (Path.cwd(), Path(__file__).resolve().parent):
         current = start
         for _ in range(10):  # Max 10 levels up
-            if (current / "external" / "inspect_ai").is_dir() and (current / "pyproject.toml").is_file():
+            if (current / "pyproject.toml").is_file() and (current / "domains").is_dir():
                 return current
             parent = current.parent
             if parent == current:
@@ -178,11 +179,8 @@ def patch_sandbox_tools_binary(
     if repo_root is None:
         repo_root = _find_repo_root()
         if repo_root is None:
-            msg = (
-                "Cannot auto-detect repo root. Pass repo_root explicitly "
-                "or run from within the oss_saber repository directory."
-            )
-            logger.warning(msg)
+            msg = "Cannot auto-detect repo root. Pass repo_root explicitly or run from within the repository directory."
+            logger.debug(msg)
             return SandboxToolsPatchResult(action="no_source", message=msg)
 
     source, binary_name = _find_source_binary(repo_root)
@@ -195,7 +193,7 @@ def patch_sandbox_tools_binary(
             "tool/_sandbox_tools_utils && "
             "uv run python build_within_container.py --arch amd64"
         )
-        logger.warning(msg)
+        logger.debug(msg)
         return SandboxToolsPatchResult(action="no_source", message=msg)
 
     dest = _find_installed_binary(binary_name)
@@ -276,11 +274,8 @@ def patch_bridge_source_files(
     if repo_root is None:
         repo_root = _find_repo_root()
         if repo_root is None:
-            msg = (
-                "Cannot auto-detect repo root. Pass repo_root explicitly "
-                "or run from within the oss_saber repository directory."
-            )
-            logger.warning(msg)
+            msg = "Cannot auto-detect repo root. Pass repo_root explicitly or run from within the repository directory."
+            logger.debug(msg)
             return [SandboxToolsPatchResult(action="no_source", message=msg)]
 
     try:
