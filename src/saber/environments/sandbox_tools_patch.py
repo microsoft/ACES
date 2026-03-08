@@ -247,6 +247,7 @@ def patch_sandbox_tools_binary(
 _BRIDGE_FILES_TO_PATCH: list[str] = [
     "agent/_bridge/anthropic_api_impl.py",
     "agent/_bridge/sandbox/proxy.py",
+    "model/_providers/anthropic.py",
 ]
 
 
