@@ -131,19 +131,17 @@ class TestIncident5TaskFields:
         assert isinstance(db_conn, dict)
         assert db_conn["hostname"] == "incident-5-db"  # type: ignore[index]
 
-    def test_tools_have_security_configs(self, incident_5_task: TaskConfig) -> None:
-        """Verify global.yaml tools/security round-trips through ConfigLoader."""
+    def test_tools_have_timeout_configs(self, incident_5_task: TaskConfig) -> None:
+        """Verify global.yaml tools round-trip through ConfigLoader."""
         assert "bash" in incident_5_task.tools
         bash_cfg = incident_5_task.tools["bash"]
-        assert bash_cfg.security is not None
-        assert bash_cfg.security.allow_semicolons is True
-        assert bash_cfg.security.extend_defaults is True
+        assert bash_cfg.timeout == 180
+        assert bash_cfg.security is None
 
         assert "python" in incident_5_task.tools
         python_cfg = incident_5_task.tools["python"]
-        assert python_cfg.security is not None
-        assert python_cfg.security.extend_defaults is True
-        assert python_cfg.security.allow_semicolons is False  # default
+        assert python_cfg.timeout == 180
+        assert python_cfg.security is None
 
 
 # ── Test 3: PromptRenderer renders excytin prompts ──────────────────

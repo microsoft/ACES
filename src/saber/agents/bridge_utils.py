@@ -6,6 +6,7 @@ Common helpers used by both ``claude_code`` and ``copilot`` solvers.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -13,11 +14,13 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from inspect_ai.model import ChatMessage
+    from inspect_ai.model._model import GenerateFilter
     from inspect_ai.tool import Tool
     from inspect_ai.tool._mcp._config import MCPServerConfigHTTP
     from inspect_ai.util import SandboxEnvironment
 
     from saber.agents.registry.copilot.solver import IdleDecision
+    from saber.agents.bridge_tracking_models import BridgeSessionSummary
 
 from saber.logging import get_logger
 
@@ -529,6 +532,120 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
             check_tool_call_limit()
 
     return _filter, check_after_exec
+
+
+# ---------------------------------------------------------------------------
+# Model aliases
+# ---------------------------------------------------------------------------
+
+
+def resolve_model_aliases(
+    raw_aliases: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Validate and normalize model alias mappings.
+
+    Used with ``sandbox_agent_bridge(model_aliases=...)`` to route
+    subagent model requests to specific providers.
+
+    Args:
+        raw_aliases: Optional mapping from requested name → model spec string.
+
+    Returns:
+        Validated aliases dict, or None if empty/not provided.
+
+    Raises:
+        ValueError: If any key or value is empty.
+    """
+    if not raw_aliases:
+        return None
+    for key, value in raw_aliases.items():
+        if not key or not value:
+            msg = f"Model alias mapping has empty key or value: {key!r} \u2192 {value!r}"
+            raise ValueError(msg)
+    return dict(raw_aliases)
+
+
+# ---------------------------------------------------------------------------
+# Filter composition
+# ---------------------------------------------------------------------------
+
+
+def compose_filters(
+    *filters: GenerateFilter | None,
+) -> GenerateFilter | None:
+    """Chain multiple GenerateFilters into one.
+
+    Filters run in order. The first filter that returns a non-None result
+    (ModelOutput or GenerateInput) short-circuits — later filters are skipped.
+
+    Observation-only filters (returning None) should be listed first.
+
+    Args:
+        *filters: GenerateFilter callables (None entries are skipped).
+
+    Returns:
+        A single composed GenerateFilter, or None if no non-None filters.
+    """
+    active = [f for f in filters if f is not None]
+    if not active:
+        return None
+    if len(active) == 1:
+        return active[0]
+
+    async def _composed(
+        model: object,
+        messages: list[ChatMessage],
+        tools: list[object],
+        tool_choice: object,
+        config: object,
+    ) -> object | None:
+        for filt in active:
+            result: object | None = await filt(model, messages, tools, tool_choice, config)
+            if result is not None:
+                return result
+        return None
+
+    return _composed
+
+
+# ---------------------------------------------------------------------------
+# Bridge session summary recording
+# ---------------------------------------------------------------------------
+
+
+def record_bridge_summary(
+    get_tracking_summary: Callable[[], BridgeSessionSummary],
+    log: logging.Logger,
+) -> BridgeSessionSummary:
+    """Record a bridge session summary as an InfoEvent and log it.
+
+    Call this after the ``sandbox_agent_bridge`` context manager exits.
+
+    Args:
+        get_tracking_summary: Callable returned by ``create_tracking_filter()``.
+        log: Logger instance for the calling module.
+
+    Returns:
+        The ``BridgeSessionSummary`` snapshot.
+    """
+    summary = get_tracking_summary()
+    try:
+        from inspect_ai.log._transcript import transcript
+
+        transcript().info(
+            summary.model_dump(mode="json"),
+            source="saber.bridge_session_summary",
+        )
+    except Exception:
+        log.debug("Could not record bridge session summary InfoEvent")
+    log.info(
+        "Bridge session complete: %d generations (%d main, %d subagent), %d tool calls",
+        summary.total_generations,
+        summary.main_generations,
+        summary.subagent_generations,
+        summary.total_tool_calls,
+    )
+    return summary
 
 
 async def upload_skills_to_sandbox(

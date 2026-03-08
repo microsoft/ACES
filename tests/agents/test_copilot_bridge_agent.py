@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -1552,3 +1553,54 @@ class TestParseRunnerMetrics:
         result = parse_runner_metrics(stderr)
         assert result is not None
         assert result["exit_reason"] == "first"
+
+
+# ---------------------------------------------------------------------------
+# Bridge Tracking Integration
+# ---------------------------------------------------------------------------
+
+
+class TestCopilotTrackingIntegration:
+    """Verify tracking filter is wired into Copilot solver."""
+
+    def test_imports_tracking_filter(self) -> None:
+        """Copilot solver imports create_tracking_filter."""
+        from saber.agents.registry.copilot import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "create_tracking_filter" in source
+
+    def test_imports_compose_filters(self) -> None:
+        """Copilot solver imports compose_filters."""
+        from saber.agents.registry.copilot import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "compose_filters" in source
+
+
+class TestCopilotModelAliases:
+    """Verify model_aliases support is wired into Copilot solver."""
+
+    def test_imports_resolve_model_aliases(self) -> None:
+        """Copilot solver imports resolve_model_aliases."""
+        from saber.agents.registry.copilot import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "resolve_model_aliases" in source
+
+class TestCopilotCLIParserIntegration:
+    """Verify CLI output parser is wired into Copilot solver."""
+
+    def test_imports_cli_parser(self) -> None:
+        """Copilot solver imports parse_copilot_stderr."""
+        from saber.agents.registry.copilot import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "parse_copilot_cli" in source or "parse_copilot_stderr" in source
+
+    def test_uses_record_bridge_summary(self) -> None:
+        """Copilot solver uses the shared record_bridge_summary helper."""
+        from saber.agents.registry.copilot import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "record_bridge_summary" in source

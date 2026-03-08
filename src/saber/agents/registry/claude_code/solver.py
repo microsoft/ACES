@@ -13,16 +13,21 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from saber.agents.bridge_tracking import create_tracking_filter
 from saber.agents.bridge_utils import (
     build_bridged_tools_for_claude_code,
     build_system_prompt,
     build_user_prompt,
+    compose_filters,
     create_tool_call_limit_filter,
     parse_bridge_stderr,
+    record_bridge_summary,
     resolve_mcp_servers,
+    resolve_model_aliases,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
+from saber.agents.cli_output_parser import parse_claude_code_stream_json
 from saber.logging import get_logger
 
 if TYPE_CHECKING:
@@ -292,6 +297,11 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                 store().set(_STORE_PORT_KEY, port)
 
                 bridge_filter, check_tool_limit = create_tool_call_limit_filter()
+                tracking_filter, get_tracking_summary = create_tracking_filter()
+                composed = compose_filters(tracking_filter, bridge_filter)
+
+                _raw_aliases = outer_kwargs.get("model_aliases")
+                model_aliases = resolve_model_aliases(_raw_aliases if isinstance(_raw_aliases, dict) else None)
 
                 async with sandbox_agent_bridge(
                     state,
@@ -299,7 +309,8 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     port=port,
                     sandbox=sandbox_name,
                     bridged_tools=bridged,
-                    filter=bridge_filter,
+                    filter=composed,
+                    model_aliases=model_aliases,
                 ) as bridge:
                     sbox = sandbox_env(sandbox_name)
                     claude_binary = await _resolve_claude_binary(sbox, version)
@@ -434,13 +445,29 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                                 warnings,
                             )
 
-                    # Raise LimitExceededError in the main flow if the
-                    # tool-call limit was hit so that apply_limits handles
-                    # it cleanly (rather than via cancel-scope propagation
-                    # which can stall waiting for the subprocess).
-                    check_tool_limit()
+                    # Parse CLI output for enriched observability
+                    parsed_output = parse_claude_code_stream_json(result.stdout or "")
+                    if parsed_output.stream_events > 0:
+                        try:
+                            from inspect_ai.log._transcript import transcript
 
-                    return bridge.state
+                            transcript().info(
+                                parsed_output.model_dump(mode="json"),
+                                source="saber.cli_output",
+                            )
+                        except Exception:
+                            logger.debug("Could not record CLI output InfoEvent")
+
+                # Record bridge session summary
+                record_bridge_summary(get_tracking_summary, logger)
+
+                # Raise LimitExceededError in the main flow if the
+                # tool-call limit was hit so that apply_limits handles
+                # it cleanly (rather than via cancel-scope propagation
+                # which can stall waiting for the subprocess).
+                check_tool_limit()
+
+                return bridge.state
 
             return execute
 

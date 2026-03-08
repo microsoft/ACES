@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from pathlib import Path
 
 import pytest
 
@@ -669,3 +670,49 @@ class TestBuildBridgedTools:
 
         assert build_bridged_tools(None) is None
         assert build_bridged_tools([]) is None
+
+
+class TestClaudeCodeTrackingIntegration:
+    """Verify tracking filter is wired into Claude Code solver."""
+
+    def test_imports_tracking_filter(self) -> None:
+        """Claude Code solver imports create_tracking_filter."""
+        from saber.agents.registry.claude_code import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "create_tracking_filter" in source
+
+    def test_imports_compose_filters(self) -> None:
+        """Claude Code solver imports compose_filters."""
+        from saber.agents.registry.claude_code import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "compose_filters" in source
+
+
+class TestClaudeCodeModelAliases:
+    """Verify model_aliases support is wired into Claude Code solver."""
+
+    def test_imports_resolve_model_aliases(self) -> None:
+        """Claude Code solver imports resolve_model_aliases."""
+        from saber.agents.registry.claude_code import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "resolve_model_aliases" in source
+
+class TestClaudeCodeCLIParserIntegration:
+    """Verify CLI output parser is wired into Claude Code solver."""
+
+    def test_imports_cli_parser(self) -> None:
+        """Claude Code solver imports parse_claude_code_stream_json."""
+        from saber.agents.registry.claude_code import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "parse_claude_code_stream_json" in source
+
+    def test_uses_record_bridge_summary(self) -> None:
+        """Claude Code solver uses the shared record_bridge_summary helper."""
+        from saber.agents.registry.claude_code import solver
+
+        source = Path(solver.__file__).read_text()
+        assert "record_bridge_summary" in source

@@ -16,9 +16,7 @@ from saber.task import _import_domain_module
 logger = get_logger(__name__)
 
 
-def _discover_setup_hooks(
-    domain_root: Path, **kwargs: object
-) -> list[SetupHook]:
+def _discover_setup_hooks(domain_root: Path, **kwargs: object) -> list[SetupHook]:
     """Auto-discover domain setup hooks.
 
     Looks for ``<domain_root>/setup.py`` with a
@@ -49,13 +47,10 @@ def _discover_setup_hooks(
         hooks: list[SetupHook] = factory(domain_root, **kwargs)
     except TypeError:
         logger.warning(
-            "get_hooks() in %s does not accept **kwargs; "
-            "calling without extra arguments",
+            "get_hooks() in %s does not accept **kwargs; calling without extra arguments",
             setup_file,
         )
         hooks = factory(domain_root)
 
-    logger.debug(
-        "Auto-discovered %d setup hooks from %s", len(hooks), setup_file
-    )
+    logger.debug("Auto-discovered %d setup hooks from %s", len(hooks), setup_file)
     return hooks

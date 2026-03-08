@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from saber.environments.images import RebuildMode, RebuildScope, parse_rebuild_param
 
@@ -46,7 +47,7 @@ class TestRebuildModeConstructors:
 
     def test_frozen(self) -> None:
         mode = RebuildMode.none()
-        with pytest.raises(TypeError):
+        with pytest.raises(ValidationError):
             mode.scope = RebuildScope.ALL  # type: ignore[misc]
 
 
