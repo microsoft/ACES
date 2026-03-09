@@ -225,3 +225,99 @@ class TestDiscoverSetupHooks:
             assert result == []
         finally:
             _clean_fake_modules("domain_old_style")
+
+
+class TestCreateTaskSetupHookIntegration:
+    """Tests that create_task() calls the setup hook discovery + execution."""
+
+    def test_create_task_calls_setup_hooks(
+        self, tmp_path: Path
+    ) -> None:
+        """create_task() discovers and runs setup hooks before config loading."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.hooks import SetupHooksResult
+
+        mock_hooks = [MagicMock()]
+        mock_result = SetupHooksResult(results=())
+
+        with (
+            patch(
+                "saber.setup_discovery._discover_setup_hooks",
+                return_value=mock_hooks,
+            ) as mock_discover,
+            patch(
+                "saber.hooks.run_setup_hooks", return_value=mock_result
+            ) as mock_run,
+            patch("saber.task._find_config_root") as mock_find_config,
+        ):
+            # _find_config_root is the next call after hooks; stop there
+            mock_find_config.side_effect = SystemExit("stop early")
+
+            with pytest.raises(SystemExit, match="stop early"):
+                from saber.task import create_task
+
+                create_task(domain_root=tmp_path)
+
+            mock_discover.assert_called_once()
+            assert mock_discover.call_args[0][0] == tmp_path
+            mock_run.assert_called_once_with(mock_hooks, tmp_path)
+
+    def test_create_task_raises_on_hook_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """create_task() raises RuntimeError when a setup hook fails."""
+        from unittest.mock import patch
+
+        from saber.hooks import (
+            SetupHookResult,
+            SetupHooksResult,
+            SetupHookStatus,
+        )
+
+        failed_result = SetupHooksResult(
+            results=(
+                SetupHookResult(
+                    name="bad_download",
+                    status=SetupHookStatus.FAILED,
+                    message="Connection refused",
+                ),
+            )
+        )
+
+        with (
+            patch(
+                "saber.setup_discovery._discover_setup_hooks",
+                return_value=[object()],  # non-empty list triggers run
+            ),
+            patch(
+                "saber.hooks.run_setup_hooks", return_value=failed_result
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="bad_download.*Connection refused"):
+                from saber.task import create_task
+
+                create_task(domain_root=tmp_path)
+
+    def test_create_task_skips_run_when_no_hooks(
+        self, tmp_path: Path
+    ) -> None:
+        """create_task() skips run_setup_hooks when discovery returns []."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "saber.setup_discovery._discover_setup_hooks",
+                return_value=[],
+            ),
+            patch("saber.hooks.run_setup_hooks") as mock_run,
+            patch("saber.task._find_config_root") as mock_find_config,
+        ):
+            mock_find_config.side_effect = SystemExit("stop early")
+
+            with pytest.raises(SystemExit, match="stop early"):
+                from saber.task import create_task
+
+                create_task(domain_root=tmp_path)
+
+            mock_run.assert_not_called()

@@ -1,8 +1,8 @@
 """Setup hook auto-discovery for SABER domains.
 
-TODO: Merge this function into ``saber.task`` alongside ``_discover_tools()``
-and ``_discover_strategies()`` when landing Phase 2 (create_task integration).
-See ``docs/design/setup_hook_auto_discovery.md`` for the full plan.
+Discovers and loads ``SetupHook`` instances from a domain's ``setup.py``
+module. Called by ``saber.task.create_task()`` during Phase 0 (before
+config loading) to run data downloads, task generation, etc.
 """
 
 from __future__ import annotations

@@ -156,6 +156,17 @@ def create_task(
     # 0b. Configure saber logging
     configure_logging()
 
+    # 0c. Run domain setup hooks (data downloads, task generation, etc.)
+    from saber.hooks import run_setup_hooks
+    from saber.setup_discovery import _discover_setup_hooks
+
+    hooks = _discover_setup_hooks(domain_root, **kwargs)
+    if hooks:
+        hooks_result = run_setup_hooks(hooks, domain_root)
+        if not hooks_result.all_succeeded:
+            failed = "; ".join(f"{r.name}: {r.message}" for r in hooks_result.failed_hooks)
+            raise RuntimeError(f"Setup hook(s) failed: {failed}")
+
     # 1. Load task configs from YAML
     config_root = _find_config_root(domain_root)
     loader = ConfigLoader(config_root)
