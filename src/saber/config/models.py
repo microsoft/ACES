@@ -254,6 +254,7 @@ class TaskConfig(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     task_id: Annotated[str, Field(min_length=1, pattern=r"^[a-zA-Z0-9_\-]+$")]
+    dataset: str | None = None
     title: str
     description: str
     prompts: PromptPaths
@@ -392,6 +393,7 @@ class GlobalDefaults(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    default_dataset: str | None = None
     permanent_environment: PermanentEnvironment | None = None
     prompts: PromptPaths | None = None
     max_steps: int = 25

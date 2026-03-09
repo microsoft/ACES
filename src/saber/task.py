@@ -51,6 +51,7 @@ def _cli_bool(value: str | bool | None) -> bool:
 def create_task(
     domain_root: Path | None = None,
     task_filter: str | None = None,
+    dataset: str | None = None,
     agent: str = "react",
     sandbox_compose: str = "compose/sandbox.compose.yml",
     permanent_compose: str | None = None,
@@ -78,6 +79,9 @@ def create_task(
         domain_root: Path to the domain directory (e.g., domains/excytin).
             If ``None``, auto-detected from the caller's file location.
         task_filter: Optional glob/comma-separated task name filter.
+        dataset: Optional dataset name for filtering tasks. When set, only
+            tasks whose ``dataset`` field matches are loaded. Falls back to
+            ``default_dataset`` from ``global.yaml`` when ``None``.
         agent: Agent name (default: "react"). Registered agents: react, copilot,
             claude_code.
         sandbox_compose: Relative path to sandbox compose file within domain.
@@ -136,6 +140,7 @@ def create_task(
         return create_task(
             domain_root=domain_root,
             task_filter=nested.pop("task_filter", task_filter),
+            dataset=nested.pop("dataset", dataset),
             agent=nested.pop("agent", agent),
             sandbox_compose=nested.pop("sandbox_compose", sandbox_compose),
             permanent_compose=nested.pop("permanent_compose", permanent_compose),
@@ -171,7 +176,7 @@ def create_task(
     config_root = _find_config_root(domain_root)
     loader = ConfigLoader(config_root)
     global_config = loader.load_global_config()
-    tasks = loader.load_tasks(task_filter=task_filter)
+    tasks = loader.load_tasks(task_filter=task_filter, dataset=dataset)
 
     # 1b. Resolve permanent compose from global.yaml (explicit kwargs win)
     perm_env = global_config.permanent_environment
@@ -199,6 +204,8 @@ def create_task(
 
     if not tasks:
         msg = f"No tasks found in {config_root}"
+        if dataset:
+            msg += f" for dataset '{dataset}'"
         if task_filter:
             msg += f" matching filter '{task_filter}'"
         raise ValueError(msg)

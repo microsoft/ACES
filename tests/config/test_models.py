@@ -973,3 +973,37 @@ class TestTaskConfigInlineStrategyDefaults:
         )
         assert len(task.scorers) == 1
         assert isinstance(task.scorers[0].criteria, LLMJudgeCriteria)
+
+
+# ── Dataset Field ──────────────────────────────────────────────────
+
+
+class TestDatasetField:
+    """Tests for `dataset` field on TaskConfig and `default_dataset` on GlobalDefaults."""
+
+    def test_task_config_dataset_defaults_to_none(self) -> None:
+        tc = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="i.j2"),
+        )
+        assert tc.dataset is None
+
+    def test_task_config_accepts_dataset(self) -> None:
+        tc = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="i.j2"),
+            dataset="cti_realm_25",
+        )
+        assert tc.dataset == "cti_realm_25"
+
+    def test_global_defaults_default_dataset_defaults_to_none(self) -> None:
+        gd = GlobalDefaults()
+        assert gd.default_dataset is None
+
+    def test_global_defaults_accepts_default_dataset(self) -> None:
+        gd = GlobalDefaults(default_dataset="cti_realm_25")
+        assert gd.default_dataset == "cti_realm_25"

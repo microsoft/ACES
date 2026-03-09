@@ -161,7 +161,7 @@ class ConfigLoader:
         defaults = self._load_global_defaults()
         return GlobalDefaults(**defaults)
 
-    def load_tasks(self, task_filter: str | None = None) -> list[TaskConfig]:
+    def load_tasks(self, task_filter: str | None = None, dataset: str | None = None) -> list[TaskConfig]:
         """Load all tasks with inheritance applied.
 
         1. Load ``global.yaml`` from *tasks_dir*.
@@ -169,15 +169,23 @@ class ConfigLoader:
         3. For each task file, load its sibling ``shared.yaml`` if present.
         4. Merge: global → shared → task using :func:`merge_task_configs`.
         5. Validate each merged dict into :class:`TaskConfig`.
-        6. Apply *task_filter* if provided.
+        6. Apply *dataset* filter if active (explicit param or ``default_dataset``).
+        7. Apply *task_filter* if provided.
 
         Args:
             task_filter: Optional glob/comma-separated filter.
+            dataset: Optional dataset name. When set, only tasks whose
+                ``dataset`` field matches are returned. Falls back to
+                ``default_dataset`` from ``global.yaml`` when ``None``.
 
         Returns:
             List of fully-resolved :class:`TaskConfig` objects.
         """
         global_defaults = self._load_global_defaults()
+
+        # Extract default_dataset before merge cascade (not a TaskConfig field)
+        default_dataset_value = global_defaults.pop("default_dataset", None)
+
         task_files = self._discover_task_files()
 
         configs: list[TaskConfig] = []
@@ -187,6 +195,14 @@ class ConfigLoader:
             for raw in raw_tasks:
                 merged = merge_task_configs(global_defaults, shared, raw)
                 configs.append(TaskConfig(**merged))
+
+        # Resolve effective dataset: explicit param > global default > None (all tasks)
+        effective_dataset = dataset
+        if effective_dataset is None and isinstance(default_dataset_value, str):
+            effective_dataset = default_dataset_value
+
+        if effective_dataset is not None:
+            configs = [t for t in configs if t.dataset == effective_dataset]
 
         if task_filter is not None:
             configs = self._apply_filter(configs, task_filter)

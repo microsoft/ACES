@@ -849,3 +849,171 @@ class TestLoadDomainConfig:
         config = load_domain_config(tmp_path)
         with pytest.raises(Exception):  # noqa: B017 — ValidationError from frozen
             config.slug = "changed"  # type: ignore[misc]
+
+
+# ── Dataset filtering tests ────────────────────────────────────────
+
+
+class TestDatasetFiltering:
+    """Tests for dataset-based task filtering in ConfigLoader.load_tasks()."""
+
+    def test_dataset_filter_returns_matching_tasks(self, tmp_path: Path) -> None:
+        """Only tasks with matching dataset are returned."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                    _minimal_task("t3", dataset="ds_a"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="ds_a")
+        assert [t.task_id for t in result] == ["t1", "t3"]
+
+    def test_dataset_filter_excludes_untagged_tasks(self, tmp_path: Path) -> None:
+        """Tasks without dataset field are excluded when filtering is active."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2"),  # no dataset
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="ds_a")
+        assert [t.task_id for t in result] == ["t1"]
+
+    def test_no_dataset_no_default_returns_all(self, tmp_path: Path) -> None:
+        """Without dataset param or default_dataset, all tasks are returned."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks()
+        assert len(result) == 2
+
+    def test_default_dataset_used_when_no_explicit(self, tmp_path: Path) -> None:
+        """default_dataset from global.yaml is used as fallback."""
+        defaults = _minimal_global_defaults()
+        defaults["default_dataset"] = "ds_a"
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": defaults},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks()  # no explicit dataset
+        assert [t.task_id for t in result] == ["t1"]
+
+    def test_explicit_dataset_overrides_default(self, tmp_path: Path) -> None:
+        """Explicit dataset param overrides default_dataset."""
+        defaults = _minimal_global_defaults()
+        defaults["default_dataset"] = "ds_a"
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": defaults},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="ds_b")
+        assert [t.task_id for t in result] == ["t2"]
+
+    def test_dataset_and_task_filter_compose(self, tmp_path: Path) -> None:
+        """Dataset filtering + task_filter both apply (dataset first)."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("linux_001", dataset="ds_a"),
+                    _minimal_task("linux_002", dataset="ds_a"),
+                    _minimal_task("aks_001", dataset="ds_a"),
+                    _minimal_task("linux_003", dataset="ds_b"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="ds_a", task_filter="linux_*")
+        assert [t.task_id for t in result] == ["linux_001", "linux_002"]
+
+    def test_dataset_inherited_from_shared(self, tmp_path: Path) -> None:
+        """dataset can be inherited via shared.yaml merge cascade."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            shared_yamls={"sub": {"dataset": "ds_a"}},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1"),  # inherits dataset from shared
+                    _minimal_task("t2", dataset="ds_b"),  # overrides shared
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="ds_a")
+        assert [t.task_id for t in result] == ["t1"]
+
+    def test_no_matching_dataset_returns_empty(self, tmp_path: Path) -> None:
+        """Non-existent dataset returns empty list."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="nonexistent")
+        assert result == []
+
+    def test_default_dataset_stripped_from_merge_cascade(self, tmp_path: Path) -> None:
+        """default_dataset is stripped from global_defaults before merge cascade.
+
+        Even though TaskConfig ignores unknown fields today, the merge cascade
+        should not propagate global-only meta-keys into task dicts.
+        """
+        defaults = _minimal_global_defaults()
+        defaults["default_dataset"] = "ds_a"
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": defaults},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        # Without explicit dataset, default_dataset should filter
+        result = loader.load_tasks()
+        assert [t.task_id for t in result] == ["t1"]
+        # Verify no task carries a stray 'default_dataset' attribute
+        for task in result:
+            assert not hasattr(task, "default_dataset")
