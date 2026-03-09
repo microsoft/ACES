@@ -238,6 +238,36 @@ class TestBuildImage:
         assert "--label" in args_list
         assert "L1=V2" in args_list
 
+    @pytest.mark.asyncio
+    async def test_no_cache_flag(self) -> None:
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc.returncode = 0
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ) as mock_exec:
+            await build_image(tag="t:1", dockerfile=Path("/df"), context=Path("/ctx"), no_cache=True)
+
+        call_args = mock_exec.call_args[0]
+        assert "--no-cache" in call_args
+
+    @pytest.mark.asyncio
+    async def test_no_cache_flag_absent_by_default(self) -> None:
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc.returncode = 0
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ) as mock_exec:
+            await build_image(tag="t:1", dockerfile=Path("/df"), context=Path("/ctx"))
+
+        call_args = mock_exec.call_args[0]
+        assert "--no-cache" not in call_args
+
 
 # ── find_base_dockerfile ─────────────────────────────────────────────
 
@@ -417,6 +447,9 @@ class TestBuildDomainImages:
         actions = {r.name: r.action for r in result.results}
         assert actions["base"] == "rebuilt"
         assert actions["web"] == "rebuilt"
+        # All rebuild calls should use no_cache=True
+        for call in mock_build.call_args_list:
+            assert call.kwargs.get("no_cache") is True
 
     @pytest.mark.asyncio
     @patch("saber.environments.images.build_image", new_callable=AsyncMock)

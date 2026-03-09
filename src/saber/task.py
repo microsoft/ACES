@@ -16,6 +16,7 @@ from typing import Any
 
 from inspect_ai import Epochs, Task
 from inspect_ai.approval import ApprovalPolicy
+from inspect_ai.model import GenerateConfig
 from inspect_ai.scorer import Scorer
 from inspect_ai.tool import Tool
 
@@ -267,12 +268,23 @@ def create_task(
     # to bridge-based agents (copilot, claude_code) via sample_limits().
     _DEFAULT_TIME_LIMIT = 3600
 
+    # inspect_ai's bridge hardcodes GenerateConfig.max_retries = 3 in
+    # generate_config_from_openai_{completions,responses}().  With only
+    # 3 tenacity attempts, transient 429 rate-limit errors quickly
+    # exhaust retries and propagate empty-output model events that
+    # derail the agent.  Setting a high max_retries on the Task config
+    # overrides the bridge default via the active_generate_config merge
+    # chain, providing effectively unlimited retries with exponential
+    # backoff (capped at 30 min) so samples survive rate-limit bursts.
+    _MAX_RETRIES = 100
+
     return Task(
         dataset=samples,
         solver=solver,
         scorer=scorers,
         sandbox=sandbox_spec,
         approval=effective_approval,
+        config=GenerateConfig(max_retries=_MAX_RETRIES),
         # Use max across all tasks as the ceiling; per-sample tightening
         # happens in the solver via state.tool_call_limit from metadata.
         tool_call_limit=max(t.max_steps for t in tasks),

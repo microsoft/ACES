@@ -203,6 +203,7 @@ async def build_image(
     context: Path | None = None,
     build_args: dict[str, str] | None = None,
     labels: dict[str, str] | None = None,
+    no_cache: bool = False,
 ) -> None:
     """Build a Docker image.
 
@@ -213,6 +214,8 @@ async def build_image(
             ``dockerfile.parent`` when *None*.
         build_args: Optional ``--build-arg`` key/value pairs.
         labels: Optional ``--label`` key/value pairs.
+        no_cache: If ``True``, pass ``--no-cache`` to ``docker build``
+            so that all layers are rebuilt from scratch.
 
     Raises:
         ImageBuildError: If the build exits with a non-zero code.
@@ -221,6 +224,9 @@ async def build_image(
         context = dockerfile.parent
 
     cmd: list[str] = ["docker", "build", "-f", str(dockerfile), "-t", tag]
+
+    if no_cache:
+        cmd.append("--no-cache")
 
     for key, value in (build_args or {}).items():
         cmd.extend(["--build-arg", f"{key}={value}"])
@@ -414,6 +420,7 @@ async def build_domain_images(
                 tag=BASE_IMAGE_TAG,
                 dockerfile=base_df,
                 context=base_df.parent,
+                no_cache=rebuild_base,
             )
             base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action=action_label)
             logger.info("Image %s (%s): %s", "base", BASE_IMAGE_TAG, action_label)
@@ -440,7 +447,8 @@ async def build_domain_images(
         context = domain_root / image_config.context if image_config.context is not None else domain_root
 
         _notify(name, image_config.tag, "checking")
-        if rebuild.should_rebuild(name):
+        force_rebuild = rebuild.should_rebuild(name)
+        if force_rebuild:
             action: Literal["built", "rebuilt"] = "rebuilt"
         elif await image_exists(image_config.tag):
             all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="skipped"))
@@ -458,6 +466,7 @@ async def build_domain_images(
                 context=context,
                 build_args=image_config.build_args or None,
                 labels=image_config.labels or None,
+                no_cache=force_rebuild,
             )
             all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action=action))
             logger.info("Image %s (%s): %s", name, image_config.tag, action)

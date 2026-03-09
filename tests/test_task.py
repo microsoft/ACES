@@ -157,6 +157,28 @@ class TestCreateTask:
 
         assert task.time_limit == 3600
 
+    def test_task_has_high_max_retries(self, tmp_path: Path) -> None:
+        """create_task overrides the bridge's hardcoded max_retries=3.
+
+        inspect_ai's bridge completions handler hardcodes max_retries=3,
+        causing transient 429 rate-limit errors to exhaust retries after
+        only 3 attempts.  The Task config must set a high max_retries to
+        survive rate-limit bursts via exponential backoff.
+        """
+        _write_minimal_domain(tmp_path)
+
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        with patch("saber.task.resolve_agent", return_value=mock_factory):
+            task = create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+            )
+
+        assert task.config is not None
+        assert task.config.max_retries == 100
+
     def test_task_has_samples(self, tmp_path: Path) -> None:
         """The returned Task has the expected samples from YAML."""
         _write_minimal_domain(tmp_path)
