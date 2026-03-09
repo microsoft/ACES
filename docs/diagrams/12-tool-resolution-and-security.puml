@@ -77,13 +77,13 @@ package "Security Pipeline" as sec_pipeline {
 
 ' ── Validation Pipeline Steps ─────────────────────────────────────
 package "Validation Pipeline (7 steps)" as pipeline {
-    collections "1. Content length check\n   (max_content_length)" as step1
-    collections "2. Null byte check\n   (block_null_bytes)" as step2
-    collections "3. Control char check\n   (block_control_chars)" as step3
-    collections "4. Base command blocklist\n   (shlex.split → check\n    + proxy unwrapping)" as step4
-    collections "5. Dangerous pattern regexes\n   (compiled patterns)" as step5
-    collections "6. Semicolon injection\n   (allow_semicolons)" as step6
-    collections "7. Path traversal + shell\n   metachar check\n   (sensitive_directories)" as step7
+    class "1. Content length check\n   (max_content_length)" as step1 <<step>>
+    class "2. Null byte check\n   (block_null_bytes)" as step2 <<step>>
+    class "3. Control char check\n   (block_control_chars)" as step3 <<step>>
+    class "4. Base command blocklist\n   (shlex.split -> check\n    + proxy unwrapping)" as step4 <<step>>
+    class "5. Dangerous pattern regexes\n   (compiled patterns)" as step5 <<step>>
+    class "6. Semicolon injection\n   (allow_semicolons)" as step6 <<step>>
+    class "7. Path traversal + shell\n   metachar check\n   (sensitive_directories)" as step7 <<step>>
 }
 
 ' ── Default Security Constants ────────────────────────────────────

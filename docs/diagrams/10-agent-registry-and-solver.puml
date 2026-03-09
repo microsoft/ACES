@@ -21,10 +21,10 @@ package "agents/" {
         //4. Registers each automatically//
     }
 
-    folder "registry/" {
-        file "react.py\ncreate_agent()" as react_file
-        file "copilot.py\ncreate_agent()" as copilot_file
-        file "claude_code.py\ncreate_agent()" as claude_file
+    package "registry/" {
+        class "react.py" as react_file <<file>>
+        class "copilot.py" as copilot_file <<file>>
+        class "claude_code.py" as claude_file <<file>>
     }
 
     class "resolve_agent()" as resolver <<function>> {

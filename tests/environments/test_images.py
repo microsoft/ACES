@@ -561,6 +561,7 @@ class TestBuildDomainImages:
             context: Path | None = None,
             build_args: dict[str, str] | None = None,
             labels: dict[str, str] | None = None,
+            no_cache: bool = False,
         ) -> None:
             if tag == "web:1":
                 raise ImageBuildError(tag="web:1", stderr="compile error", returncode=1)
