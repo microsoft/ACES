@@ -9,7 +9,7 @@ import types
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from saber.tools.security import ToolSecurityConfig
 
@@ -256,6 +256,23 @@ class TaskConfig(BaseModel):
     task_id: Annotated[str, Field(min_length=1, pattern=r"^[a-zA-Z0-9_\-]+$")]
     dataset: str | None = None
     title: str
+
+    @field_validator("dataset")
+    @classmethod
+    def _reject_reserved_dataset(cls, v: str | None) -> str | None:
+        """Reject the reserved sentinel value ``"all"``.
+
+        ``"all"`` is used by :data:`saber.config.loader._DATASET_ALL` to
+        bypass dataset filtering and must not appear as a task-level value.
+        """
+        if v == "all":
+            raise ValueError(
+                '"all" is a reserved dataset sentinel '
+                "(see saber.config.loader._DATASET_ALL) and cannot be "
+                "used as a task dataset value"
+            )
+        return v
+
     description: str
     prompts: PromptPaths
     sandbox: str | None = Field(default=None, alias="sandbox_environment")

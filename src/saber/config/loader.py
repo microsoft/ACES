@@ -17,12 +17,14 @@ from saber.config.models import DomainConfig, GlobalDefaults, TaskConfig
 
 __all__ = ["ConfigLoader", "deep_merge", "load_domain_config", "merge_task_configs"]
 
+# Sentinel dataset value that bypasses dataset filtering.
+# When passed as ``dataset="all"`` to :meth:`ConfigLoader.load_tasks`,
+# the filter step is skipped and every task is returned.
+_DATASET_ALL: str = "all"
+
 # Keys whose values are replaced entirely (not recursively merged)
 # in the global → shared → task config cascade.
 _REPLACE_KEYS: frozenset[str] = frozenset({"tools"})
-
-# Sentinel value for the *dataset* parameter: skip dataset filtering entirely.
-_DATASET_ALL: str = "all"
 
 
 def deep_merge(
@@ -180,7 +182,6 @@ class ConfigLoader:
             dataset: Optional dataset name. When set, only tasks whose
                 ``dataset`` field matches are returned. Falls back to
                 ``default_dataset`` from ``global.yaml`` when ``None``.
-                Pass ``"all"`` to bypass dataset filtering entirely.
 
         Returns:
             List of fully-resolved :class:`TaskConfig` objects.
@@ -200,12 +201,11 @@ class ConfigLoader:
                 merged = merge_task_configs(global_defaults, shared, raw)
                 configs.append(TaskConfig(**merged))
 
-        # Resolve effective dataset: explicit "all" > explicit name > global default > None
+        # Resolve effective dataset: explicit param > global default > None (all tasks)
         effective_dataset = dataset
         if effective_dataset is None and isinstance(default_dataset_value, str):
             effective_dataset = default_dataset_value
 
-        # "all" is a sentinel — skip dataset filtering entirely
         if effective_dataset is not None and effective_dataset != _DATASET_ALL:
             configs = [t for t in configs if t.dataset == effective_dataset]
 

@@ -1073,3 +1073,21 @@ class TestDatasetFiltering:
         loader = ConfigLoader(domain)
         result = loader.load_tasks(dataset="all", task_filter="linux_*")
         assert [t.task_id for t in result] == ["linux_001", "linux_002"]
+
+    def test_dataset_all_without_default_returns_all(self, tmp_path: Path) -> None:
+        """dataset='all' returns every task even without default_dataset."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": _minimal_global_defaults()},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                    _minimal_task("t3"),  # no dataset
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="all")
+        assert len(result) == 3
+        assert [t.task_id for t in result] == ["t1", "t2", "t3"]

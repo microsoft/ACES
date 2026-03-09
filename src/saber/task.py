@@ -82,6 +82,15 @@ def create_task(
         dataset: Optional dataset name for filtering tasks. When set, only
             tasks whose ``dataset`` field matches are loaded. Falls back to
             ``default_dataset`` from ``global.yaml`` when ``None``.
+            Pass ``"all"`` to bypass dataset filtering entirely and
+            return every task regardless of its ``dataset`` value.
+
+            .. note::
+
+               Setup hooks receive the raw *dataset* value (including
+               ``"all"``) but **not** the resolved ``default_dataset``
+               fallback.  Hooks should prepare data for all tasks and
+               let filtering happen inside :meth:`ConfigLoader.load_tasks`.
         agent: Agent name (default: "react"). Registered agents: react, copilot,
             claude_code.
         sandbox_compose: Relative path to sandbox compose file within domain.
