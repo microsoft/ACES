@@ -27,7 +27,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Install Python packages for basic execution and agent SDKs
 RUN uv pip install --system --no-cache \
     requests \
-    github-copilot-sdk \
+    github-copilot-sdk==0.1.32 \
     claude-code-sdk
 
 # Set working directory

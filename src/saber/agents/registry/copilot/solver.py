@@ -18,8 +18,9 @@ Architecture:
 
 import json
 from collections.abc import Callable, Sequence
+from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -29,6 +30,7 @@ from saber.agents.bridge_utils import (
     build_user_prompt,
     create_tool_call_limit_filter,
     parse_bridge_stderr,
+    parse_idle_decision,
     parse_runner_metrics,
     upload_skills_to_sandbox,
     validate_model_availability,
@@ -72,27 +74,319 @@ Reads configuration from environment variables:
 import asyncio
 import json
 import os
+import signal
 import sys
+import time
+
+from copilot.types import PermissionRequestResult
+
+# ---------------------------------------------------------------------------
+# Constants for process health classification
+# ---------------------------------------------------------------------------
+
+INTERACTIVE_COMMANDS = frozenset({
+    "less", "more", "vi", "vim", "nano", "man", "pager", "view", "ed",
+})
+STDIN_WAIT_FNS = frozenset({
+    "wait_woken", "n_tty_read", "read_chan", "unix_stream_read_generic", "pipe_read",
+})
+NETWORK_WAIT_FNS = frozenset({
+    "poll_schedule_timeout", "ep_poll", "inet_csk_accept",
+    "tcp_recvmsg", "sk_wait_data", "do_select",
+})
+MAX_IDLE_EXTENSIONS = 3
+
+
+# ---------------------------------------------------------------------------
+# /proc filesystem readers
+# ---------------------------------------------------------------------------
+
+
+def read_proc_stat(pid, proc_root="/proc"):
+    """Read /proc/PID/stat and return parsed dict or None."""
+    try:
+        with open(f"{proc_root}/{pid}/stat") as f:
+            data = f.read().strip()
+    except (OSError, IOError):
+        return None
+    # Parse: pid (comm) state ppid ... utime(14) stime(15)
+    # comm can contain spaces/parens, so find the last ')'
+    start = data.index("(") + 1
+    end = data.rindex(")")
+    comm = data[start:end]
+    rest = data[end + 2:].split()
+    # rest[0]=state, rest[1]=ppid, ..., rest[11]=utime, rest[12]=stime
+    try:
+        return {
+            "pid": pid,
+            "comm": comm,
+            "state": rest[0],
+            "ppid": int(rest[1]),
+            "utime": int(rest[11]),
+            "stime": int(rest[12]),
+        }
+    except (IndexError, ValueError):
+        return None
+
+
+def read_proc_wchan(pid, proc_root="/proc"):
+    """Read /proc/PID/wchan and return string (or "")."""
+    try:
+        with open(f"{proc_root}/{pid}/wchan") as f:
+            return f.read().strip()
+    except (OSError, IOError):
+        return ""
+
+
+def read_proc_io(pid, proc_root="/proc"):
+    """Read /proc/PID/io and return dict with read_bytes, write_bytes (or None)."""
+    try:
+        with open(f"{proc_root}/{pid}/io") as f:
+            lines = f.readlines()
+    except (OSError, IOError):
+        return None
+    result = {}
+    for line in lines:
+        parts = line.strip().split(":", 1)
+        if len(parts) == 2:
+            key = parts[0].strip()
+            if key in ("read_bytes", "write_bytes"):
+                try:
+                    result[key] = int(parts[1].strip())
+                except ValueError:
+                    pass
+    if "read_bytes" in result and "write_bytes" in result:
+        return result
+    return None
+
+
+def read_proc_fd0(pid, proc_root="/proc"):
+    """Read symlink target of /proc/PID/fd/0 (or "")."""
+    try:
+        return os.readlink(f"{proc_root}/{pid}/fd/0")
+    except (OSError, IOError):
+        return ""
+
+
+def read_proc_cmdline(pid, proc_root="/proc"):
+    """Read /proc/PID/cmdline and return list of strings (or [])."""
+    try:
+        with open(f"{proc_root}/{pid}/cmdline", "rb") as f:
+            data = f.read()
+    except (OSError, IOError):
+        return []
+    if not data:
+        return []
+    # cmdline is null-separated; strip trailing null
+    if data.endswith(b"\x00"):
+        data = data[:-1]
+    return data.decode("utf-8", errors="replace").split("\x00")
+
+
+def get_descendant_pids(ancestor_pid, proc_root="/proc"):
+    """Return set of all descendant PIDs of ancestor_pid."""
+    # Build parent->children map from all /proc entries
+    children_map = {}  # ppid -> set of pids
+    try:
+        entries = os.listdir(proc_root)
+    except (OSError, IOError):
+        return set()
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == ancestor_pid:
+            continue
+        stat = read_proc_stat(pid, proc_root)
+        if stat is None:
+            continue
+        ppid = stat["ppid"]
+        if ppid not in children_map:
+            children_map[ppid] = set()
+        children_map[ppid].add(pid)
+    # BFS from ancestor
+    descendants = set()
+    queue = list(children_map.get(ancestor_pid, set()))
+    while queue:
+        pid = queue.pop()
+        if pid in descendants:
+            continue
+        descendants.add(pid)
+        queue.extend(children_map.get(pid, set()))
+    return descendants
+
+
+# ---------------------------------------------------------------------------
+# Process health classifier
+# ---------------------------------------------------------------------------
+
+
+def classify_process(pid, prev_snapshot, curr_snapshot, proc_root="/proc"):
+    """Classify a process as stuck, working, or indeterminate.
+
+    prev_snapshot/curr_snapshot: dicts with read_bytes, write_bytes, utime, stime
+
+    Decision tree (checked in order):
+    1. cmdline basename in INTERACTIVE_COMMANDS -> stuck
+    2. state == "T" -> stuck
+    3. wchan in STDIN_WAIT_FNS AND fd0 is pipe/pty -> stuck
+    4. delta(read_bytes + write_bytes) > 0 -> working
+    5. delta(utime + stime) > 0 -> working
+    6. fd0 is socket -> working
+    7. wchan in NETWORK_WAIT_FNS -> working
+    8. else -> indeterminate
+    """
+    cmdline = read_proc_cmdline(pid, proc_root)
+    cmdline_str = " ".join(cmdline) if cmdline else ""
+    stat = read_proc_stat(pid, proc_root)
+    state = stat["state"] if stat else "?"
+    wchan = read_proc_wchan(pid, proc_root)
+    fd0 = read_proc_fd0(pid, proc_root)
+
+    basename = os.path.basename(cmdline[0]) if cmdline else ""
+
+    def _result(health, reason):
+        return {
+            "pid": pid,
+            "cmdline": cmdline_str,
+            "state": state,
+            "health": health,
+            "reason": reason,
+            "wchan": wchan,
+            "fd0_target": fd0,
+        }
+
+    # 1. Interactive command
+    if basename in INTERACTIVE_COMMANDS:
+        return _result("stuck", f"interactive command: {basename}")
+
+    # 2. Stopped process
+    if state == "T":
+        return _result("stuck", "stopped (SIGSTOP/traced)")
+
+    # 3. Stdin-blocked
+    if wchan in STDIN_WAIT_FNS and ("pipe:" in fd0 or "pts" in fd0 or "pty" in fd0):
+        return _result("stuck", f"stdin-blocked on {wchan}, fd0={fd0}")
+
+    # 4. Active I/O
+    prev_io = (prev_snapshot.get("read_bytes", 0) + prev_snapshot.get("write_bytes", 0))
+    curr_io = (curr_snapshot.get("read_bytes", 0) + curr_snapshot.get("write_bytes", 0))
+    if curr_io - prev_io > 0:
+        return _result("working", f"active I/O (delta={curr_io - prev_io})")
+
+    # 5. Active CPU
+    prev_cpu = (prev_snapshot.get("utime", 0) + prev_snapshot.get("stime", 0))
+    curr_cpu = (curr_snapshot.get("utime", 0) + curr_snapshot.get("stime", 0))
+    if curr_cpu - prev_cpu > 0:
+        return _result("working", f"active CPU (delta={curr_cpu - prev_cpu})")
+
+    # 6. Socket on fd0
+    if "socket:" in fd0:
+        return _result("working", f"fd0 is socket: {fd0}")
+
+    # 7. Network wait
+    if wchan in NETWORK_WAIT_FNS:
+        return _result("working", f"network wait: {wchan}")
+
+    # 8. Indeterminate
+    return _result("indeterminate", f"no definitive signal (wchan={wchan})")
+
+
+def make_idle_decision(ancestor_pid, prev_snapshots, in_flight_tools, idle_seconds, total_seconds, proc_root="/proc"):
+    """Decide what to do when idle timeout fires.
+
+    1. Get descendant PIDs
+    2. Take current I/O+CPU snapshot
+    3. Classify each leaf process
+    4. Aggregate decision:
+       - in_flight_tools non-empty -> "extend"
+       - ALL leaf processes stuck -> "kill_stuck"
+       - ANY working or indeterminate -> "extend"
+       - No descendants -> "timeout"
+
+    Returns (decision_dict, new_snapshots).
+    """
+    descendants = get_descendant_pids(ancestor_pid, proc_root)
+
+    if not descendants:
+        decision = {
+            "action": "timeout",
+            "classifications": [],
+            "in_flight_tools": (
+                list(in_flight_tools.keys())
+                if isinstance(in_flight_tools, dict)
+                else list(in_flight_tools)
+            ),
+            "idle_seconds": idle_seconds,
+            "total_seconds": total_seconds,
+        }
+        return decision, {}
+
+    # Take current snapshot
+    curr_snapshots = {}
+    for pid in descendants:
+        io_data = read_proc_io(pid, proc_root)
+        stat_data = read_proc_stat(pid, proc_root)
+        snap = {
+            "read_bytes": io_data["read_bytes"] if io_data else 0,
+            "write_bytes": io_data["write_bytes"] if io_data else 0,
+            "utime": stat_data["utime"] if stat_data else 0,
+            "stime": stat_data["stime"] if stat_data else 0,
+        }
+        curr_snapshots[pid] = snap
+
+    # Classify each descendant
+    classifications = []
+    for pid in descendants:
+        prev = prev_snapshots.get(pid, {"read_bytes": 0, "write_bytes": 0, "utime": 0, "stime": 0})
+        curr = curr_snapshots.get(pid, {"read_bytes": 0, "write_bytes": 0, "utime": 0, "stime": 0})
+        c = classify_process(pid, prev, curr, proc_root)
+        classifications.append(c)
+
+    tool_names = list(in_flight_tools.keys()) if isinstance(in_flight_tools, dict) else list(in_flight_tools)
+
+    # Aggregate
+    if tool_names:
+        action = "extend"
+    elif all(c["health"] == "stuck" for c in classifications):
+        action = "kill_stuck"
+    elif any(c["health"] in ("working", "indeterminate") for c in classifications):
+        action = "extend"
+    else:
+        # Defensive: unreachable with current classifier outputs
+        action = "timeout"
+
+    decision = {
+        "action": action,
+        "classifications": classifications,
+        "in_flight_tools": tool_names,
+        "idle_seconds": idle_seconds,
+        "total_seconds": total_seconds,
+    }
+    return decision, curr_snapshots
 
 
 def _approve_all(
     _request: dict,
     _context: dict,
-) -> dict:
+) -> PermissionRequestResult:
     """Auto-approve every permission request.
 
     The Copilot SDK's PermissionHandler signature is
     ``(PermissionRequest, Dict[str, str]) -> PermissionRequestResult``.
-    Returning ``{"kind": "approved"}`` grants the request.
+    Returning a ``PermissionRequestResult(kind="approved")`` grants the
+    request.  The SDK accesses result attributes (``result.kind``), so a
+    plain dict would raise ``AttributeError`` and be silently converted to
+    a denial.
+
     This is safe because the runner executes inside an isolated Docker
     sandbox used exclusively for benchmarking.
     """
-    return {"kind": "approved"}
+    return PermissionRequestResult(kind="approved")
 
 
 async def main() -> int:
     """Run Copilot session with bridge-routed model."""
-    import time
     from copilot import CopilotClient
     from copilot.generated.session_events import SessionEventType
 
@@ -171,6 +465,10 @@ async def main() -> int:
     idle_event = asyncio.Event()
     session_error_msg = ""
     last_response = None
+    in_flight_tools = {}
+    idle_extensions = 0
+    proc_snapshots = {}
+    last_heartbeat_time = start_time
 
     # Event types that count as "activity" (agent is doing work)
     ACTIVITY_EVENTS = {
@@ -188,6 +486,10 @@ async def main() -> int:
         SessionEventType.SESSION_COMPACTION_COMPLETE,
         SessionEventType.ASSISTANT_USAGE,
     }
+    # Expand with optional event types (may not exist in all SDK versions)
+    for _evt_name in ("TOOL_EXECUTION_PARTIAL_RESULT", "COMMAND_QUEUED", "COMMAND_COMPLETED"):
+        if hasattr(SessionEventType, _evt_name):
+            ACTIVITY_EVENTS.add(getattr(SessionEventType, _evt_name))
 
     def _on_event(event):
         nonlocal last_activity_time, total_events, assistant_messages
@@ -205,8 +507,22 @@ async def main() -> int:
             last_response = event
         elif event.type == SessionEventType.TOOL_EXECUTION_START:
             tool_calls_started += 1
+            # Track in-flight tool (ref-counted)
+            data = getattr(event, "data", None)
+            tool_name = getattr(data, "tool_name", None) or getattr(data, "name", None)
+            if tool_name:
+                in_flight_tools[tool_name] = in_flight_tools.get(tool_name, 0) + 1
         elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
             tool_calls_completed += 1
+            # Decrement ref-count for in-flight tool
+            data = getattr(event, "data", None)
+            tool_name = getattr(data, "tool_name", None) or getattr(data, "name", None)
+            if tool_name:
+                count = in_flight_tools.get(tool_name, 1) - 1
+                if count <= 0:
+                    in_flight_tools.pop(tool_name, None)
+                else:
+                    in_flight_tools[tool_name] = count
         elif event.type == SessionEventType.ASSISTANT_TURN_END:
             turn_count += 1
         elif event.type == SessionEventType.SESSION_IDLE:
@@ -227,6 +543,8 @@ async def main() -> int:
             "idle_seconds": round(now - last_activity_time, 1),
             "exit_reason": exit_reason,
             "last_event_type": last_event_type,
+            "idle_extensions": idle_extensions,
+            "in_flight_tools_at_exit": list(in_flight_tools.keys()),
         }
 
     def _print_metrics(exit_reason):
@@ -261,14 +579,47 @@ async def main() -> int:
                     idle_elapsed = now - last_activity_time
                     total_elapsed = now - start_time
 
+                    # Heartbeat logging every 30s
+                    if now - last_heartbeat_time > 30.0:
+                        descendants = get_descendant_pids(os.getpid())
+                        heartbeat = {
+                            "elapsed_s": round(total_elapsed, 1),
+                            "idle_s": round(idle_elapsed, 1),
+                            "total_events": total_events,
+                            "in_flight_tools": list(in_flight_tools.keys()),
+                            "descendant_count": len(descendants),
+                            "idle_extensions": idle_extensions,
+                        }
+                        print(f"COPILOT_HEARTBEAT: {json.dumps(heartbeat)}", file=sys.stderr)
+                        last_heartbeat_time = now
+
                     if idle_elapsed > idle_timeout:
-                        print(
-                            f"COPILOT_RUNNER_IDLE_TIMEOUT: No activity for "
-                            f"{idle_elapsed:.0f}s (limit: {idle_timeout}s)",
-                            file=sys.stderr,
+                        decision, proc_snapshots = make_idle_decision(
+                            os.getpid(), proc_snapshots, in_flight_tools,
+                            idle_elapsed, total_elapsed
                         )
-                        _print_metrics("idle_timeout")
-                        break
+                        print(f"COPILOT_IDLE_DECISION: {json.dumps(decision)}", file=sys.stderr)
+
+                        if decision["action"] == "kill_stuck":
+                            my_pid = os.getpid()
+                            for c in decision["classifications"]:
+                                if c["health"] == "stuck" and c["pid"] not in (1, my_pid):
+                                    try:
+                                        os.kill(c["pid"], signal.SIGKILL)
+                                    except (ProcessLookupError, OSError):
+                                        pass
+                            _print_metrics("stuck_processes")
+                            break
+                        elif decision["action"] == "extend":
+                            last_activity_time = time.monotonic()
+                            idle_extensions += 1
+                            if idle_extensions > MAX_IDLE_EXTENSIONS:
+                                _print_metrics("max_idle_extensions")
+                                break
+                            continue
+                        else:  # "timeout"
+                            _print_metrics("idle_timeout")
+                            break
 
                     if total_elapsed > max_timeout:
                         print(
@@ -344,6 +695,45 @@ class CopilotBridgeConfig(BaseModel):
             Validated config with defaults for missing fields.
         """
         return cls.model_validate({k: v for k, v in kwargs.items() if k in cls.model_fields})
+
+
+# ---------------------------------------------------------------------------
+# Process health classifier models (host-side)
+# ---------------------------------------------------------------------------
+
+
+class ProcessHealth(StrEnum):
+    """Health classification for a running process."""
+
+    STUCK = "stuck"
+    WORKING = "working"
+    INDETERMINATE = "indeterminate"
+
+
+class ProcessClassification(BaseModel):
+    """Classification result for a single process."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pid: int
+    cmdline: str
+    state: str
+    health: ProcessHealth
+    reason: str
+    wchan: str
+    fd0_target: str
+
+
+class IdleDecision(BaseModel):
+    """Decision made when idle timeout fires."""
+
+    model_config = ConfigDict(frozen=True)
+
+    action: Literal["kill_stuck", "extend", "timeout"]
+    classifications: list[ProcessClassification]
+    in_flight_tools: list[str]
+    idle_seconds: float
+    total_seconds: float
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +994,15 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                             logger.info(
                                 "Copilot runner metrics: %s",
                                 json.dumps(metrics),
+                            )
+
+                        # Parse and log idle decision if present
+                        idle_decision = parse_idle_decision(result.stderr)
+                        if idle_decision:
+                            logger.info(
+                                "Copilot idle decision: action=%s classifications=%d",
+                                idle_decision.action,
+                                len(idle_decision.classifications),
                             )
 
                         if "COPILOT_RUNNER_IDLE_TIMEOUT" in result.stderr:

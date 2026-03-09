@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from inspect_ai.tool._mcp._config import MCPServerConfigHTTP
     from inspect_ai.util import SandboxEnvironment
 
+    from saber.agents.registry.copilot.solver import IdleDecision
+
 from saber.logging import get_logger
 
 logger = get_logger(__name__)
@@ -613,3 +615,33 @@ def parse_runner_metrics(stderr: str) -> dict[str, object] | None:
                 return None
 
     return None
+
+
+def parse_idle_decision(stderr: str) -> IdleDecision | None:
+    """Parse COPILOT_IDLE_DECISION JSON from runner stderr.
+
+    Searches for a line starting with ``COPILOT_IDLE_DECISION:`` and
+    parses the JSON payload into an :class:`IdleDecision` model.
+
+    Args:
+        stderr: Raw stderr from the runner subprocess.
+
+    Returns:
+        Parsed :class:`IdleDecision`, or ``None`` if not found or invalid.
+    """
+    if not stderr:
+        return None
+
+    from saber.agents.registry.copilot.solver import IdleDecision as _IdleDecision
+
+    last_decision: _IdleDecision | None = None
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("COPILOT_IDLE_DECISION:"):
+            json_str = stripped[len("COPILOT_IDLE_DECISION:") :].strip()
+            try:
+                data = json.loads(json_str)
+                last_decision = _IdleDecision.model_validate(data)
+            except (json.JSONDecodeError, ValueError):
+                logger.debug("Failed to parse COPILOT_IDLE_DECISION: %s", json_str[:200])
+    return last_decision
