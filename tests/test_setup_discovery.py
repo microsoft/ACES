@@ -194,13 +194,13 @@ class TestDiscoverSetupHooks:
 
         try:
             _discover_setup_hooks(
-                domain, benchmarks="a,b", force_download="true"
+                domain, dataset="ds_a", force_download="true"
             )
 
             from saber.task import _import_domain_module
 
             mod = _import_domain_module(domain, "setup")
-            assert mod.captured_kwargs["benchmarks"] == "a,b"  # type: ignore[attr-defined]
+            assert mod.captured_kwargs["dataset"] == "ds_a"  # type: ignore[attr-defined]
             assert mod.captured_kwargs["force_download"] == "true"  # type: ignore[attr-defined]
         finally:
             _clean_fake_modules("domain_kwargs_fwd")
@@ -262,6 +262,68 @@ class TestCreateTaskSetupHookIntegration:
             mock_discover.assert_called_once()
             assert mock_discover.call_args[0][0] == tmp_path
             mock_run.assert_called_once_with(mock_hooks, tmp_path)
+
+    def test_create_task_forwards_dataset_to_setup_hooks(
+        self, tmp_path: Path
+    ) -> None:
+        """create_task() forwards the dataset param to _discover_setup_hooks."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.hooks import SetupHooksResult
+
+        mock_hooks = [MagicMock()]
+        mock_result = SetupHooksResult(results=())
+
+        with (
+            patch(
+                "saber.setup_discovery._discover_setup_hooks",
+                return_value=mock_hooks,
+            ) as mock_discover,
+            patch(
+                "saber.hooks.run_setup_hooks", return_value=mock_result
+            ),
+            patch("saber.task._find_config_root") as mock_find_config,
+        ):
+            mock_find_config.side_effect = SystemExit("stop early")
+
+            with pytest.raises(SystemExit, match="stop early"):
+                from saber.task import create_task
+
+                create_task(domain_root=tmp_path, dataset="my_dataset")
+
+            # dataset should appear in the kwargs forwarded to setup hooks
+            _, call_kwargs = mock_discover.call_args
+            assert call_kwargs["dataset"] == "my_dataset"
+
+    def test_create_task_omits_dataset_from_hooks_when_none(
+        self, tmp_path: Path
+    ) -> None:
+        """When dataset is None, it is not injected into hook kwargs."""
+        from unittest.mock import patch
+
+        from saber.hooks import SetupHooksResult
+
+        mock_result = SetupHooksResult(results=())
+
+        with (
+            patch(
+                "saber.setup_discovery._discover_setup_hooks",
+                return_value=[],
+            ) as mock_discover,
+            patch(
+                "saber.hooks.run_setup_hooks", return_value=mock_result
+            ),
+            patch("saber.task._find_config_root") as mock_find_config,
+        ):
+            mock_find_config.side_effect = SystemExit("stop early")
+
+            with pytest.raises(SystemExit, match="stop early"):
+                from saber.task import create_task
+
+                create_task(domain_root=tmp_path)
+
+            _, call_kwargs = mock_discover.call_args
+            assert "dataset" not in call_kwargs
 
     def test_create_task_raises_on_hook_failure(
         self, tmp_path: Path

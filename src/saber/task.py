@@ -165,7 +165,13 @@ def create_task(
     from saber.hooks import run_setup_hooks
     from saber.setup_discovery import _discover_setup_hooks
 
-    hooks = _discover_setup_hooks(domain_root, **kwargs)
+    # Forward `dataset` into kwargs so setup hooks can scope downloads
+    # to only the data needed for the selected dataset.
+    setup_kwargs: dict[str, object] = dict(kwargs)
+    if dataset is not None:
+        setup_kwargs["dataset"] = dataset
+
+    hooks = _discover_setup_hooks(domain_root, **setup_kwargs)
     if hooks:
         hooks_result = run_setup_hooks(hooks, domain_root)
         if not hooks_result.all_succeeded:

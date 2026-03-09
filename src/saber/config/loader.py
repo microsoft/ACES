@@ -21,6 +21,9 @@ __all__ = ["ConfigLoader", "deep_merge", "load_domain_config", "merge_task_confi
 # in the global → shared → task config cascade.
 _REPLACE_KEYS: frozenset[str] = frozenset({"tools"})
 
+# Sentinel value for the *dataset* parameter: skip dataset filtering entirely.
+_DATASET_ALL: str = "all"
+
 
 def deep_merge(
     base: dict[str, object],
@@ -177,6 +180,7 @@ class ConfigLoader:
             dataset: Optional dataset name. When set, only tasks whose
                 ``dataset`` field matches are returned. Falls back to
                 ``default_dataset`` from ``global.yaml`` when ``None``.
+                Pass ``"all"`` to bypass dataset filtering entirely.
 
         Returns:
             List of fully-resolved :class:`TaskConfig` objects.
@@ -196,12 +200,13 @@ class ConfigLoader:
                 merged = merge_task_configs(global_defaults, shared, raw)
                 configs.append(TaskConfig(**merged))
 
-        # Resolve effective dataset: explicit param > global default > None (all tasks)
+        # Resolve effective dataset: explicit "all" > explicit name > global default > None
         effective_dataset = dataset
         if effective_dataset is None and isinstance(default_dataset_value, str):
             effective_dataset = default_dataset_value
 
-        if effective_dataset is not None:
+        # "all" is a sentinel — skip dataset filtering entirely
+        if effective_dataset is not None and effective_dataset != _DATASET_ALL:
             configs = [t for t in configs if t.dataset == effective_dataset]
 
         if task_filter is not None:

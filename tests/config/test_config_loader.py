@@ -1017,3 +1017,59 @@ class TestDatasetFiltering:
         # Verify no task carries a stray 'default_dataset' attribute
         for task in result:
             assert not hasattr(task, "default_dataset")
+
+    def test_dataset_all_returns_everything(self, tmp_path: Path) -> None:
+        """dataset='all' returns all tasks regardless of dataset field."""
+        defaults = _minimal_global_defaults()
+        defaults["default_dataset"] = "ds_a"
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": defaults},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                    _minimal_task("t3"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="all")
+        assert [t.task_id for t in result] == ["t1", "t2", "t3"]
+
+    def test_dataset_all_overrides_default(self, tmp_path: Path) -> None:
+        """dataset='all' overrides default_dataset from global.yaml."""
+        defaults = _minimal_global_defaults()
+        defaults["default_dataset"] = "ds_a"
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": defaults},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("t1", dataset="ds_a"),
+                    _minimal_task("t2", dataset="ds_b"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="all")
+        assert [t.task_id for t in result] == ["t1", "t2"]
+
+    def test_dataset_all_with_task_filter(self, tmp_path: Path) -> None:
+        """dataset='all' + task_filter still applies the task filter."""
+        defaults = _minimal_global_defaults()
+        defaults["default_dataset"] = "ds_a"
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={"global_defaults": defaults},
+            tasks={
+                "sub/tasks.yaml": [
+                    _minimal_task("linux_001", dataset="ds_a"),
+                    _minimal_task("linux_002", dataset="ds_b"),
+                    _minimal_task("aks_001", dataset="ds_a"),
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        result = loader.load_tasks(dataset="all", task_filter="linux_*")
+        assert [t.task_id for t in result] == ["linux_001", "linux_002"]

@@ -49,12 +49,16 @@ uv run python -c "from saber.task import create_task; print('✅ saber installed
 # List available tasks
 uv run inspect list tasks
 
-# Run with default react agent
+# Run with default react agent (uses the domain's default dataset)
 uv run inspect eval domains/excytin --model openai/azure/gpt-4.1
 
-# Filter tasks
+# Select a specific dataset
 uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
-  -T task_filter="incident_5*"
+  -T dataset=legacy_test_set
+
+# Dataset + task filter
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T dataset=latest_test_set -T task_filter="incident_5*"
 
 # Use copilot agent
 uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
@@ -209,12 +213,15 @@ Both copilot and claude_code use a sandbox bridge pattern:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `task_filter` | None | Glob or comma-separated task name filter |
+| `dataset` | From `global.yaml` | Select a named task group (preferred over `task_filter` for known sets) |
+| `task_filter` | None | Glob or comma-separated task name filter (applied after `dataset`) |
 | `agent` | `"react"` | Agent: `react`, `copilot`, `claude_code` |
 | `rebuild` | None | `"true"` = all images, `"name1,name2"` = specific |
 | `run_preflight` | `false` | Validate compose files before evaluation |
 | `keep_permanent` | `false` | Keep permanent Docker services alive after eval |
 | `score_aggregation` | From YAML | Override: `average`, `weighted_sum`, `max` |
+
+> **`dataset` vs `task_filter`:** Each domain defines a `default_dataset` in its `global.yaml`. Running without `-T dataset` automatically uses that default. Use `-T dataset=<name>` to switch between known task groups. Use `-T task_filter` only for ad-hoc name-pattern filtering. Both compose: dataset filters first, then task_filter narrows further. For domains with setup hooks (e.g., CRSBench), `dataset` also scopes data downloads to only the selected group.
 
 ### Docker
 
