@@ -14,10 +14,14 @@ if TYPE_CHECKING:
     from inspect_ai.tool import Tool
 
 
-def create_agent(**kwargs: object) -> Callable[..., Solver]:
+def create_agent(**_kwargs: object) -> Callable[..., Solver]:
     """Create a React agent factory with SABER integration.
 
     Returns a callable that accepts prompt kwargs and returns a Solver.
+
+    Extra ``**_kwargs`` from ``-T`` flags (e.g. ``build``, ``rebuild``)
+    are intentionally absorbed and ignored — they are infrastructure
+    parameters not relevant to agent construction.
     """
 
     def create_with_prompts(
@@ -38,7 +42,6 @@ def create_agent(**kwargs: object) -> Callable[..., Solver]:
             ),
             tools=resolved_tools,
             submit=False,
-            **kwargs,
         )
 
         return as_solver(agent)
