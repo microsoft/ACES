@@ -7,6 +7,7 @@ config loading) to run data downloads, task generation, etc.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from saber.hooks import SetupHook
@@ -16,7 +17,10 @@ from saber.task import _import_domain_module
 logger = get_logger(__name__)
 
 
-def _discover_setup_hooks(domain_root: Path, **kwargs: object) -> list[SetupHook]:
+def _discover_setup_hooks(
+    domain_root: Path,
+    kwargs: dict[str, object],
+) -> list[SetupHook]:
     """Auto-discover domain setup hooks.
 
     Looks for ``<domain_root>/setup.py`` with a
@@ -24,12 +28,13 @@ def _discover_setup_hooks(domain_root: Path, **kwargs: object) -> list[SetupHook
     and calls it, forwarding any extra keyword arguments (e.g. CLI ``-T``
     flags).
 
+    Named parameters consumed by ``get_hooks()`` are **popped** from
+    *kwargs* so they do not leak downstream (e.g. to the agent solver).
+
     Args:
         domain_root: Domain root directory.
-        **kwargs: Additional keyword arguments forwarded to the domain's
-            ``get_hooks()`` function.  If the function does not accept
-            ``**kwargs``, they are silently dropped for backward
-            compatibility.
+        kwargs: Mutable dict of extra keyword arguments.  Keys consumed
+            by the domain's ``get_hooks()`` are removed in-place.
 
     Returns:
         List of setup hooks, or empty list if none found.
@@ -43,14 +48,37 @@ def _discover_setup_hooks(domain_root: Path, **kwargs: object) -> list[SetupHook
     if factory is None:
         return []
 
+    # Determine which kwargs the factory consumes by inspecting its
+    # signature.  Named parameters (other than ``domain_root``) are
+    # extracted from *kwargs* and popped after a successful call.
+    sig = inspect.signature(factory)
+    consumed: dict[str, object] = {}
+    for name, param in sig.parameters.items():
+        if name == "domain_root":
+            continue
+        if (
+            param.kind
+            in (
+                inspect.Parameter.KEYWORD_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+            and name in kwargs
+        ):
+            consumed[name] = kwargs[name]
+
     try:
-        hooks: list[SetupHook] = factory(domain_root, **kwargs)
+        hooks: list[SetupHook] = factory(domain_root, **consumed)
     except TypeError:
         logger.warning(
-            "get_hooks() in %s does not accept **kwargs; calling without extra arguments",
+            "get_hooks() in %s does not accept named kwargs; calling without extra arguments",
             setup_file,
         )
         hooks = factory(domain_root)
+        consumed = {}
+
+    # Pop consumed keys so they don't leak to the agent solver
+    for key in consumed:
+        kwargs.pop(key, None)
 
     logger.debug("Auto-discovered %d setup hooks from %s", len(hooks), setup_file)
     return hooks

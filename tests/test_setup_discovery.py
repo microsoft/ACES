@@ -40,7 +40,7 @@ class TestDiscoverSetupHooks:
 
     def test_no_setup_py_returns_empty(self, tmp_path: Path) -> None:
         """Domain without setup.py returns no hooks."""
-        result = _discover_setup_hooks(tmp_path)
+        result = _discover_setup_hooks(tmp_path, {})
         assert result == []
 
     def test_setup_py_without_get_hooks_returns_empty(
@@ -55,7 +55,7 @@ class TestDiscoverSetupHooks:
         )
 
         try:
-            result = _discover_setup_hooks(domain)
+            result = _discover_setup_hooks(domain, {})
             assert result == []
         finally:
             _clean_fake_modules("domain_no_hooks")
@@ -82,7 +82,7 @@ class TestDiscoverSetupHooks:
         )
 
         try:
-            result = _discover_setup_hooks(domain)
+            result = _discover_setup_hooks(domain, {})
             assert len(result) == 1
             assert result[0].name == "test_hook"
         finally:
@@ -101,7 +101,7 @@ class TestDiscoverSetupHooks:
         )
 
         try:
-            result = _discover_setup_hooks(domain)
+            result = _discover_setup_hooks(domain, {})
             assert result == []
         finally:
             _clean_fake_modules("domain_empty_hooks")
@@ -165,7 +165,7 @@ class TestDiscoverSetupHooks:
         )
 
         try:
-            _discover_setup_hooks(domain)
+            _discover_setup_hooks(domain, {})
 
             # Import the module to check what was received
             from saber.task import _import_domain_module
@@ -178,7 +178,7 @@ class TestDiscoverSetupHooks:
     def test_discover_forwards_kwargs_to_get_hooks(
         self, tmp_path: Path
     ) -> None:
-        """get_hooks receives **kwargs forwarded from _discover_setup_hooks."""
+        """get_hooks receives named kwargs forwarded from _discover_setup_hooks."""
         domain = tmp_path / "domain_kwargs_fwd"
         domain.mkdir()
         (domain / "__init__.py").write_text("")
@@ -187,21 +187,24 @@ class TestDiscoverSetupHooks:
             "\n"
             "captured_kwargs: dict = {}\n"
             "\n"
-            "def get_hooks(domain_root: Path, **kwargs: object) -> list:\n"
-            "    captured_kwargs.update(kwargs)\n"
+            "def get_hooks(domain_root: Path, *, benchmarks: str | None = None, force_download: str | None = None) -> list:\n"
+            "    captured_kwargs['benchmarks'] = benchmarks\n"
+            "    captured_kwargs['force_download'] = force_download\n"
             "    return []\n"
         )
 
         try:
-            _discover_setup_hooks(
-                domain, dataset="ds_a", force_download="true"
-            )
+            extra = {"benchmarks": "a,b", "force_download": "true"}
+            _discover_setup_hooks(domain, extra)
 
             from saber.task import _import_domain_module
 
             mod = _import_domain_module(domain, "setup")
-            assert mod.captured_kwargs["dataset"] == "ds_a"  # type: ignore[attr-defined]
+            assert mod.captured_kwargs["benchmarks"] == "a,b"  # type: ignore[attr-defined]
             assert mod.captured_kwargs["force_download"] == "true"  # type: ignore[attr-defined]
+            # Consumed keys should be popped from the dict
+            assert "benchmarks" not in extra
+            assert "force_download" not in extra
         finally:
             _clean_fake_modules("domain_kwargs_fwd")
 
@@ -221,8 +224,11 @@ class TestDiscoverSetupHooks:
 
         try:
             # Should not raise, even though extra kwargs are passed
-            result = _discover_setup_hooks(domain, some_extra="value")
+            extra = {"some_extra": "value"}
+            result = _discover_setup_hooks(domain, extra)
             assert result == []
+            # Unknown kwargs should NOT be popped (not consumed by get_hooks)
+            assert "some_extra" in extra
         finally:
             _clean_fake_modules("domain_old_style")
 
@@ -291,9 +297,10 @@ class TestCreateTaskSetupHookIntegration:
 
                 create_task(domain_root=tmp_path, dataset="my_dataset")
 
-            # dataset should appear in the kwargs forwarded to setup hooks
-            _, call_kwargs = mock_discover.call_args
-            assert call_kwargs["dataset"] == "my_dataset"
+            # dataset should appear in the dict forwarded to setup hooks
+            call_args, _ = mock_discover.call_args
+            setup_kwargs_dict = call_args[1]
+            assert setup_kwargs_dict["dataset"] == "my_dataset"
 
     def test_create_task_omits_dataset_from_hooks_when_none(
         self, tmp_path: Path
@@ -322,8 +329,9 @@ class TestCreateTaskSetupHookIntegration:
 
                 create_task(domain_root=tmp_path)
 
-            _, call_kwargs = mock_discover.call_args
-            assert "dataset" not in call_kwargs
+            call_args, _ = mock_discover.call_args
+            setup_kwargs_dict = call_args[1]
+            assert "dataset" not in setup_kwargs_dict
 
     def test_create_task_raises_on_hook_failure(
         self, tmp_path: Path

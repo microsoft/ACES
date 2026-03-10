@@ -180,7 +180,7 @@ def create_task(
     if dataset is not None:
         setup_kwargs["dataset"] = dataset
 
-    hooks = _discover_setup_hooks(domain_root, **setup_kwargs)
+    hooks = _discover_setup_hooks(domain_root, setup_kwargs)
     if hooks:
         hooks_result = run_setup_hooks(hooks, domain_root)
         if not hooks_result.all_succeeded:
