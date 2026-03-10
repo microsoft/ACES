@@ -165,11 +165,13 @@ def _build_metadata(task: TaskConfig, rendered_prompts: dict[str, str]) -> dict[
     Returns:
         A metadata dictionary with all task configuration fields.
     """
+    ctx_dump = task.initial_context.model_dump()
+
     common: dict[str, object] = {
         "task_id": task.task_id,
         "title": task.title,
         "description": task.description,
-        "initial_context": task.initial_context.model_dump(),
+        "initial_context": ctx_dump,
         "prompts": task.prompts.model_dump(),
         "tools": {k: v.model_dump() for k, v in task.tools.items()},
         "max_steps": task.max_steps,
@@ -182,5 +184,14 @@ def _build_metadata(task: TaskConfig, rendered_prompts: dict[str, str]) -> dict[
     common["scoring_aggregation"] = (
         task.scoring_aggregation.model_dump() if task.scoring_aggregation is not None else None
     )
+
+    # Promote all string-valued initial_context keys to top-level metadata.
+    # This allows compose env var interpolation via SAMPLE_METADATA_* keys
+    # (resolve_config_environment only reads top-level metadata keys).
+    # Non-string values (dicts, ints, bools) are skipped — only strings
+    # are useful as Docker Compose environment variable values.
+    for key, value in ctx_dump.items():
+        if isinstance(value, str) and key not in common:
+            common[key] = value
 
     return common

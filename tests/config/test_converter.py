@@ -19,6 +19,7 @@ from saber.config.converter import (
 from saber.config.models import (
     AggregationConfig,
     DomainCriteria,
+    InitialContext,
     LLMJudgeCriteria,
     PromptPaths,
     ScoreAggregation,
@@ -724,3 +725,60 @@ class TestPromptFieldMap:
 
         for raw_key in rendered:
             assert raw_key in _PROMPT_FIELD_MAP, f"Key {raw_key!r} not in field map"
+
+
+# ── 2.3 — _build_metadata initial_context promotion ─────────────────
+
+
+class TestBuildMetadataPromotion:
+    """Tests for _build_metadata() initial_context key promotion."""
+
+    def test_string_values_promoted_to_top_level(self) -> None:
+        task = TaskConfig(
+            task_id="promo_test",
+            title="Promo",
+            description="test",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                project="test",
+                benchmark_image="saber/crsbench/benchmark:test-delta-01",
+            ),
+        )
+        metadata = _build_metadata(task, {})
+        assert metadata["benchmark_image"] == "saber/crsbench/benchmark:test-delta-01"
+        assert metadata["initial_context"]["benchmark_image"] == "saber/crsbench/benchmark:test-delta-01"
+
+    def test_non_string_values_not_promoted(self) -> None:
+        task = TaskConfig(
+            task_id="promo_test",
+            title="Promo",
+            description="test",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                project="test",
+                nested={"key": "value"},
+                count=42,
+                flag=True,
+            ),
+        )
+        metadata = _build_metadata(task, {})
+        assert "nested" not in metadata  # dict not promoted
+        assert "count" not in metadata  # int not promoted
+        assert "flag" not in metadata  # bool not promoted
+        assert metadata["initial_context"]["nested"] == {"key": "value"}  # still in context
+        assert metadata["initial_context"]["count"] == 42
+        assert metadata["initial_context"]["flag"] is True
+
+    def test_existing_keys_not_overwritten(self) -> None:
+        task = TaskConfig(
+            task_id="promo_test",
+            title="Promo",
+            description="test description",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                project="test",
+                title="should not overwrite",  # 'title' already in common
+            ),
+        )
+        metadata = _build_metadata(task, {})
+        assert metadata["title"] == "Promo"  # original preserved
