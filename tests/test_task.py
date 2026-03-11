@@ -157,13 +157,12 @@ class TestCreateTask:
 
         assert task.time_limit == 3600
 
-    def test_task_has_high_max_retries(self, tmp_path: Path) -> None:
-        """create_task overrides the bridge's hardcoded max_retries=3.
+    def test_task_has_unlimited_retries(self, tmp_path: Path) -> None:
+        """create_task sets max_retries=None for unlimited retry.
 
-        inspect_ai's bridge completions handler hardcodes max_retries=3,
-        causing transient 429 rate-limit errors to exhaust retries after
-        only 3 attempts.  The Task config must set a high max_retries to
-        survive rate-limit bursts via exponential backoff.
+        With max_retries=None, inspect_ai's tenacity retry loop uses
+        stop_never, providing unlimited attempts with exponential backoff
+        so samples survive prolonged rate-limit bursts.
         """
         _write_minimal_domain(tmp_path)
 
@@ -177,7 +176,7 @@ class TestCreateTask:
             )
 
         assert task.config is not None
-        assert task.config.max_retries == 100
+        assert task.config.max_retries is None
 
     def test_task_has_samples(self, tmp_path: Path) -> None:
         """The returned Task has the expected samples from YAML."""
