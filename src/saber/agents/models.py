@@ -12,6 +12,7 @@ class AgentPromptKwargs(TypedDict, total=False):
 
     instruction_prompt: str
     assistant_prompt: str
+    max_steps: int  # Tool-call limit for graceful stop
 
 
 class AgentCapabilities(BaseModel):

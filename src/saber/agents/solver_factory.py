@@ -8,6 +8,7 @@ from inspect_ai.model import ChatMessageUser, get_model
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util._limit import LimitExceededError
 
+from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
 from saber.agents.models import AgentCapabilities, AgentPromptKwargs
 from saber.config.models import ToolConfig
 from saber.logging import get_logger
@@ -15,13 +16,8 @@ from saber.tools.registry import ResolvedTools, ToolRegistry
 
 logger = get_logger(__name__)
 
-# Message injected when the tool call limit is reached, giving the agent
-# one final chance to produce an answer without tools.
-TOOL_CALL_LIMIT_MESSAGE = (
-    "IMPORTANT: You have reached the tool call limit. You cannot use "
-    "any more tools. Please provide your final answer immediately as "
-    "plain text in your next response."
-)
+# Re-export so existing imports (tests, etc.) continue to work.
+__all__ = ["TOOL_CALL_LIMIT_MESSAGE", "create_saber_solver"]
 
 # Agent capabilities — gates which kwargs are forwarded to each agent.
 # Unknown agents fall back to the default AgentCapabilities() (supports_tools=True).
@@ -74,7 +70,8 @@ def create_saber_solver(
             # Per-sample max_steps from metadata
             per_sample_max_steps = metadata.get("max_steps")
             if isinstance(per_sample_max_steps, int) and per_sample_max_steps > 0:
-                state.tool_call_limit = per_sample_max_steps
+                state.tool_call_limit = per_sample_max_steps  # safety net
+                agent_kwargs["max_steps"] = per_sample_max_steps  # forwarded to agent
 
             # Per-sample tool resolution from metadata
             resolved: ResolvedTools | None = None

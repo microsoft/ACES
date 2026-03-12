@@ -19,8 +19,8 @@ if TYPE_CHECKING:
     from inspect_ai.tool._mcp._config import MCPServerConfigHTTP
     from inspect_ai.util import SandboxEnvironment
 
-    from saber.agents.registry.copilot.solver import IdleDecision
     from saber.agents.bridge_tracking_models import BridgeSessionSummary
+    from saber.agents.registry.copilot.solver import IdleDecision
 
 from saber.logging import get_logger
 
@@ -413,7 +413,12 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
         no-arg callable that raises ``LimitExceededError`` if the limit
         was hit during the bridge session.
     """
-    from inspect_ai.model import ChatMessageAssistant, ChatMessageUser
+    from inspect_ai.model import ChatMessageUser
+
+    from saber.agents.message_utils import (
+        TOOL_CALL_LIMIT_MESSAGE,
+        count_tool_calls,
+    )
 
     _recorded_count: int = 0
     _limit_exceeded: bool = False
@@ -423,12 +428,6 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
     # the real model generate text.
     _GRACE_GENERATIONS: int = 1
     _grace_remaining: int = 0
-
-    _LIMIT_MESSAGE = (
-        "IMPORTANT: You have reached the tool call limit. You cannot use "
-        "any more tools. Please provide your final answer immediately as "
-        "plain text in your next response."
-    )
 
     async def _filter(
         model: object,
@@ -446,7 +445,7 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
         )
 
         # Count total tool calls across all assistant messages
-        total = sum(len(m.tool_calls) for m in messages if isinstance(m, ChatMessageAssistant) and m.tool_calls)
+        total = count_tool_calls(messages)
 
         # If limit was already hit, handle grace/hard-stop BEFORE
         # the delta block so grace does not reset infinitely (Bug 3).
@@ -506,7 +505,7 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
                 from saber.agents.message_utils import patch_orphaned_tool_calls
 
                 patch_orphaned_tool_calls(messages)
-                messages.append(ChatMessageUser(content=_LIMIT_MESSAGE))
+                messages.append(ChatMessageUser(content=TOOL_CALL_LIMIT_MESSAGE))
                 return GenerateInput(  # type: ignore[no-any-return]
                     input=messages,
                     tools=[],

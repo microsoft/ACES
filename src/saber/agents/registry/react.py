@@ -28,12 +28,22 @@ def create_agent(**_kwargs: object) -> Callable[..., Solver]:
         instruction_prompt: str = "",
         assistant_prompt: str = "",
         tools: Sequence[Tool] | None = None,
+        max_steps: int | None = None,
         **extra_kwargs: object,
     ) -> Solver:
         from inspect_ai.agent import AgentPrompt, as_solver, react
         from inspect_ai.tool import bash, python
 
         resolved_tools: list[Tool] = list(tools) if tools else [bash(), python()]
+
+        # Graceful limit agent — wraps model generation to strip tools
+        # when the count reaches max_steps, instead of letting
+        # execute_tools() raise LimitExceededError abruptly.
+        model_agent = None
+        if isinstance(max_steps, int) and max_steps > 0:
+            from saber.agents.react_limit import create_react_limit_agent
+
+            model_agent = create_react_limit_agent(tool_call_limit=max_steps)
 
         agent = react(
             prompt=AgentPrompt(
@@ -42,6 +52,7 @@ def create_agent(**_kwargs: object) -> Callable[..., Solver]:
             ),
             tools=resolved_tools,
             submit=False,
+            model=model_agent,
         )
 
         return as_solver(agent)

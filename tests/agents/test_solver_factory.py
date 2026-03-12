@@ -597,6 +597,104 @@ class TestToolCallLimitRecovery:
         assert state.output is fake_output
         assert result is state
 
+
+class TestToolCallLimitMessageReExport:
+    """TOOL_CALL_LIMIT_MESSAGE is re-exported from solver_factory for backwards compat."""
+
+    def test_importable_from_solver_factory(self) -> None:
+        """TOOL_CALL_LIMIT_MESSAGE can be imported from solver_factory."""
+        from saber.agents.solver_factory import TOOL_CALL_LIMIT_MESSAGE
+
+        assert isinstance(TOOL_CALL_LIMIT_MESSAGE, str)
+        assert "tool call limit" in TOOL_CALL_LIMIT_MESSAGE.lower()
+
+    def test_matches_message_utils_constant(self) -> None:
+        """solver_factory's TOOL_CALL_LIMIT_MESSAGE matches message_utils."""
+        from saber.agents.message_utils import (
+            TOOL_CALL_LIMIT_MESSAGE as ORIGINAL,
+        )
+        from saber.agents.solver_factory import (
+            TOOL_CALL_LIMIT_MESSAGE as REEXPORT,
+        )
+
+        assert ORIGINAL == REEXPORT
+
+
+class TestMaxStepsForwarding:
+    """max_steps is forwarded in agent_kwargs when present in metadata."""
+
+    @pytest.mark.asyncio
+    async def test_max_steps_forwarded_in_agent_kwargs(self) -> None:
+        """When metadata has max_steps, it is forwarded in agent_kwargs."""
+        captured_prompt_kwargs: list[dict[str, object]] = []
+
+        def mock_factory(**kw: object) -> object:
+            def create_with_prompts(**prompt_kwargs: object) -> object:
+                captured_prompt_kwargs.append(dict(prompt_kwargs))
+                return AsyncMock(return_value=MagicMock())
+
+            return create_with_prompts
+
+        solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
+
+        state = MagicMock()
+        state.metadata = {"max_steps": 25}
+        generate = MagicMock()
+
+        await solver(state, generate)
+
+        assert len(captured_prompt_kwargs) == 1
+        assert captured_prompt_kwargs[0].get("max_steps") == 25
+
+    @pytest.mark.asyncio
+    async def test_max_steps_not_forwarded_when_absent(self) -> None:
+        """When metadata has no max_steps, it is NOT in agent_kwargs."""
+        captured_prompt_kwargs: list[dict[str, object]] = []
+
+        def mock_factory(**kw: object) -> object:
+            def create_with_prompts(**prompt_kwargs: object) -> object:
+                captured_prompt_kwargs.append(dict(prompt_kwargs))
+                return AsyncMock(return_value=MagicMock())
+
+            return create_with_prompts
+
+        solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
+
+        state = MagicMock()
+        state.metadata = {}
+        generate = MagicMock()
+
+        await solver(state, generate)
+
+        assert len(captured_prompt_kwargs) == 1
+        assert "max_steps" not in captured_prompt_kwargs[0]
+
+    @pytest.mark.asyncio
+    async def test_max_steps_not_forwarded_when_invalid(self) -> None:
+        """When max_steps is invalid (0, negative, string), it is NOT forwarded."""
+        for bad_value in [0, -5, "ten", None]:
+            captured_prompt_kwargs: list[dict[str, object]] = []
+
+            def mock_factory(**kw: object) -> object:
+                _cap = captured_prompt_kwargs  # bind for closure
+
+                def create_with_prompts(**prompt_kwargs: object) -> object:
+                    _cap.append(dict(prompt_kwargs))
+                    return AsyncMock(return_value=MagicMock())
+
+                return create_with_prompts
+
+            solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
+
+            state = MagicMock()
+            state.metadata = {"max_steps": bad_value}
+            generate = MagicMock()
+
+            await solver(state, generate)
+
+            assert "max_steps" not in captured_prompt_kwargs[0], (
+                f"max_steps should not be forwarded for value={bad_value!r}"
+            )
     @pytest.mark.asyncio
     async def test_limit_exceeded_appends_assistant_message(self) -> None:
         """The model's response message is appended to state.messages."""

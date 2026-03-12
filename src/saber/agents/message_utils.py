@@ -15,6 +15,27 @@ from saber.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Shared message injected when the tool call limit is reached.
+TOOL_CALL_LIMIT_MESSAGE = (
+    "IMPORTANT: You have reached the tool call limit. You cannot use "
+    "any more tools. Please provide your final answer immediately as "
+    "plain text in your next response."
+)
+
+
+def count_tool_calls(messages: list[ChatMessage]) -> int:
+    """Count total tool calls across all assistant messages.
+
+    Args:
+        messages: Conversation message list.
+
+    Returns:
+        Total number of tool calls found.
+    """
+    from inspect_ai.model import ChatMessageAssistant
+
+    return sum(len(m.tool_calls) for m in messages if isinstance(m, ChatMessageAssistant) and m.tool_calls)
+
 
 def patch_orphaned_tool_calls(messages: list[ChatMessage]) -> None:
     """Inject dummy ``ChatMessageTool`` results for orphaned tool calls.

@@ -163,3 +163,100 @@ class TestPatchOrphanedToolCalls:
         tool_msgs = [m for m in messages if isinstance(m, ChatMessageTool)]
         ids = [m.tool_call_id for m in tool_msgs]
         assert ids == ["a_call", "m_call", "z_call"]
+
+
+class TestCountToolCalls:
+    """count_tool_calls counts tool calls across assistant messages."""
+
+    def test_empty_list_returns_zero(self) -> None:
+        """Empty message list returns 0."""
+        from saber.agents.message_utils import count_tool_calls
+
+        assert count_tool_calls([]) == 0
+
+    def test_only_user_messages_returns_zero(self) -> None:
+        """User-only messages return 0 tool calls."""
+        from inspect_ai.model import ChatMessageUser
+
+        from saber.agents.message_utils import count_tool_calls
+
+        messages = [ChatMessageUser(content="hello"), ChatMessageUser(content="world")]
+        assert count_tool_calls(messages) == 0
+
+    def test_one_assistant_with_tool_calls(self) -> None:
+        """Single assistant with 3 tool calls returns 3."""
+        from inspect_ai.model import ChatMessageAssistant
+        from inspect_ai.tool import ToolCall
+
+        from saber.agents.message_utils import count_tool_calls
+
+        messages = [
+            ChatMessageAssistant(
+                content="running",
+                tool_calls=[
+                    ToolCall(id="c1", function="bash", arguments={}, type="function"),
+                    ToolCall(id="c2", function="bash", arguments={}, type="function"),
+                    ToolCall(id="c3", function="report", arguments={}, type="function"),
+                ],
+            ),
+        ]
+        assert count_tool_calls(messages) == 3
+
+    def test_multiple_assistants_sums_all(self) -> None:
+        """Multiple assistant messages sum all tool calls."""
+        from inspect_ai.model import ChatMessageAssistant, ChatMessageUser
+        from inspect_ai.tool import ToolCall
+
+        from saber.agents.message_utils import count_tool_calls
+
+        messages = [
+            ChatMessageAssistant(
+                content="step 1",
+                tool_calls=[
+                    ToolCall(id="a1", function="bash", arguments={}, type="function"),
+                ],
+            ),
+            ChatMessageUser(content="ok"),
+            ChatMessageAssistant(
+                content="step 2",
+                tool_calls=[
+                    ToolCall(id="b1", function="bash", arguments={}, type="function"),
+                    ToolCall(id="b2", function="bash", arguments={}, type="function"),
+                ],
+            ),
+        ]
+        assert count_tool_calls(messages) == 3
+
+    def test_ignores_assistants_without_tool_calls(self) -> None:
+        """Assistants without tool_calls are ignored."""
+        from inspect_ai.model import ChatMessageAssistant
+        from inspect_ai.tool import ToolCall
+
+        from saber.agents.message_utils import count_tool_calls
+
+        messages = [
+            ChatMessageAssistant(content="thinking..."),
+            ChatMessageAssistant(
+                content="now acting",
+                tool_calls=[
+                    ToolCall(id="a1", function="bash", arguments={}, type="function"),
+                ],
+            ),
+        ]
+        assert count_tool_calls(messages) == 1
+
+
+class TestToolCallLimitMessageConstant:
+    """TOOL_CALL_LIMIT_MESSAGE has required content."""
+
+    def test_contains_tool_call_limit(self) -> None:
+        """Message mentions 'tool call limit'."""
+        from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
+
+        assert "tool call limit" in TOOL_CALL_LIMIT_MESSAGE.lower()
+
+    def test_contains_final_answer(self) -> None:
+        """Message mentions 'final answer'."""
+        from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
+
+        assert "final answer" in TOOL_CALL_LIMIT_MESSAGE.lower()
