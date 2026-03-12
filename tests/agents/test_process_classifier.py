@@ -26,14 +26,45 @@ def _load_runner_functions() -> dict[str, object]:
 
     Executes everything before ``async def main`` so constants and
     module-level functions are available in the returned namespace.
-    """
-    from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
 
-    main_idx = RUNNER_SCRIPT.index("async def main")
-    preamble = RUNNER_SCRIPT[:main_idx]
-    namespace: dict[str, object] = {"__builtins__": __builtins__}
-    exec(compile(preamble, "<runner>", "exec"), namespace)  # noqa: S102
-    return namespace
+    A stub ``copilot`` package is injected into ``sys.modules`` so the
+    script's ``from copilot.types import PermissionRequestResult`` succeeds
+    even when the real SDK is not installed.
+    """
+    import sys
+    import types
+
+    # Stub the copilot SDK so the import inside RUNNER_SCRIPT succeeds.
+    _copilot_stub = types.ModuleType("copilot")
+    _copilot_types_stub = types.ModuleType("copilot.types")
+    _copilot_types_stub.PermissionRequestResult = type(  # type: ignore[attr-defined]
+        "PermissionRequestResult", (), {}
+    )
+    _copilot_stub.types = _copilot_types_stub  # type: ignore[attr-defined]
+
+    prev_copilot = sys.modules.get("copilot")
+    prev_copilot_types = sys.modules.get("copilot.types")
+    sys.modules["copilot"] = _copilot_stub
+    sys.modules["copilot.types"] = _copilot_types_stub
+
+    try:
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        main_idx = RUNNER_SCRIPT.index("async def main")
+        preamble = RUNNER_SCRIPT[:main_idx]
+        namespace: dict[str, object] = {"__builtins__": __builtins__}
+        exec(compile(preamble, "<runner>", "exec"), namespace)  # noqa: S102
+        return namespace
+    finally:
+        # Restore original module state to avoid leaking stubs.
+        if prev_copilot is None:
+            sys.modules.pop("copilot", None)
+        else:
+            sys.modules["copilot"] = prev_copilot
+        if prev_copilot_types is None:
+            sys.modules.pop("copilot.types", None)
+        else:
+            sys.modules["copilot.types"] = prev_copilot_types
 
 
 # Cache the namespace so we don't recompile for every test

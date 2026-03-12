@@ -40,6 +40,20 @@ def _reset_sandbox() -> None:
     os.environ.pop("SABER_PROJECT", None)
 
 
+@pytest.fixture()
+def _enable_saber_log_propagation() -> None:  # type: ignore[misc]
+    """Ensure saber logger propagates to root so caplog captures records.
+
+    configure_logging() may disable propagation when running without
+    inspect_ai, which breaks caplog assertions in full-suite runs.
+    """
+    saber_logger = logging.getLogger("saber")
+    original = saber_logger.propagate
+    saber_logger.propagate = True
+    yield  # type: ignore[misc]
+    saber_logger.propagate = original
+
+
 class TestSetKeepPermanent:
     """set_keep_permanent configures keep-alive behavior."""
 
@@ -1297,6 +1311,7 @@ class TestCleanupStaleContainers:
             await _cleanup_stale_containers("excytin")
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_enable_saber_log_propagation")
     async def test_errors_are_logged_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """Exceptions during cleanup produce a warning log."""
         with patch(
@@ -1338,6 +1353,7 @@ class TestCleanupStaleContainers:
         assert "status=dead" in status_filters
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_enable_saber_log_propagation")
     async def test_logs_warning_when_stale_found(self, caplog: pytest.LogCaptureFixture) -> None:
         """A warning is logged when stale containers are found and removed."""
         old_ts = self._old_timestamp(minutes=10)
@@ -1608,6 +1624,7 @@ class TestRemoveConflictingContainers:
         assert result is True
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("_enable_saber_log_propagation")
     async def test_logs_warning_on_removal(self, caplog: pytest.LogCaptureFixture) -> None:
         """A warning is logged when stale conflicting containers are removed."""
         old_ts = self._old_iso_timestamp(minutes=10)

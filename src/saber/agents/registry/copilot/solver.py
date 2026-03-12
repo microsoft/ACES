@@ -623,6 +623,11 @@ async def main() -> int:
                                 break
                             continue
                         else:  # "timeout"
+                            print(
+                                f"COPILOT_RUNNER_IDLE_TIMEOUT: No activity for "
+                                f"{idle_elapsed:.0f}s (limit: {idle_timeout}s)",
+                                file=sys.stderr,
+                            )
                             _print_metrics("idle_timeout")
                             break
 

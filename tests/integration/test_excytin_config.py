@@ -88,8 +88,8 @@ class TestConfigLoaderLoadsExcytinTasks:
             assert isinstance(task_cfg.task_id, str)
 
     def test_task_count_above_minimum(self, all_tasks: list[TaskConfig]) -> None:
-        """Excytin should have at least 2000 tasks across all incident sets."""
-        assert len(all_tasks) >= 2000
+        """Excytin default dataset (latest_test_set) should have ≥500 tasks."""
+        assert len(all_tasks) >= 500
 
 
 # ── Test 2: Specific task loads with correct fields ─────────────────
