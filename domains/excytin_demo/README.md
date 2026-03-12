@@ -68,6 +68,29 @@ Agents have access to containerized tools via MCP:
 - Docker and Docker Compose
 - Azure OpenAI API credentials configured in `.env`
 
+### Data Setup
+
+The forensic database data is distributed as a zip archive (`data.zip`) and must be extracted before running the domain. Download or locate `data.zip` in the `domains/excytin_demo/` directory, then extract it in place with `unzip data.zip -d .` from within `domains/excytin_demo/` — this will create the `data/` folder containing the SQL dumps and incident artifacts required by the database Docker image.
+
+After extraction, the `data/` directory should look like this:
+
+```
+data/
+├── csv_files/
+│   └── incident_5/
+│       ├── AADManagedIdentitySignInLogs.csv
+│       ├── AADManagedIdentitySignInLogs.meta
+│       ├── DeviceEvents.csv
+│       ├── DeviceEvents.meta
+│       ├── ...                          # 38 CSV + 38 META files total
+│       └── UrlClickEvents.meta
+├── evaluations/
+│   └── <session-uuid>/
+│       └── incident_5_task_N/           # Reference evaluation results
+└── sql_files/
+    └── incident_5.sql                   # SQL dump loaded by the DB container
+```
+
 ### Running the Domain
 
 **This domain has been migrated to Inspect AI integration.** It's now available as a built-in domain in SABER installations.
