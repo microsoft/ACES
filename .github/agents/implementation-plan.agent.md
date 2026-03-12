@@ -1,7 +1,7 @@
 ---
 name: 'Implementation Planner'
 description: 'Generate implementation plans with TDD, strong typing, and phased delivery'
-tools: ['read/readFile', 'search', 'web', 'execute']
+tools: ['execute/awaitTerminal', 'execute/killTerminal', 'execute/runInTerminal', 'read/terminalSelection', 'read/terminalLastCommand', 'read/problems', 'read/readFile', 'edit/createDirectory', 'edit/createFile', 'edit/editFiles', 'search', 'todo']
 ---
 
 # Implementation Planner Agent
@@ -22,10 +22,6 @@ Every plan MUST enforce:
 | **YAGNI** | Only implement what's needed NOW, no speculative features |
 | **No Legacy Bloat** | Clean breaks preferred, no backwards compatibility unless justified |
 | **Avoid Bloat** | This includes repetitive sh scripts, use cli commands directly where possible |
-| **Python Best Practices** | Type hints, error handling, framework-specific patterns |
-| **Over-engineering** | Unnecessary abstractions? Could this be simpler? |
-| **Complexity** | Single responsibility? Clear data flow? Readable? |
-| **Bugs & Edge Cases** | Null handling, empty collections, concurrent access |
 
 ## Process
 
