@@ -166,11 +166,25 @@ class ImageBuildResult(BaseModel):
 class ImageBuildError(Exception):
     """Raised when a Docker image build fails."""
 
-    def __init__(self, tag: str, stderr: str, returncode: int) -> None:
+    def __init__(self, tag: str, stderr: str, returncode: int, stdout: str = "") -> None:
         self.tag = tag
         self.stderr = stderr
+        self.stdout = stdout
         self.returncode = returncode
-        super().__init__(f"Failed to build {tag} (exit {returncode}): {stderr}")
+        # Combine stdout and stderr for a complete picture — Docker
+        # (especially BuildKit) sends build output to stdout.
+        combined = ""
+        if stdout and stdout.strip():
+            combined += stdout.strip()
+        if stderr and stderr.strip():
+            if combined:
+                combined += "\n"
+            combined += stderr.strip()
+        if combined:
+            msg = f"Failed to build {tag} (exit {returncode}):\n{combined}"
+        else:
+            msg = f"Failed to build {tag} (exit {returncode}): (no output captured)"
+        super().__init__(msg)
 
 
 # ── Async helpers ────────────────────────────────────────────────────
@@ -236,17 +250,30 @@ async def build_image(
 
     cmd.append(str(context))
 
+    logger.info("Running: %s", " ".join(cmd))
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    _, stderr_bytes = await proc.communicate()
+    stdout_bytes, stderr_bytes = await proc.communicate()
 
     if proc.returncode != 0:
+        stdout_text = stdout_bytes.decode(errors="replace")
+        stderr_text = stderr_bytes.decode(errors="replace")
+        # Log full build output so it's always available in logs
+        logger.error(
+            "Docker build failed for %s (exit %d)\n--- stdout ---\n%s\n--- stderr ---\n%s",
+            tag,
+            proc.returncode,
+            stdout_text or "(empty)",
+            stderr_text or "(empty)",
+        )
         raise ImageBuildError(
             tag=tag,
-            stderr=stderr_bytes.decode(errors="replace"),
+            stderr=stderr_text,
+            stdout=stdout_text,
             returncode=proc.returncode if proc.returncode is not None else -1,
         )
 
@@ -339,11 +366,11 @@ class PreflightBuildError(RuntimeError):
         for r in failed_results:
             lines.append(f"--- {r.name} ({r.tag}) ---")
             if r.error:
-                # Show last ~20 lines of Docker build output to keep it readable
+                # Show last ~40 lines of Docker build output to keep it readable
                 error_lines = r.error.strip().splitlines()
-                if len(error_lines) > 20:
-                    lines.append(f"  ... ({len(error_lines) - 20} lines truncated)")
-                    error_lines = error_lines[-20:]
+                if len(error_lines) > 40:
+                    lines.append(f"  ... ({len(error_lines) - 40} lines truncated)")
+                    error_lines = error_lines[-40:]
                 for el in error_lines:
                     lines.append(f"  {el}")
             else:
