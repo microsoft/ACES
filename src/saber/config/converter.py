@@ -75,6 +75,7 @@ def _task_to_sample(
         metadata=_build_metadata(task, rendered_prompts),
         sandbox=_resolve_sandbox(task, domain_root),
         files=_resolve_files(task, domain_root),
+        setup=task.setup,
     )
 
 

@@ -12,7 +12,6 @@ from pathlib import Path
 
 from saber.hooks import SetupHook
 from saber.logging import get_logger
-from saber.task import _import_domain_module
 
 logger = get_logger(__name__)
 
@@ -42,6 +41,8 @@ def _discover_setup_hooks(
     setup_file = domain_root / "setup.py"
     if not setup_file.is_file():
         return []
+
+    from saber.task import _import_domain_module
 
     module = _import_domain_module(domain_root, "setup")
     factory = getattr(module, "get_hooks", None)
@@ -82,3 +83,45 @@ def _discover_setup_hooks(
 
     logger.debug("Auto-discovered %d setup hooks from %s", len(hooks), setup_file)
     return hooks
+
+
+def _discover_task_filter(
+    domain_root: Path,
+    dataset: str,
+) -> str | None:
+    """Discover a domain-specific task filter for a dataset name.
+
+    Looks for ``get_task_filter(dataset: str) -> str | None`` in the
+    domain's ``setup.py``.  Returns the filter string if found, or
+    ``None`` if the function doesn't exist or returns ``None``.
+
+    Note: Reuses the already-imported setup module from ``sys.modules``
+    cache (``_import_domain_module`` was called earlier by
+    ``_discover_setup_hooks``).  No redundant file I/O.
+
+    Args:
+        domain_root: Domain root directory.
+        dataset: Dataset name to resolve (e.g. ``"lite"``).
+
+    Returns:
+        Task filter string, or ``None``.
+    """
+    setup_file = domain_root / "setup.py"
+    if not setup_file.is_file():
+        return None
+
+    from saber.task import _import_domain_module
+
+    module = _import_domain_module(domain_root, "setup")
+    func = getattr(module, "get_task_filter", None)
+    if func is None:
+        return None
+
+    result: str | None = func(dataset)
+    if result is not None:
+        logger.debug(
+            "Dataset '%s' resolved to task_filter via get_task_filter(): %s...",
+            dataset,
+            result[:80],
+        )
+    return result

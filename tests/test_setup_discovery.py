@@ -25,7 +25,10 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules["saber.setup_discovery"] = _mod
 _spec.loader.exec_module(_mod)
 
-from saber.setup_discovery import _discover_setup_hooks  # noqa: E402
+from saber.setup_discovery import (  # noqa: E402
+    _discover_setup_hooks,
+    _discover_task_filter,
+)
 
 
 def _clean_fake_modules(domain_name: str) -> None:
@@ -280,11 +283,18 @@ class TestCreateTaskSetupHookIntegration:
         mock_hooks = [MagicMock()]
         mock_result = SetupHooksResult(results=())
 
+        # Capture kwargs snapshot at call time (before pop removes dataset)
+        captured_kwargs: dict[str, object] = {}
+
+        def capture_discover(domain_root: object, kwargs: dict[str, object]) -> list[object]:
+            captured_kwargs.update(kwargs)
+            return mock_hooks
+
         with (
             patch(
                 "saber.setup_discovery._discover_setup_hooks",
-                return_value=mock_hooks,
-            ) as mock_discover,
+                side_effect=capture_discover,
+            ),
             patch(
                 "saber.hooks.run_setup_hooks", return_value=mock_result
             ),
@@ -297,10 +307,8 @@ class TestCreateTaskSetupHookIntegration:
 
                 create_task(domain_root=tmp_path, dataset="my_dataset")
 
-            # dataset should appear in the dict forwarded to setup hooks
-            call_args, _ = mock_discover.call_args
-            setup_kwargs_dict = call_args[1]
-            assert setup_kwargs_dict["dataset"] == "my_dataset"
+            # dataset should have been present in the dict at call time
+            assert captured_kwargs["dataset"] == "my_dataset"
 
     def test_create_task_omits_dataset_from_hooks_when_none(
         self, tmp_path: Path
@@ -391,3 +399,69 @@ class TestCreateTaskSetupHookIntegration:
                 create_task(domain_root=tmp_path)
 
             mock_run.assert_not_called()
+
+
+class TestDiscoverTaskFilter:
+    """Tests for _discover_task_filter()."""
+
+    def test_no_setup_py_returns_none(self, tmp_path: Path) -> None:
+        """Domain without setup.py returns None."""
+        result = _discover_task_filter(tmp_path, "lite")
+        assert result is None
+
+    def test_setup_py_without_get_task_filter_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        """setup.py without get_task_filter function returns None."""
+        domain = tmp_path / "domain_no_filter"
+        domain.mkdir()
+        (domain / "__init__.py").write_text("")
+        (domain / "setup.py").write_text(
+            "# No get_task_filter here\ndef other_func(): pass\n"
+        )
+
+        try:
+            result = _discover_task_filter(domain, "lite")
+            assert result is None
+        finally:
+            _clean_fake_modules("domain_no_filter")
+
+    def test_get_task_filter_returns_none_for_unknown_dataset(
+        self, tmp_path: Path
+    ) -> None:
+        """get_task_filter returning None is propagated."""
+        domain = tmp_path / "domain_filter_none"
+        domain.mkdir()
+        (domain / "__init__.py").write_text("")
+        (domain / "setup.py").write_text(
+            "def get_task_filter(dataset: str) -> str | None:\n"
+            "    if dataset == 'lite':\n"
+            "        return 'task_a,task_b'\n"
+            "    return None\n"
+        )
+
+        try:
+            result = _discover_task_filter(domain, "unknown")
+            assert result is None
+        finally:
+            _clean_fake_modules("domain_filter_none")
+
+    def test_get_task_filter_returns_filter_string(
+        self, tmp_path: Path
+    ) -> None:
+        """get_task_filter returning a string is propagated."""
+        domain = tmp_path / "domain_filter_ok"
+        domain.mkdir()
+        (domain / "__init__.py").write_text("")
+        (domain / "setup.py").write_text(
+            "def get_task_filter(dataset: str) -> str | None:\n"
+            "    if dataset == 'lite':\n"
+            "        return 'task_a,task_b'\n"
+            "    return None\n"
+        )
+
+        try:
+            result = _discover_task_filter(domain, "lite")
+            assert result == "task_a,task_b"
+        finally:
+            _clean_fake_modules("domain_filter_ok")

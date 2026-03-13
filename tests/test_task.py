@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -712,6 +713,174 @@ class TestResolveApproval:
         assert any("different approval" in r.message.lower() for r in caplog.records)
 
 
+class TestKwargsConsumption:
+    """Phase 1: Setup hooks must pop consumed kwargs from the ORIGINAL dict."""
+
+    def test_consumed_kwargs_not_forwarded_to_solver(self, tmp_path: Path) -> None:
+        """Domain kwargs consumed by setup hooks must not leak to create_saber_solver."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        def fake_discover(domain_root: Path, kwargs: dict[str, object]) -> list[object]:
+            # Simulate hook consuming "build" and "data_dir"
+            kwargs.pop("build", None)
+            kwargs.pop("data_dir", None)
+            return []
+
+        with (
+            patch("saber.setup_discovery._discover_setup_hooks", side_effect=fake_discover),
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+        ):
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                build="true",
+                data_dir="/data",
+            )
+
+        # build and data_dir should NOT appear in solver kwargs
+        call_kwargs = mock_solver.call_args.kwargs
+        assert "build" not in call_kwargs, "consumed kwarg 'build' leaked to solver"
+        assert "data_dir" not in call_kwargs, "consumed kwarg 'data_dir' leaked to solver"
+
+    def test_dataset_not_leaked_to_solver(self, tmp_path: Path) -> None:
+        """Injected 'dataset' should be removed from kwargs after hook discovery."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        # _discover_setup_hooks receives kwargs with "dataset" injected,
+        # but even if hooks don't consume it, dataset must not leak to solver.
+        def fake_discover(domain_root: Path, kwargs: dict[str, object]) -> list[object]:
+            # Hooks see dataset but don't consume it
+            assert kwargs.get("dataset") == "test_ds"
+            return []
+
+        # Mock config loader to bypass dataset filtering
+        from saber.config.models import PromptPaths, TaskConfig
+
+        fake_task = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_sample = InspectSample(input="test", id="t1")
+
+        with (
+            patch("saber.setup_discovery._discover_setup_hooks", side_effect=fake_discover),
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task._find_config_root", return_value=tmp_path),
+            patch("saber.task.tasks_to_samples", return_value=[fake_sample]),
+            patch("saber.task.ScorerFactory") as mock_scorer_cls,
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
+            mock_loader.load_tasks.return_value = [fake_task]
+            mock_scorer_cls.return_value.create_scorers.return_value = []
+            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                dataset="test_ds",
+            )
+
+        call_kwargs = mock_solver.call_args.kwargs
+        assert "dataset" not in call_kwargs, "'dataset' leaked to solver"
+
+    def test_unconsumed_kwargs_still_forwarded(self, tmp_path: Path) -> None:
+        """kwargs NOT consumed by hooks should still reach create_saber_solver."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        def fake_discover(domain_root: Path, kwargs: dict[str, object]) -> list[object]:
+            # Only consume "build", leave "some_agent_param" alone
+            kwargs.pop("build", None)
+            return []
+
+        with (
+            patch("saber.setup_discovery._discover_setup_hooks", side_effect=fake_discover),
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+        ):
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                build="true",
+                some_agent_param="value",
+            )
+
+        call_kwargs = mock_solver.call_args.kwargs
+        assert "build" not in call_kwargs
+        assert call_kwargs["some_agent_param"] == "value"
+
+
+class TestImportDomainModuleSysPath:
+    """Phase 2: _import_domain_module keeps parent on sys.path permanently."""
+
+    def test_parent_stays_on_sys_path_after_import(self, tmp_path: Path) -> None:
+        """After _import_domain_module, domain_root.parent remains on sys.path."""
+        from saber.task import _import_domain_module
+
+        domain = tmp_path / "domain_syspath"
+        domain.mkdir()
+        (domain / "__init__.py").write_text("")
+        (domain / "sub.py").write_text("VALUE = 42\n")
+
+        parent = str(tmp_path)
+        # Remove parent if it happens to be on sys.path already
+        while parent in sys.path:
+            sys.path.remove(parent)
+
+        try:
+            mod = _import_domain_module(domain, "sub")
+            assert mod.VALUE == 42  # type: ignore[attr-defined]
+            # Key assertion: parent still on sys.path after the call
+            assert parent in sys.path, "domain parent was removed from sys.path"
+        finally:
+            # Cleanup for test isolation
+            while parent in sys.path:
+                sys.path.remove(parent)
+            for key in list(sys.modules):
+                if key == "domain_syspath" or key.startswith("domain_syspath."):
+                    del sys.modules[key]
+
+    def test_parent_not_duplicated_on_sys_path(self, tmp_path: Path) -> None:
+        """Calling _import_domain_module twice doesn't duplicate sys.path entries."""
+        from saber.task import _import_domain_module
+
+        domain = tmp_path / "domain_nodup"
+        domain.mkdir()
+        (domain / "__init__.py").write_text("")
+        (domain / "sub.py").write_text("VALUE = 1\n")
+
+        parent = str(tmp_path)
+        while parent in sys.path:
+            sys.path.remove(parent)
+
+        try:
+            _import_domain_module(domain, "sub")
+            _import_domain_module(domain, "sub")
+            assert sys.path.count(parent) == 1, "parent duplicated on sys.path"
+        finally:
+            while parent in sys.path:
+                sys.path.remove(parent)
+            for key in list(sys.modules):
+                if key == "domain_nodup" or key.startswith("domain_nodup."):
+                    del sys.modules[key]
+
+
 class TestCreateTaskRebuild:
     """Tests for rebuild parameter on create_task."""
 
@@ -829,3 +998,109 @@ class TestCreateTaskPreflight:
             task = create_task(tmp_path, agent="react", run_preflight=True)
 
         assert task is not None
+
+
+class TestDiscoverTaskFilterIntegration:
+    """Tests that create_task() applies discovered task filters."""
+
+    def test_explicit_task_filter_takes_precedence(self, tmp_path: Path) -> None:
+        """Explicit task_filter is not overridden by _discover_task_filter."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        from saber.config.models import PromptPaths, TaskConfig
+
+        fake_task = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_sample = InspectSample(input="test", id="t1")
+
+        with (
+            patch("saber.setup_discovery._discover_setup_hooks", return_value=[]),
+            patch(
+                "saber.setup_discovery._discover_task_filter",
+                return_value="discovered_filter",
+            ) as mock_discover_filter,
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task._find_config_root", return_value=tmp_path),
+            patch("saber.task.tasks_to_samples", return_value=[fake_sample]),
+            patch("saber.task.ScorerFactory") as mock_scorer_cls,
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
+            mock_loader.load_tasks.return_value = [fake_task]
+            mock_scorer_cls.return_value.create_scorers.return_value = []
+            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                dataset="lite",
+                task_filter="explicit_filter",
+            )
+
+        # _discover_task_filter should NOT be called when task_filter is explicit
+        mock_discover_filter.assert_not_called()
+        # load_tasks should receive the explicit filter
+        mock_loader.load_tasks.assert_called_once_with(
+            task_filter="explicit_filter", dataset="lite"
+        )
+
+    def test_discovered_filter_applied_when_no_explicit(self, tmp_path: Path) -> None:
+        """Discovered task filter is applied when no explicit task_filter is given."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        from saber.config.models import PromptPaths, TaskConfig
+
+        fake_task = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_sample = InspectSample(input="test", id="t1")
+
+        with (
+            patch("saber.setup_discovery._discover_setup_hooks", return_value=[]),
+            patch(
+                "saber.setup_discovery._discover_task_filter",
+                return_value="auto_a,auto_b",
+            ) as mock_discover_filter,
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task._find_config_root", return_value=tmp_path),
+            patch("saber.task.tasks_to_samples", return_value=[fake_sample]),
+            patch("saber.task.ScorerFactory") as mock_scorer_cls,
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
+            mock_loader.load_tasks.return_value = [fake_task]
+            mock_scorer_cls.return_value.create_scorers.return_value = []
+            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                dataset="lite",
+            )
+
+        mock_discover_filter.assert_called_once_with(tmp_path, "lite")
+        # load_tasks should receive the discovered filter
+        mock_loader.load_tasks.assert_called_once_with(
+            task_filter="auto_a,auto_b", dataset="lite"
+        )

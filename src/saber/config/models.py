@@ -288,6 +288,7 @@ class TaskConfig(BaseModel):
     role: str | None = None
     is_template: bool = False
     dependency_template: str | None = None
+    setup: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -416,6 +417,7 @@ class GlobalDefaults(BaseModel):
     max_steps: int = 25
     aggregation: ScoreAggregation = ScoreAggregation.MAX
     scoring_defaults: dict[str, dict[str, object]] | None = None
+    setup: str | None = None
 
 
 # ── Domain Config ───────────────────────────────────────────────────

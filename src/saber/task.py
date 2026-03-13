@@ -174,18 +174,28 @@ def create_task(
     from saber.hooks import run_setup_hooks
     from saber.setup_discovery import _discover_setup_hooks
 
-    # Forward `dataset` into kwargs so setup hooks can scope downloads
-    # to only the data needed for the selected dataset.
-    setup_kwargs: dict[str, object] = dict(kwargs)
+    # Temporarily inject dataset so hooks can consume it
     if dataset is not None:
-        setup_kwargs["dataset"] = dataset
+        kwargs["dataset"] = dataset
 
-    hooks = _discover_setup_hooks(domain_root, setup_kwargs)
+    hooks = _discover_setup_hooks(domain_root, kwargs)
+    # _discover_setup_hooks pops consumed keys in-place from kwargs
+
+    # dataset is a named param — remove from kwargs if hooks didn't consume it
+    kwargs.pop("dataset", None)
     if hooks:
         hooks_result = run_setup_hooks(hooks, domain_root)
         if not hooks_result.all_succeeded:
             failed = "; ".join(f"{r.name}: {r.message}" for r in hooks_result.failed_hooks)
             raise RuntimeError(f"Setup hook(s) failed: {failed}")
+
+    # 0d. Discover domain-specific task filter for the dataset
+    if task_filter is None and dataset is not None:
+        from saber.setup_discovery import _discover_task_filter
+
+        discovered_filter = _discover_task_filter(domain_root, dataset)
+        if discovered_filter is not None:
+            task_filter = discovered_filter
 
     # 1. Load task configs from YAML
     config_root = _find_config_root(domain_root)
@@ -419,8 +429,10 @@ def _discover_tools(domain_root: Path) -> dict[str, Callable[..., Tool]]:
 def _import_domain_module(domain_root: Path, subpackage: str) -> object:
     """Import a domain subpackage by path.
 
-    If the domain's parent directory is not on ``sys.path``, it is
-    temporarily added so that relative imports within the package work.
+    Adds the domain's parent directory to ``sys.path`` permanently so
+    that domain subpackages (e.g. setup hooks importing sibling modules)
+    can resolve imports at runtime.  This is safe because SABER runs
+    one domain per process.
 
     Args:
         domain_root: Domain root directory (e.g., ``domains/cti_realm``).
@@ -432,15 +444,10 @@ def _import_domain_module(domain_root: Path, subpackage: str) -> object:
     domain_name = domain_root.name
     module_name = f"{domain_name}.{subpackage}"
 
-    # Ensure parent dir is on sys.path for the import
+    # Ensure parent dir is on sys.path — kept permanently so that
+    # hooks and domain subpackages can resolve imports at runtime.
     parent = str(domain_root.parent)
-    added = False
     if parent not in sys.path:
         sys.path.insert(0, parent)
-        added = True
 
-    try:
-        return importlib.import_module(module_name)
-    finally:
-        if added:
-            sys.path.remove(parent)
+    return importlib.import_module(module_name)
