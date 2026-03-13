@@ -38,8 +38,8 @@ tasks:
         checkpoint_1:
           target: trajectory
           model: "openai/azure/gpt-4.1"
-          judge_system_template: "judge/step/cybersecurity_subtask_incident_system.md"
-          judge_user_template: "judge/step/cybersecurity_subtask_incident_user.md"
+          judge_system_template: "judge/step/cybersecurity_subtask_incident_system.j2"
+          judge_user_template: "judge/step/cybersecurity_subtask_incident_user.j2"
           steps_per_message: 10
           max_score: 1.0
           weight: 0.5

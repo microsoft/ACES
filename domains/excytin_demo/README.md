@@ -124,15 +124,82 @@ uv run inspect eval domains/excytin_demo \
 
 **4. Advanced options:**
 ```bash
-# Rebuild all images
+# Rebuild all Docker images
 uv run inspect eval domains/excytin_demo \
-  -T rebuild_all=true \
+  -T rebuild=true \
   --model openai/gpt-4
 
-# Stop server after completion
+# Rebuild only the sandbox image
 uv run inspect eval domains/excytin_demo \
-  -T stop_saber_after=true \
+  -T rebuild=sandbox \
   --model openai/gpt-4
+
+# Use copilot agent
+uv run inspect eval domains/excytin_demo \
+  -T agent=copilot \
+  --model openai/gpt-4
+
+# Keep permanent services alive after eval
+uv run inspect eval domains/excytin_demo \
+  -T keep_permanent=true \
+  --model openai/gpt-4
+
+# Validate compose files before running
+uv run inspect eval domains/excytin_demo \
+  -T run_preflight=true \
+  --model openai/gpt-4
+```
+
+### Task Parameters (`-T` Flags)
+
+#### Core Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `task_filter` | `str` | `None` | Glob or comma-separated task name filter (e.g., `incident_5_*`) |
+| `dataset` | `str` | From `global.yaml` | Named task group selector |
+| `agent` | `str` | `"react"` | Agent implementation: `react`, `copilot`, `claude_code` |
+| `rebuild` | `str\|bool` | `None` | `true` → rebuild all images; `"sandbox"` → rebuild specific image |
+| `run_preflight` | `bool` | `false` | Validate compose files before evaluation |
+| `keep_permanent` | `bool` | `false` | Keep permanent Docker services (database) alive after eval |
+
+#### Agent-Specific Parameters
+
+| Parameter | Agent | Default | Description |
+|-----------|-------|---------|-------------|
+| `persona_file` | copilot, claude_code | `None` | Path to agent persona markdown file |
+| `skills_dir` | copilot, claude_code | `None` | Path to skills directory (uploaded into sandbox) |
+| `timeout` | copilot, claude_code | `300` | Agent execution timeout in seconds |
+| `max_steps` | copilot, claude_code | `50` | Max tool calls before forced completion |
+| `disallowed_tools` | claude_code | `""` | Comma-separated tools to disallow |
+
+#### Docker / Environment Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sandbox_compose` | `str` | `compose/sandbox.compose.yml` | Sandbox compose file path |
+| `permanent_compose` | `str` | `None` | Permanent services compose file path |
+| `permanent_project` | `str` | `saber-permanent` | Compose project name for permanent services |
+
+### SABER CLI
+
+Manage Docker environments outside of evaluations:
+
+```bash
+# Build images for excytin_demo
+uv run saber build excytin_demo
+
+# Force rebuild all images
+uv run saber build excytin_demo --rebuild
+
+# Rebuild only the sandbox image
+uv run saber build excytin_demo --rebuild --image sandbox
+
+# Start permanent services (database)
+uv run saber start excytin_demo
+
+# Tear down all excytin_demo Docker resources
+uv run saber teardown excytin_demo --yes
 ```
 
 ### Inspecting Results
@@ -204,7 +271,7 @@ max_parallel_tasks: 2
    ```bash
    uv run inspect eval domains/excytin_demo \
      -T task_filter=incident_5_task_4 \
-     -T rebuild_all=true \
+     -T rebuild=true \
      --model openai/gpt-4
    ```
 
@@ -239,8 +306,8 @@ Agents must explore the schema to understand table relationships and complete in
 ### Evaluation Customization
 
 **LLM Judge Configuration** (`server/config/prompts/judge/`):
-- `cybersecurity_incident_system.md`: Judge system prompt
-- `cybersecurity_incident_user.md`: Evaluation criteria template
+- `cybersecurity_incident_system.j2`: Judge system prompt
+- `cybersecurity_incident_user.j2`: Evaluation criteria template
 
 **Static Evaluation**:
 ```yaml
@@ -258,15 +325,13 @@ evaluation_config:
 1. **Test with rebuild for clean state**:
    ```bash
    uv run inspect eval domains/excytin_demo \
-     -T rebuild_all=true \
+     -T rebuild=true \
      --model openai/gpt-4
    ```
 
-2. **Stop server after testing**:
+2. **Tear down Docker resources after testing**:
    ```bash
-   uv run inspect eval domains/excytin_demo \
-     -T stop_saber_after=true \
-     --model openai/gpt-4
+   uv run saber teardown excytin_demo --yes
    ```
 
 3. **Monitor server logs**:

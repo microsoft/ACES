@@ -59,7 +59,7 @@ def create_task(
     extra_tools: dict[str, Callable[..., Tool]] | None = None,
     extra_strategies: dict[str, SaberScoringStrategy] | None = None,
     approval: list[ApprovalPolicy] | None = None,
-    rebuild: str | None = None,
+    rebuild: str | bool | None = None,
     run_preflight: str | bool = False,
     keep_permanent: str | bool = False,
     **kwargs: object,

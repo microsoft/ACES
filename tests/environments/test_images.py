@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
@@ -18,6 +19,9 @@ from saber.environments.images import (
     PreflightBuildError,
     PreflightResult,
     RebuildMode,
+    _BuildProgressDisplay,
+    _create_build_progress,
+    _detect_build_phase,
     build_domain_images,
     build_image,
     find_base_dockerfile,
@@ -158,12 +162,32 @@ class TestImageExists:
 # ── build_image ──────────────────────────────────────────────────────
 
 
+def _make_stream_proc(
+    stdout_lines: list[bytes] | None = None,
+    stderr_lines: list[bytes] | None = None,
+    returncode: int = 0,
+) -> AsyncMock:
+    """Create a mock subprocess with streaming stdout/stderr for build_image tests."""
+    mock_proc = AsyncMock()
+
+    stdout_reader = AsyncMock()
+    stdout_reader.readline = AsyncMock(side_effect=[*(stdout_lines or []), b""])
+    mock_proc.stdout = stdout_reader
+
+    stderr_reader = AsyncMock()
+    stderr_reader.readline = AsyncMock(side_effect=[*(stderr_lines or []), b""])
+    mock_proc.stderr = stderr_reader
+
+    mock_proc.wait = AsyncMock(return_value=returncode)
+    mock_proc.returncode = returncode
+
+    return mock_proc
+
+
 class TestBuildImage:
     @pytest.mark.asyncio
     async def test_success(self) -> None:
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_stream_proc()
 
         with patch(
             "saber.environments.images.asyncio.create_subprocess_exec",
@@ -182,9 +206,10 @@ class TestBuildImage:
 
     @pytest.mark.asyncio
     async def test_failure_raises(self) -> None:
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"error msg"))
-        mock_proc.returncode = 1
+        mock_proc = _make_stream_proc(
+            stderr_lines=[b"error msg\n"],
+            returncode=1,
+        )
 
         with patch(
             "saber.environments.images.asyncio.create_subprocess_exec",
@@ -194,14 +219,12 @@ class TestBuildImage:
                 await build_image(tag="fail:1", dockerfile=Path("/df"), context=Path("/ctx"))
 
         assert exc_info.value.tag == "fail:1"
-        assert exc_info.value.stderr == "error msg"
+        assert "error msg" in exc_info.value.stderr
         assert exc_info.value.returncode == 1
 
     @pytest.mark.asyncio
     async def test_default_context_is_dockerfile_parent(self) -> None:
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_stream_proc()
 
         with patch(
             "saber.environments.images.asyncio.create_subprocess_exec",
@@ -215,9 +238,7 @@ class TestBuildImage:
 
     @pytest.mark.asyncio
     async def test_with_build_args_and_labels(self) -> None:
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_stream_proc()
 
         with patch(
             "saber.environments.images.asyncio.create_subprocess_exec",
@@ -240,9 +261,7 @@ class TestBuildImage:
 
     @pytest.mark.asyncio
     async def test_no_cache_flag(self) -> None:
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_stream_proc()
 
         with patch(
             "saber.environments.images.asyncio.create_subprocess_exec",
@@ -255,9 +274,7 @@ class TestBuildImage:
 
     @pytest.mark.asyncio
     async def test_no_cache_flag_absent_by_default(self) -> None:
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.returncode = 0
+        mock_proc = _make_stream_proc()
 
         with patch(
             "saber.environments.images.asyncio.create_subprocess_exec",
@@ -562,6 +579,7 @@ class TestBuildDomainImages:
             build_args: dict[str, str] | None = None,
             labels: dict[str, str] | None = None,
             no_cache: bool = False,
+            status_callback: Callable[[str], None] | None = None,
         ) -> None:
             if tag == "web:1":
                 raise ImageBuildError(tag="web:1", stderr="compile error", returncode=1)
@@ -730,3 +748,421 @@ class TestBuildDomainImages:
         assert result.results == ()
         assert result.domain_slug == ""
         assert any("eval.yaml" in msg for msg in caplog.messages)
+
+
+# ── Progress display ────────────────────────────────────────────────
+
+
+class TestBuildDomainImagesProgress:
+    """Tests for Rich progress bar integration in build_domain_images()."""
+
+    @pytest.mark.asyncio
+    @patch("saber.environments.images.build_image", new_callable=AsyncMock)
+    @patch("saber.environments.images.image_exists", new_callable=AsyncMock)
+    @patch("saber.environments.images.find_base_dockerfile")
+    async def test_progress_display_skipped_when_not_tty(
+        self,
+        mock_find_base: AsyncMock,
+        mock_exists: AsyncMock,
+        mock_build: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """When stderr is not a TTY (default in pytest), _create_build_progress returns None.
+
+        build_domain_images still works and returns correct PreflightResult.
+        """
+        _write_eval_yaml(
+            tmp_path,
+            {"web": {"tag": "web:1", "dockerfile": "docker/Dockerfile.web"}},
+        )
+        mock_exists.return_value = True  # all exist
+
+        # _create_build_progress returns None when not a TTY
+        assert _create_build_progress(total=2) is None
+
+        result = await build_domain_images(tmp_path)
+        assert result.domain_slug == "test-domain"
+        assert len(result.results) == 2  # base + web
+        actions = {r.name: r.action for r in result.results}
+        assert actions["base"] == "skipped"
+        assert actions["web"] == "skipped"
+
+    @pytest.mark.asyncio
+    @patch("saber.environments.images.display_progress")
+    @patch("saber.environments.images.build_image", new_callable=AsyncMock)
+    @patch("saber.environments.images.image_exists", new_callable=AsyncMock)
+    @patch("saber.environments.images.find_base_dockerfile")
+    async def test_summary_displayed_after_build(
+        self,
+        mock_find_base: AsyncMock,
+        mock_exists: AsyncMock,
+        mock_build: AsyncMock,
+        mock_display: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """After build_domain_images completes, display_progress is called with a summary."""
+        _write_eval_yaml(
+            tmp_path,
+            {"web": {"tag": "web:1", "dockerfile": "docker/Dockerfile.web"}},
+        )
+        mock_exists.return_value = True  # all skipped
+
+        await build_domain_images(tmp_path)
+
+        mock_display.assert_called_once()
+        summary = mock_display.call_args[0][0]
+        assert "Image preflight complete" in summary
+        assert "2 skipped" in summary
+        # Elapsed time in seconds, e.g. "(0.0s)"
+        assert "s)" in summary
+
+    @pytest.mark.asyncio
+    @patch("saber.environments.images.display_progress")
+    @patch("saber.environments.images.build_image", new_callable=AsyncMock)
+    @patch("saber.environments.images.image_exists", new_callable=AsyncMock)
+    @patch("saber.environments.images.find_base_dockerfile")
+    async def test_summary_includes_failure_count(
+        self,
+        mock_find_base: AsyncMock,
+        mock_exists: AsyncMock,
+        mock_build: AsyncMock,
+        mock_display: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When a build fails, the summary contains the failure count."""
+        _write_eval_yaml(
+            tmp_path,
+            {"web": {"tag": "web:1", "dockerfile": "docker/Dockerfile.web"}},
+        )
+        mock_find_base.return_value = tmp_path / "docker" / "Dockerfile.base"
+        mock_exists.return_value = False
+
+        async def build_side_effect(
+            tag: str,
+            dockerfile: Path,
+            context: Path | None = None,
+            build_args: dict[str, str] | None = None,
+            labels: dict[str, str] | None = None,
+            no_cache: bool = False,
+            status_callback: Callable[[str], None] | None = None,
+        ) -> None:
+            if tag == "web:1":
+                raise ImageBuildError(tag="web:1", stderr="boom", returncode=1)
+
+        mock_build.side_effect = build_side_effect
+
+        await build_domain_images(tmp_path)
+
+        mock_display.assert_called_once()
+        summary = mock_display.call_args[0][0]
+        assert "1 failed" in summary
+
+    @pytest.mark.asyncio
+    @patch("saber.environments.images.build_image", new_callable=AsyncMock)
+    @patch("saber.environments.images.image_exists", new_callable=AsyncMock)
+    @patch("saber.environments.images.find_base_dockerfile")
+    async def test_on_progress_callback_still_fires(
+        self,
+        mock_find_base: AsyncMock,
+        mock_exists: AsyncMock,
+        mock_build: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """The existing on_progress callback still receives all expected events."""
+        _write_eval_yaml(
+            tmp_path,
+            {"web": {"tag": "web:1", "dockerfile": "docker/Dockerfile.web"}},
+        )
+        mock_find_base.return_value = tmp_path / "docker" / "Dockerfile.base"
+        mock_exists.return_value = False  # nothing exists, build all
+
+        events: list[tuple[str, str, str]] = []
+        callback = MagicMock(side_effect=lambda n, t, e: events.append((n, t, e)))
+
+        await build_domain_images(tmp_path, on_progress=callback)
+
+        # Base image events
+        assert ("base", BASE_IMAGE_TAG, "building") in events
+        assert ("base", BASE_IMAGE_TAG, "built") in events
+        # Domain image events
+        assert ("web", "web:1", "checking") in events
+        assert ("web", "web:1", "building") in events
+        assert ("web", "web:1", "built") in events
+        assert callback.call_count == len(events)
+
+    def test_create_build_progress_returns_none_when_not_tty(self) -> None:
+        """_create_build_progress returns None when stderr is not a TTY."""
+        # In pytest, stderr.isatty() is False by default
+        result = _create_build_progress(total=1)
+        assert result is None
+
+    @patch("saber.environments.images._HAS_RICH", False)
+    def test_create_build_progress_returns_none_when_no_rich(self) -> None:
+        """_create_build_progress returns None when rich is unavailable."""
+        result = _create_build_progress(total=1)
+        assert result is None
+
+    @pytest.mark.asyncio
+    @patch("saber.environments.images.build_image", new_callable=AsyncMock)
+    @patch("saber.environments.images.image_exists", new_callable=AsyncMock)
+    @patch("saber.environments.images.find_base_dockerfile")
+    @patch("saber.environments.images._create_build_progress")
+    async def test_progress_active_updates_correctly(
+        self,
+        mock_create_progress: MagicMock,
+        mock_find_base: MagicMock,
+        mock_exists: AsyncMock,
+        mock_build: AsyncMock,
+        tmp_path: Path,
+    ) -> None:
+        """When progress is active (TTY), set_status and complete_image are called."""
+        mock_display = MagicMock()
+        mock_display.__enter__ = MagicMock(return_value=mock_display)
+        mock_display.__exit__ = MagicMock(return_value=False)
+        mock_create_progress.return_value = mock_display
+
+        _write_eval_yaml(
+            tmp_path,
+            {
+                "web": {"tag": "web:1", "dockerfile": "docker/Dockerfile.web"},
+                "db": {"tag": "db:1", "dockerfile": "docker/Dockerfile.db"},
+            },
+        )
+        mock_find_base.return_value = tmp_path / "docker" / "Dockerfile.base"
+        mock_exists.return_value = True  # all exist, but rebuild=all forces builds
+
+        result = await build_domain_images(tmp_path, rebuild=RebuildMode.all())
+
+        # All 3 images should be rebuilt
+        assert len(result.results) == 3
+        assert all(r.action == "rebuilt" for r in result.results)
+
+        # complete_image called once per image (3 total)
+        assert mock_display.complete_image.call_count == 3
+
+        # set_description called with "Checking" or "Building" for domain images
+        desc_calls = list(mock_display.set_description.call_args_list)
+        desc_texts = [c[0][0] for c in desc_calls]
+        assert any("web" in d for d in desc_texts)
+        assert any("db" in d for d in desc_texts)
+
+
+# ── _detect_build_phase ──────────────────────────────────────────────
+
+
+class TestDetectBuildPhase:
+    """Tests for _detect_build_phase()."""
+
+    def test_detects_step_format(self) -> None:
+        result = _detect_build_phase("Step 3/5 : RUN apt-get install -y curl")
+        assert result is not None
+        assert "Step 3/5" in result
+        assert "RUN apt-get install" in result
+
+    def test_detects_apt_get(self) -> None:
+        result = _detect_build_phase("  Running: apt-get update")
+        assert result == "installing packages\u2026"
+
+    def test_detects_pip_install(self) -> None:
+        result = _detect_build_phase("RUN pip install flask requests")
+        assert result == "installing Python packages\u2026"
+
+    def test_returns_none_for_unknown(self) -> None:
+        result = _detect_build_phase("some random line of output")
+        assert result is None
+
+    def test_detects_finalize(self) -> None:
+        result = _detect_build_phase("Successfully built abc123")
+        assert result == "finalizing\u2026"
+
+    def test_detects_buildkit_format(self) -> None:
+        result = _detect_build_phase("#5 [stage-1 3/4] COPY . /app")
+        assert result is not None
+        assert "COPY . /app" in result
+
+    def test_detects_npm_install(self) -> None:
+        result = _detect_build_phase("npm install --production")
+        assert result == "installing Node packages\u2026"
+
+    def test_detects_yarn_install(self) -> None:
+        result = _detect_build_phase("yarn install --frozen-lockfile")
+        assert result == "installing Node packages\u2026"
+
+    def test_detects_exporting_to_image(self) -> None:
+        result = _detect_build_phase("exporting to image")
+        assert result == "finalizing\u2026"
+
+    def test_step_format_truncates_long_command(self) -> None:
+        long_cmd = "RUN " + "a" * 100
+        result = _detect_build_phase(f"Step 1/2 : {long_cmd}")
+        assert result is not None
+        assert len(result) <= 80  # "Step 1/2: " + 60 chars
+
+
+# ── Build image streaming ────────────────────────────────────────────
+
+
+class TestBuildImageStreaming:
+    """Tests for build_image() streaming and status_callback."""
+
+    @pytest.mark.asyncio
+    async def test_status_callback_called_during_build(self) -> None:
+        """status_callback receives detected build phases from stdout."""
+        lines = [
+            b"Step 1/3 : FROM ubuntu:22.04\n",
+            b"Step 2/3 : RUN apt-get update\n",
+            b"Step 3/3 : RUN pip install flask\n",
+            b"Successfully built abc123def\n",
+        ]
+        stdout_reader = AsyncMock()
+        stdout_reader.readline = AsyncMock(side_effect=[*lines, b""])
+        stderr_reader = AsyncMock()
+        stderr_reader.readline = AsyncMock(return_value=b"")
+
+        mock_proc = AsyncMock()
+        mock_proc.stdout = stdout_reader
+        mock_proc.stderr = stderr_reader
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+
+        callback = MagicMock()
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ):
+            await build_image(
+                tag="t:1",
+                dockerfile=Path("/df"),
+                context=Path("/ctx"),
+                status_callback=callback,
+            )
+
+        # Should have been called for detected phases
+        assert callback.call_count >= 2
+        phase_args = [c[0][0] for c in callback.call_args_list]
+        assert any("Step" in p for p in phase_args)
+        assert any("installing" in p.lower() or "finalizing" in p.lower() for p in phase_args)
+
+    @pytest.mark.asyncio
+    async def test_build_image_works_without_callback(self) -> None:
+        """build_image still works fine when no status_callback is provided."""
+        stdout_reader = AsyncMock()
+        stdout_reader.readline = AsyncMock(side_effect=[b"Step 1/1 : FROM ubuntu\n", b""])
+        stderr_reader = AsyncMock()
+        stderr_reader.readline = AsyncMock(return_value=b"")
+
+        mock_proc = AsyncMock()
+        mock_proc.stdout = stdout_reader
+        mock_proc.stderr = stderr_reader
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ):
+            await build_image(tag="t:1", dockerfile=Path("/df"), context=Path("/ctx"))
+
+    @pytest.mark.asyncio
+    async def test_build_image_uses_progress_plain(self) -> None:
+        """Verify --progress=plain is in the docker command."""
+        stdout_reader = AsyncMock()
+        stdout_reader.readline = AsyncMock(return_value=b"")
+        stderr_reader = AsyncMock()
+        stderr_reader.readline = AsyncMock(return_value=b"")
+
+        mock_proc = AsyncMock()
+        mock_proc.stdout = stdout_reader
+        mock_proc.stderr = stderr_reader
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ) as mock_exec:
+            await build_image(tag="t:1", dockerfile=Path("/df"), context=Path("/ctx"))
+
+        call_args = mock_exec.call_args[0]
+        assert "--progress=plain" in call_args
+
+    @pytest.mark.asyncio
+    async def test_build_image_streaming_failure_raises(self) -> None:
+        """build_image raises ImageBuildError with stderr on failure."""
+        stdout_reader = AsyncMock()
+        stdout_reader.readline = AsyncMock(side_effect=[b"Step 1/2 : FROM ubuntu\n", b""])
+        stderr_reader = AsyncMock()
+        stderr_reader.readline = AsyncMock(side_effect=[b"error: something broke\n", b""])
+
+        mock_proc = AsyncMock()
+        mock_proc.stdout = stdout_reader
+        mock_proc.stderr = stderr_reader
+        mock_proc.wait = AsyncMock(return_value=1)
+        mock_proc.returncode = 1
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ):
+            with pytest.raises(ImageBuildError) as exc_info:
+                await build_image(tag="fail:1", dockerfile=Path("/df"), context=Path("/ctx"))
+
+        assert exc_info.value.tag == "fail:1"
+        assert "something broke" in exc_info.value.stderr
+        assert exc_info.value.returncode == 1
+
+    @pytest.mark.asyncio
+    async def test_build_image_handles_readline_value_error(self) -> None:
+        """build_image handles ValueError from readline gracefully."""
+        stdout_reader = AsyncMock()
+        stdout_reader.readline = AsyncMock(side_effect=[ValueError("line too long")])
+        stdout_reader.read = AsyncMock(return_value=b"")
+        stderr_reader = AsyncMock()
+        stderr_reader.readline = AsyncMock(return_value=b"")
+
+        mock_proc = AsyncMock()
+        mock_proc.stdout = stdout_reader
+        mock_proc.stderr = stderr_reader
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0
+
+        with patch(
+            "saber.environments.images.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ):
+            await build_image(tag="t:1", dockerfile=Path("/df"), context=Path("/ctx"))
+
+
+# ── _BuildProgressDisplay ────────────────────────────────────────────
+
+
+class TestBuildProgressDisplay:
+    """Unit tests for _BuildProgressDisplay."""
+
+    def test_enter_exit(self) -> None:
+        """Context manager protocol works."""
+        display = _BuildProgressDisplay(total=3)
+        with display as d:
+            assert d is display
+
+    def test_set_status_updates_live(self) -> None:
+        """Calling set_status updates the internal status dict."""
+        display = _BuildProgressDisplay(total=2)
+        with display:
+            display.set_status("base", "building...")
+            assert display._statuses["base"] == "building..."
+
+    def test_complete_image_advances_bar(self) -> None:
+        """Calling complete_image advances the progress bar."""
+        display = _BuildProgressDisplay(total=2)
+        with display:
+            display.complete_image("base", "[green]\u2713[/green] rebuilt")
+            assert display._statuses["base"] == "[green]\u2713[/green] rebuilt"
+
+    def test_set_description(self) -> None:
+        """Calling set_description updates the bar description."""
+        display = _BuildProgressDisplay(total=1)
+        with display:
+            display.set_description("Checking web")
+            # No assertion needed beyond no exception; verifies the method runs

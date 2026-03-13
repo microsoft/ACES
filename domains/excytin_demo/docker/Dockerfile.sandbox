@@ -14,6 +14,7 @@ RUN apt-get update && \
 # Install Python packages needed for MySQL connectivity
 RUN uv pip install --system --no-cache \
     pymysql \
+    mysql-connector-python \
     sqlalchemy
 
 # Domain-specific environment variables

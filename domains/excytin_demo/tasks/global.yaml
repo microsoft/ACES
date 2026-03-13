@@ -6,8 +6,8 @@ global_defaults:
     compose: "compose/databases.compose.yml"
 
   prompts:
-    instruction: "instructions/excytin_demo.md"
-    assistant: "assistants/inspect_assistant.md"
+    instruction: "instructions/excytin_demo.j2"
+    assistant: "assistants/inspect_assistant.j2"
 
   max_steps: 15
 

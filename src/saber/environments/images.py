@@ -9,7 +9,12 @@ images.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import re
 import subprocess
+import sys
+import time
+import types
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
@@ -17,7 +22,24 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from saber.logging import get_logger
+from saber.logging import display_progress, get_logger
+
+try:
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+    from rich.text import Text as RichText
+
+    _HAS_RICH = True
+except ImportError:  # pragma: no cover
+    _HAS_RICH = False
 
 #: Callback signature for build progress: (image_name, image_tag, event).
 #: Events: "checking", "building", "built", "rebuilt", "skipped", "failed".
@@ -108,11 +130,13 @@ class RebuildMode(BaseModel):
         return image_name in self.names
 
 
-def parse_rebuild_param(raw: str | None) -> RebuildMode:
+def parse_rebuild_param(raw: str | bool | None) -> RebuildMode:
     """Parse a raw rebuild parameter into a ``RebuildMode``.
 
     Args:
         raw: The raw parameter value. ``None`` means no rebuild.
+            Accepts ``bool`` (from inspect_ai ``-T`` flag parsing)
+            or a string.
 
     Returns:
         A ``RebuildMode`` instance.
@@ -123,6 +147,10 @@ def parse_rebuild_param(raw: str | None) -> RebuildMode:
     """
     if raw is None:
         return RebuildMode.none()
+
+    # inspect_ai -T flag parsing may pass a Python bool directly
+    if isinstance(raw, bool):
+        return RebuildMode.all() if raw else RebuildMode.none()
 
     stripped = raw.strip()
 
@@ -190,6 +218,32 @@ class ImageBuildError(Exception):
 # ── Async helpers ────────────────────────────────────────────────────
 
 
+def _detect_build_phase(line: str) -> str | None:
+    """Detect the current build phase from a Docker build output line.
+
+    Returns a short human-readable status string when a recognisable
+    build step is detected, or ``None`` otherwise.
+    """
+    step_match = re.match(r"Step\s+(\d+/\d+)\s*:\s*(.*)", line)
+    if step_match:
+        return f"Step {step_match.group(1)}: {step_match.group(2)[:60]}"
+
+    buildkit_match = re.match(r"#\d+\s+\[.*?\]\s*(.*)", line)
+    if buildkit_match:
+        return buildkit_match.group(1)[:60]
+
+    lower = line.lower()
+    if "apt-get" in lower:
+        return "installing packages\u2026"
+    if "pip install" in lower:
+        return "installing Python packages\u2026"
+    if "npm install" in lower or "yarn install" in lower:
+        return "installing Node packages\u2026"
+    if "successfully built" in lower or "exporting to image" in lower:
+        return "finalizing\u2026"
+    return None
+
+
 async def image_exists(tag: str) -> bool:
     """Check whether a Docker image with *tag* exists locally.
 
@@ -218,6 +272,7 @@ async def build_image(
     build_args: dict[str, str] | None = None,
     labels: dict[str, str] | None = None,
     no_cache: bool = False,
+    status_callback: Callable[[str], None] | None = None,
 ) -> None:
     """Build a Docker image.
 
@@ -230,6 +285,8 @@ async def build_image(
         labels: Optional ``--label`` key/value pairs.
         no_cache: If ``True``, pass ``--no-cache`` to ``docker build``
             so that all layers are rebuilt from scratch.
+        status_callback: Optional callback invoked with a short phase
+            description whenever a recognisable build step is detected.
 
     Raises:
         ImageBuildError: If the build exits with a non-zero code.
@@ -237,7 +294,7 @@ async def build_image(
     if context is None:
         context = dockerfile.parent
 
-    cmd: list[str] = ["docker", "build", "-f", str(dockerfile), "-t", tag]
+    cmd: list[str] = ["docker", "build", "-f", str(dockerfile), "-t", tag, "--progress=plain"]
 
     if no_cache:
         cmd.append("--no-cache")
@@ -257,11 +314,49 @@ async def build_image(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    stdout_bytes, stderr_bytes = await proc.communicate()
+
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    async def _read_stream(
+        stream: asyncio.StreamReader | None,
+        *,
+        is_stderr: bool = False,
+    ) -> None:
+        if stream is None:
+            return
+        while True:
+            try:
+                line = await stream.readline()
+            except ValueError:
+                # readline() raises ValueError when a single line exceeds
+                # the StreamReader buffer limit (default 64 KiB).  Docker
+                # --progress=plain can emit very long compiler commands.
+                chunk = await stream.read(65536)
+                if not chunk:
+                    break
+                line = chunk
+            if not line:
+                break
+            if is_stderr:
+                stderr_chunks.append(line)
+            else:
+                stdout_chunks.append(line)
+            decoded = line.decode(errors="replace").rstrip()
+            if decoded and status_callback is not None:
+                phase = _detect_build_phase(decoded)
+                if phase is not None:
+                    status_callback(phase)
+
+    await asyncio.gather(
+        _read_stream(proc.stdout),
+        _read_stream(proc.stderr, is_stderr=True),
+    )
+    await proc.wait()
 
     if proc.returncode != 0:
-        stdout_text = stdout_bytes.decode(errors="replace")
-        stderr_text = stderr_bytes.decode(errors="replace")
+        stdout_text = b"".join(stdout_chunks).decode(errors="replace")
+        stderr_text = b"".join(stderr_chunks).decode(errors="replace")
         # Log full build output so it's always available in logs
         logger.error(
             "Docker build failed for %s (exit %d)\n--- stdout ---\n%s\n--- stderr ---\n%s",
@@ -311,6 +406,96 @@ def find_base_dockerfile(saber_root: Path | None = None) -> Path:
 
     msg = f"Base Dockerfile not found at {repo_path} or bundled location {package_path}"
     raise FileNotFoundError(msg)
+
+
+# ── Progress helpers ─────────────────────────────────────────────────
+
+
+def _create_build_progress(total: int) -> _BuildProgressDisplay | None:
+    """Create a Rich live progress display for image builds, or None if unavailable.
+
+    Returns None when rich is not installed or stderr is not a TTY.
+
+    Args:
+        total: Total number of images to build.
+
+    Returns:
+        A configured _BuildProgressDisplay instance, or None.
+    """
+    if not _HAS_RICH or not sys.stderr.isatty():
+        return None
+    return _BuildProgressDisplay(total)
+
+
+class _BuildProgressDisplay:
+    """Rich Live display showing progress bar + per-image status lines."""
+
+    def __init__(self, total: int) -> None:
+        self._console = Console(stderr=True)
+        self._bar = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TextColumn("•"),
+            TimeElapsedColumn(),
+        )
+        self._task_id = self._bar.add_task("Building images", total=total)
+        self._statuses: dict[str, str] = {}
+        self._live = Live(self._render(), console=self._console, refresh_per_second=4)
+
+    def _render(self) -> Group:
+        """Render the progress bar and per-image status lines."""
+        parts: list[Progress | RichText] = [self._bar]
+        for name, status in self._statuses.items():
+            parts.append(RichText.from_markup(f"  [dim]{name:<16}[/dim] {status}"))
+        return Group(*parts)
+
+    def set_status(self, name: str, status: str) -> None:
+        """Update the status line for a specific image."""
+        self._statuses[name] = status
+        self._live.update(self._render())
+
+    def complete_image(self, name: str, status: str) -> None:
+        """Mark an image as complete and advance the progress bar."""
+        self._statuses[name] = status
+        self._bar.update(self._task_id, advance=1)
+        self._live.update(self._render())
+
+    def set_description(self, desc: str) -> None:
+        """Update the progress bar description."""
+        self._bar.update(self._task_id, description=desc)
+        self._live.update(self._render())
+
+    def __enter__(self) -> _BuildProgressDisplay:
+        self._live.__enter__()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        self._live.__exit__(exc_type, exc_val, exc_tb)
+
+
+def _print_build_summary(result: PreflightResult, elapsed: float) -> None:
+    """Print a final build summary line to stderr via display_progress.
+
+    Args:
+        result: The preflight result to summarize.
+        elapsed: Total elapsed time in seconds.
+    """
+    parts: list[str] = []
+    if result.built_count:
+        parts.append(f"{result.built_count} built")
+    if result.skipped_count:
+        parts.append(f"{result.skipped_count} skipped")
+    if result.failed_count:
+        parts.append(f"{result.failed_count} failed")
+    counts = ", ".join(parts) if parts else "0 images"
+    display_progress(f"Image preflight complete: {counts} ({elapsed:.1f}s)")
 
 
 # ── PreflightResult ──────────────────────────────────────────────────
@@ -435,72 +620,114 @@ async def build_domain_images(
 
     all_results: list[ImageBuildResult] = []
 
-    # ── Handle base image ────────────────────────────────────────────
-    rebuild_base = rebuild.should_rebuild("base") or rebuild.should_rebuild("saber_sandbox")
+    total_images = 1 + len(config.images)
+    display = _create_build_progress(total_images)
+    start_time = time.monotonic()
 
-    if rebuild_base or not await image_exists(BASE_IMAGE_TAG):
-        action_label: Literal["built", "rebuilt"] = "rebuilt" if rebuild_base else "built"
-        base_df = find_base_dockerfile(saber_root)
-        _notify("base", BASE_IMAGE_TAG, "building")
-        try:
-            await build_image(
-                tag=BASE_IMAGE_TAG,
-                dockerfile=base_df,
-                context=base_df.parent,
-                no_cache=rebuild_base,
-            )
-            base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action=action_label)
-            logger.info("Image %s (%s): %s", "base", BASE_IMAGE_TAG, action_label)
-            _notify("base", BASE_IMAGE_TAG, action_label)
-        except ImageBuildError as exc:
-            base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action="failed", error=str(exc))
-            logger.warning("Image %s (%s): failed \u2014 %s", "base", BASE_IMAGE_TAG, exc)
-            _notify("base", BASE_IMAGE_TAG, "failed")
-    else:
-        base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action="skipped")
-        logger.info("Image %s (%s): skipped (already exists)", "base", BASE_IMAGE_TAG)
-        _notify("base", BASE_IMAGE_TAG, "skipped")
+    ctx: contextlib.AbstractContextManager[object] = display if display is not None else contextlib.nullcontext()
+    with ctx:
+        # ── Handle base image ────────────────────────────────────────────
+        rebuild_base = rebuild.should_rebuild("base") or rebuild.should_rebuild("saber_sandbox")
 
-    all_results.append(base_result)
+        if rebuild_base or not await image_exists(BASE_IMAGE_TAG):
+            action_label: Literal["built", "rebuilt"] = "rebuilt" if rebuild_base else "built"
+            base_df = find_base_dockerfile(saber_root)
+            _notify("base", BASE_IMAGE_TAG, "building")
 
-    # Short-circuit if base image failed — domain images depend on it
-    if base_result.action == "failed":
-        logger.warning("Skipping domain images \u2014 base image build failed")
-        return PreflightResult(results=tuple(all_results), domain_slug=config.slug)
+            def _base_status(status: str) -> None:
+                if display is not None:
+                    display.set_status("base", status)
 
-    # ── Handle domain images ─────────────────────────────────────────
-    for name, image_config in config.images.items():
-        dockerfile = domain_root / image_config.dockerfile
-        context = domain_root / image_config.context if image_config.context is not None else domain_root
-
-        _notify(name, image_config.tag, "checking")
-        force_rebuild = rebuild.should_rebuild(name)
-        if force_rebuild:
-            action: Literal["built", "rebuilt"] = "rebuilt"
-        elif await image_exists(image_config.tag):
-            all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="skipped"))
-            logger.info("Image %s (%s): skipped (already exists)", name, image_config.tag)
-            _notify(name, image_config.tag, "skipped")
-            continue
+            try:
+                await build_image(
+                    tag=BASE_IMAGE_TAG,
+                    dockerfile=base_df,
+                    context=base_df.parent,
+                    no_cache=rebuild_base,
+                    status_callback=_base_status if display else None,
+                )
+                base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action=action_label)
+                logger.info("Image %s (%s): %s", "base", BASE_IMAGE_TAG, action_label)
+                _notify("base", BASE_IMAGE_TAG, action_label)
+            except ImageBuildError as exc:
+                base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action="failed", error=str(exc))
+                logger.warning("Image %s (%s): failed \u2014 %s", "base", BASE_IMAGE_TAG, exc)
+                _notify("base", BASE_IMAGE_TAG, "failed")
         else:
-            action = "built"
+            base_result = ImageBuildResult(name="base", tag=BASE_IMAGE_TAG, action="skipped")
+            logger.info("Image %s (%s): skipped (already exists)", "base", BASE_IMAGE_TAG)
+            _notify("base", BASE_IMAGE_TAG, "skipped")
 
-        _notify(name, image_config.tag, "building")
-        try:
-            await build_image(
-                tag=image_config.tag,
-                dockerfile=dockerfile,
-                context=context,
-                build_args=image_config.build_args or None,
-                labels=image_config.labels or None,
-                no_cache=force_rebuild,
+        all_results.append(base_result)
+        if display is not None:
+            status_label = (
+                f"[green]\u2713[/green] {base_result.action}"
+                if base_result.action != "failed"
+                else "[red]\u2717 failed[/red]"
             )
-            all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action=action))
-            logger.info("Image %s (%s): %s", name, image_config.tag, action)
-            _notify(name, image_config.tag, action)
-        except ImageBuildError as exc:
-            all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="failed", error=str(exc)))
-            logger.warning("Image %s (%s): failed \u2014 %s", name, image_config.tag, exc)
-            _notify(name, image_config.tag, "failed")
+            display.complete_image("base", status_label)
 
-    return PreflightResult(results=tuple(all_results), domain_slug=config.slug)
+        # Short-circuit if base image failed — domain images depend on it
+        if base_result.action == "failed":
+            logger.warning("Skipping domain images \u2014 base image build failed")
+            result = PreflightResult(results=tuple(all_results), domain_slug=config.slug)
+            elapsed = time.monotonic() - start_time
+            _print_build_summary(result, elapsed)
+            return result
+
+        # ── Handle domain images ─────────────────────────────────────────
+        for name, image_config in config.images.items():
+            dockerfile = domain_root / image_config.dockerfile
+            context = domain_root / image_config.context if image_config.context is not None else domain_root
+
+            if display is not None:
+                display.set_description(f"Checking {name}")
+
+            _notify(name, image_config.tag, "checking")
+            force_rebuild = rebuild.should_rebuild(name)
+            if force_rebuild:
+                action: Literal["built", "rebuilt"] = "rebuilt"
+            elif await image_exists(image_config.tag):
+                all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="skipped"))
+                logger.info("Image %s (%s): skipped (already exists)", name, image_config.tag)
+                _notify(name, image_config.tag, "skipped")
+                if display is not None:
+                    display.complete_image(name, "[dim]skipped[/dim]")
+                continue
+            else:
+                action = "built"
+
+            if display is not None:
+                display.set_description(f"Building {name}")
+            _notify(name, image_config.tag, "building")
+
+            def _image_status(status: str, _name: str = name) -> None:
+                if display is not None:
+                    display.set_status(_name, status)
+
+            try:
+                await build_image(
+                    tag=image_config.tag,
+                    dockerfile=dockerfile,
+                    context=context,
+                    build_args=image_config.build_args or None,
+                    labels=image_config.labels or None,
+                    no_cache=force_rebuild,
+                    status_callback=_image_status if display else None,
+                )
+                all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action=action))
+                logger.info("Image %s (%s): %s", name, image_config.tag, action)
+                _notify(name, image_config.tag, action)
+                if display is not None:
+                    display.complete_image(name, f"[green]\u2713[/green] {action}")
+            except ImageBuildError as exc:
+                all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="failed", error=str(exc)))
+                logger.warning("Image %s (%s): failed \u2014 %s", name, image_config.tag, exc)
+                _notify(name, image_config.tag, "failed")
+                if display is not None:
+                    display.complete_image(name, "[red]\u2717 failed[/red]")
+
+    result = PreflightResult(results=tuple(all_results), domain_slug=config.slug)
+    elapsed = time.monotonic() - start_time
+    _print_build_summary(result, elapsed)
+    return result

@@ -207,29 +207,190 @@ Both copilot and claude_code use a sandbox bridge pattern:
 └─────────────────────┘     └─────────────────────┘
 ```
 
-## Task Parameters (`-T` Flags)
+## CLI Usage
 
-### Core
+### Running Evaluations (`uv run inspect eval`)
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `dataset` | From `global.yaml` | Select a named task group (preferred over `task_filter` for known sets) |
-| `task_filter` | None | Glob or comma-separated task name filter (applied after `dataset`) |
-| `agent` | `"react"` | Agent: `react`, `copilot`, `claude_code` |
-| `rebuild` | None | `"true"` = all images, `"name1,name2"` = specific |
-| `run_preflight` | `false` | Validate compose files before evaluation |
-| `keep_permanent` | `false` | Keep permanent Docker services alive after eval |
-| `score_aggregation` | From YAML | Override: `average`, `weighted_sum`, `max` |
+```bash
+uv run inspect eval domains/<domain> --model <model> [-T key=value ...]
+```
 
-> **`dataset` vs `task_filter`:** Each domain defines a `default_dataset` in its `global.yaml`. Running without `-T dataset` automatically uses that default. Use `-T dataset=<name>` to switch between known task groups. Use `-T task_filter` only for ad-hoc name-pattern filtering. Both compose: dataset filters first, then task_filter narrows further. For domains with setup hooks (e.g., CRSBench), `dataset` also scopes data downloads to only the selected group.
+All `-T` flags are passed as task parameters to the domain's `@task` function and then to `create_task()`. Parameters are type-coerced by inspect_ai (e.g., `true` → Python `bool`).
 
-### Docker
+#### Core Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `sandbox_compose` | `compose/sandbox.compose.yml` | Sandbox compose file |
-| `permanent_compose` | None | Permanent services compose file |
-| `permanent_project` | `saber-permanent` | Compose project name for permanent services |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `task_filter` | `str` | `None` | Glob or comma-separated task name filter |
+| `dataset` | `str` | From `global.yaml` | Named task group selector |
+| `agent` | `str` | `"react"` | Agent implementation: `react`, `copilot`, `claude_code` |
+| `rebuild` | `str\|bool` | `None` | `true` → rebuild all images; `"name1,name2"` → specific images |
+| `run_preflight` | `bool` | `false` | Validate compose files before evaluation |
+| `keep_permanent` | `bool` | `false` | Keep permanent Docker services alive after eval |
+
+#### Docker / Environment Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sandbox_compose` | `str` | `compose/sandbox.compose.yml` | Relative path to sandbox compose file |
+| `permanent_compose` | `str` | `None` | Relative path to permanent services compose file |
+| `permanent_project` | `str` | `saber-permanent` | Docker Compose project name for permanent services |
+
+#### Agent-Specific Parameters
+
+These are forwarded through `**kwargs` to the agent factory.
+
+**Copilot / Claude Code (shared):**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `persona_file` | `str` | `None` | Path to agent persona markdown file |
+| `skills_dir` | `str` | `None` | Path to skills directory (uploaded into sandbox) |
+| `timeout` | `int` | `300` | Agent execution timeout in seconds |
+| `max_steps` | `int` | `50` | Max tool calls before forced completion |
+
+**Copilot only:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port_base` | `int` | `3000` | Bridge proxy starting port |
+
+**Claude Code only:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `version` | `str` | `"auto"` | Claude binary path or `"auto"` to search PATH |
+| `disallowed_tools` | `str` | `""` | Comma-separated tools to disallow via `--disallowed-tools` |
+
+#### CRSBench Domain Parameters
+
+These parameters are consumed by CRSBench's setup hooks and do **not** apply to other domains.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `dataset` | `str` | `None` | Dataset selector: `competition`, `sanity`, `lite`, `all` |
+| `build` | `str` | `None` | `"true"` → force-build Docker images for benchmarks |
+| `rebuild_images` | `str` | `None` | Prefix filter for rebuilding specific benchmark images |
+| `data_dir` | `str` | `None` | External directory for benchmark data (symlinked to `<domain>/data`) |
+| `include_ground_truth` | `bool` | `true` | Include ground-truth patches in downloaded data |
+| `force_download` | `bool` | `false` | Re-download data even if it already exists |
+| `force_build` | `bool` | `false` | Force rebuild all benchmark Docker images |
+
+#### Examples
+
+```bash
+# Basic evaluation
+uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4.1
+
+# Filter to specific tasks
+uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4.1 \
+  -T task_filter="incident_5*"
+
+# Rebuild all Docker images before eval
+uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4.1 \
+  -T rebuild=true
+
+# Rebuild a specific image
+uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4.1 \
+  -T rebuild=sandbox
+
+# Use copilot agent with persona
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot \
+  -T persona_file=personas/ir_expert.md
+
+# Use claude_code agent
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=claude_code \
+  -T timeout=600
+
+# CRSBench: run lite dataset
+uv run inspect eval domains/crsbench --model openai/azure/gpt-4.1 \
+  -T dataset=lite
+
+# CRSBench: force rebuild images, store data externally
+uv run inspect eval domains/crsbench --model openai/azure/gpt-4.1 \
+  -T force_build=true \
+  -T data_dir=/mnt/crsbench_data
+
+# Select a specific dataset and keep permanent services alive
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T dataset=latest_test_set \
+  -T keep_permanent=true
+
+# Validate compose files before running
+uv run inspect eval domains/excytin_demo --model openai/azure/gpt-4.1 \
+  -T run_preflight=true
+
+# Concurrency control (inspect_ai flags, not -T)
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  --max-samples 4 --max-connections 20
+```
+
+> **`dataset` vs `task_filter`:** Each domain defines a `default_dataset` in its `global.yaml`. Running without `-T dataset` uses that default. Use `-T dataset=<name>` to switch between known task groups. Use `-T task_filter` for ad-hoc name-pattern filtering. Both compose: dataset filters first, then task_filter narrows further. For domains with setup hooks (e.g., CRSBench), `dataset` also scopes data downloads to only the selected group.
+
+### SABER CLI (`uv run saber`)
+
+Operational commands for managing Docker environments and images outside of evaluations.
+
+#### `saber build` — Build Docker images
+
+```bash
+# Build images for all domains
+uv run saber build
+
+# Build images for a specific domain
+uv run saber build excytin_demo
+
+# Force rebuild all images for a domain
+uv run saber build excytin_demo --rebuild
+
+# Rebuild only a specific image
+uv run saber build excytin_demo --rebuild --image sandbox
+```
+
+| Argument / Option | Type | Description |
+|-------------------|------|-------------|
+| `DOMAIN` | `str` (optional) | Domain slug. Omit to build all discovered domains |
+| `--rebuild`, `-r` | flag | Force rebuild even if images already exist |
+| `--image`, `-i` | `str` | Build only this specific image name |
+
+Shows a Rich progress bar with per-image build status when stderr is a TTY.
+
+#### `saber start` — Start permanent environment
+
+```bash
+# Start permanent services (databases, etc.)
+uv run saber start excytin
+
+# Start permanent services + a specific task sandbox
+uv run saber start excytin --task incident_5_task_1
+```
+
+| Argument / Option | Type | Description |
+|-------------------|------|-------------|
+| `DOMAIN` | `str` (required) | Domain slug |
+| `--task`, `-t` | `str` | Also start sandbox for this task ID |
+
+#### `saber teardown` — Tear down Docker resources
+
+```bash
+# List and tear down all SABER compose projects
+uv run saber teardown
+
+# Tear down only a specific domain's projects
+uv run saber teardown excytin_demo
+
+# Skip confirmation prompt
+uv run saber teardown --yes
+```
+
+| Argument / Option | Type | Description |
+|-------------------|------|-------------|
+| `DOMAIN` | `str` (optional) | Domain slug. Omit to tear down all SABER projects |
+| `--yes`, `-y` | flag | Skip confirmation prompt |
+
+Matches projects containing "saber", `{slug}-databases`, or `inspect-{slug}-*` patterns.
 
 ## Scoring
 
@@ -240,14 +401,6 @@ Atomic factory-created scorers with unified `ScoringContext`. Each scoring unit 
 **Aggregation:** `average` (default), `weighted_sum`, `max` — configurable in YAML or via `-T score_aggregation=...`
 
 **Domain-extensible:** Register custom strategies via `ScoringStrategyRegistry` without modifying core code.
-
-## SABER CLI
-
-```bash
-uv run saber build [DOMAIN] [--rebuild] [--image NAME]   # Build Docker images
-uv run saber start DOMAIN [--task TASK_ID]                # Start permanent services
-uv run saber teardown [DOMAIN] [--yes]                    # Tear down Docker resources
-```
 
 ## Development
 
