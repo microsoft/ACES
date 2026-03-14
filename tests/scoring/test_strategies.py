@@ -30,6 +30,7 @@ from saber.scoring.strategies import (
     ToolCallCountStrategy,
     ToolCallStrategy,
     _build_judge_context,
+    _normalize_tool_name,
 )
 
 # ── Helper ──────────────────────────────────────────────────────────
@@ -1093,3 +1094,131 @@ class TestScorerRequired:
                 domain="d",
                 metadata={},
             )
+
+
+# ── _normalize_tool_name ────────────────────────────────────────────
+
+
+class TestNormalizeToolName:
+    """Unit tests for _normalize_tool_name helper."""
+
+    def test_lowercase(self) -> None:
+        assert _normalize_tool_name("Bash") == "bash"
+
+    def test_already_lowercase(self) -> None:
+        assert _normalize_tool_name("bash") == "bash"
+
+    def test_all_caps(self) -> None:
+        assert _normalize_tool_name("READ") == "read"
+
+    def test_mixed_case(self) -> None:
+        assert _normalize_tool_name("Edit") == "edit"
+
+    def test_mcp_prefix_single_segment(self) -> None:
+        assert _normalize_tool_name("mcp__saber_tools__submit_patch") == "submit_patch"
+
+    def test_mcp_prefix_preserves_tool_name(self) -> None:
+        assert _normalize_tool_name("mcp__my_server__run_command") == "run_command"
+
+    def test_mcp_prefix_with_uppercase(self) -> None:
+        assert _normalize_tool_name("MCP__Saber_Tools__Submit_Patch") == "submit_patch"
+
+    def test_no_prefix(self) -> None:
+        assert _normalize_tool_name("submit_patch") == "submit_patch"
+
+    def test_empty_string(self) -> None:
+        assert _normalize_tool_name("") == ""
+
+    def test_single_double_underscore(self) -> None:
+        # Only MCP-style triple-segment pattern should be stripped
+        assert _normalize_tool_name("foo__bar") == "foo__bar"
+
+    def test_trailing_double_underscore_returns_original(self) -> None:
+        """mcp__server__ → empty after prefix strip; fall back to original."""
+        assert _normalize_tool_name("mcp__server__") == "mcp__server__"
+
+    def test_four_plus_segments(self) -> None:
+        """mcp__a__b__c → joins everything after the server segment."""
+        assert _normalize_tool_name("mcp__a__b__c") == "b__c"
+
+
+# ── ToolCallStrategy with normalization ─────────────────────────────
+
+
+class TestToolCallStrategyNormalization:
+    """ToolCallStrategy matches tools after normalizing names."""
+
+    async def test_capitalized_tool_matches_lowercase_expected(self) -> None:
+        """Claude Code sends 'Bash' but expected_tools has 'bash'."""
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="bash",
+            expected_tools=["bash"],
+            tool_steps=(_make_tool_step(tool_name="Bash", output="ok"),),
+        )
+        score = await ToolCallStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0
+
+    async def test_mcp_prefixed_tool_matches_base_name(self) -> None:
+        """MCP-bridged 'mcp__saber_tools__submit_patch' matches 'submit_patch'."""
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="submit_patch",
+            expected_tools=["submit_patch"],
+            tool_steps=(_make_tool_step(tool_name="mcp__saber_tools__submit_patch", output="ok"),),
+        )
+        score = await ToolCallStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0
+
+    async def test_expected_tool_also_normalized(self) -> None:
+        """Expected tool names are also normalized for fair comparison."""
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="Bash",
+            expected_tools=["Bash", "Submit_Patch"],
+            tool_steps=(_make_tool_step(tool_name="bash", output="ok"),),
+        )
+        score = await ToolCallStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0
+
+    async def test_no_match_after_normalization(self) -> None:
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="run",
+            expected_tools=["run"],
+            tool_steps=(_make_tool_step(tool_name="Bash", output="ok"),),
+        )
+        score = await ToolCallStrategy().score(ctx, renderer=object())
+        assert score.value == 0.0
+
+
+# ── ToolCallCountStrategy with normalization ────────────────────────
+
+
+class TestToolCallCountStrategyNormalization:
+    """ToolCallCountStrategy normalizes tool names before counting."""
+
+    async def test_capitalized_tool_counted(self) -> None:
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="bash",
+            min_executions=2,
+            tool_steps=(
+                _make_tool_step(step_number=1, tool_name="Bash", output="a"),
+                _make_tool_step(step_number=2, tool_name="bash", output="b"),
+            ),
+        )
+        score = await ToolCallCountStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0
+
+    async def test_mcp_prefixed_tool_counted(self) -> None:
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="submit_patch",
+            min_executions=1,
+            tool_steps=(
+                _make_tool_step(tool_name="mcp__saber_tools__submit_patch", output="ok"),
+            ),
+        )
+        score = await ToolCallCountStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0

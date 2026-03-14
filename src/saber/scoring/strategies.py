@@ -239,6 +239,26 @@ class LLMJudgeStrategy:
         )
 
 
+# ── Tool-name normalisation ─────────────────────────────────────────
+
+
+def _normalize_tool_name(name: str) -> str:
+    """Normalize a tool name for case- and prefix-insensitive comparison.
+
+    - Lowercases the name.
+    - Strips MCP bridge prefixes (``mcp__<server>__<tool>`` → ``<tool>``).
+    - If stripping the prefix would produce an empty string (e.g.
+      ``mcp__server__``), the original lowercased name is returned.
+    """
+    lowered = name.lower()
+    parts = lowered.split("__")
+    # MCP-bridged tools have the pattern: mcp__<server>__<tool_name>
+    if len(parts) >= 3 and parts[0] == "mcp":
+        stripped = "__".join(parts[2:])
+        return stripped if stripped else lowered
+    return lowered
+
+
 # ── ToolCallStrategy ───────────────────────────────────────────────
 
 
@@ -267,10 +287,10 @@ class ToolCallStrategy:
                 explanation=(f"ToolCallStrategy requires ToolCallCriteria, got {type(criteria).__name__}"),
             )
 
-        expected_tools = criteria.expected_tools or [criteria.tool_name]
-        called_tools = {s.tool_name for s in ctx.tool_steps}
+        expected_tools = {_normalize_tool_name(t) for t in (criteria.expected_tools or [criteria.tool_name])}
+        called_tools = {_normalize_tool_name(s.tool_name) for s in ctx.tool_steps}
 
-        matched = called_tools & set(expected_tools)
+        matched = called_tools & expected_tools
         if matched:
             return Score(
                 value=max_score,
@@ -312,10 +332,10 @@ class ToolCallCountStrategy:
                 explanation=(f"ToolCallCountStrategy requires ToolCallCriteria, got {type(criteria).__name__}"),
             )
 
-        tool_name = criteria.tool_name
+        tool_name = _normalize_tool_name(criteria.tool_name)
         min_count = criteria.min_executions
 
-        count = sum(1 for s in ctx.tool_steps if s.tool_name == tool_name)
+        count = sum(1 for s in ctx.tool_steps if _normalize_tool_name(s.tool_name) == tool_name)
 
         if count >= min_count:
             return Score(

@@ -285,7 +285,7 @@ class ConfigLoader:
             result.append(item)
         return result
 
-    def _apply_filter(self, tasks: list[TaskConfig], pattern: str) -> list[TaskConfig]:
+    def _apply_filter(self, tasks: list[TaskConfig], pattern: str | list[str]) -> list[TaskConfig]:
         """Filter tasks by pattern.
 
         Supports:
@@ -295,12 +295,15 @@ class ConfigLoader:
 
         Args:
             tasks: List of :class:`TaskConfig` to filter.
-            pattern: Comma-separated glob patterns.
+            pattern: Comma-separated glob patterns or list of patterns.
 
         Returns:
             Filtered list preserving original order.
         """
-        patterns = [p.strip() for p in pattern.split(",")]
+        if isinstance(pattern, list):
+            patterns = [p.strip() for p in pattern]
+        else:
+            patterns = [p.strip() for p in pattern.split(",")]
         return [task for task in tasks if any(fnmatch(task.task_id, pat) for pat in patterns)]
 
 
