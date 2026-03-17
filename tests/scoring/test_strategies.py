@@ -1141,6 +1141,26 @@ class TestNormalizeToolName:
         """mcp__a__b__c → joins everything after the server segment."""
         assert _normalize_tool_name("mcp__a__b__c") == "b__c"
 
+    def test_copilot_sdk_hyphen_prefix_stripped(self) -> None:
+        """saber_tools-submit_patch → submit_patch (Copilot SDK convention)."""
+        assert _normalize_tool_name("saber_tools-submit_patch") == "submit_patch"
+
+    def test_copilot_sdk_hyphen_prefix_case_insensitive(self) -> None:
+        """SABER_TOOLS-Submit_Patch → submit_patch."""
+        assert _normalize_tool_name("SABER_TOOLS-Submit_Patch") == "submit_patch"
+
+    def test_copilot_sdk_hyphen_prefix_empty_tool_returns_original(self) -> None:
+        """saber_tools- → empty after prefix strip; fall back to original."""
+        assert _normalize_tool_name("saber_tools-") == "saber_tools-"
+
+    def test_unknown_hyphen_prefix_not_stripped(self) -> None:
+        """my-tool is NOT stripped (only known MCP server prefixes are)."""
+        assert _normalize_tool_name("my-tool") == "my-tool"
+
+    def test_hyphen_in_tool_name_preserved(self) -> None:
+        """A tool with legitimate hyphen is not mangled."""
+        assert _normalize_tool_name("run-command") == "run-command"
+
 
 # ── ToolCallStrategy with normalization ─────────────────────────────
 
@@ -1191,6 +1211,28 @@ class TestToolCallStrategyNormalization:
         score = await ToolCallStrategy().score(ctx, renderer=object())
         assert score.value == 0.0
 
+    async def test_copilot_sdk_hyphen_prefixed_tool_matches(self) -> None:
+        """Copilot SDK 'saber_tools-submit_patch' matches expected 'submit_patch'."""
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="submit_patch",
+            expected_tools=["submit_patch"],
+            tool_steps=(_make_tool_step(tool_name="saber_tools-submit_patch", output="ok"),),
+        )
+        score = await ToolCallStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0
+
+    async def test_unknown_hyphen_prefix_does_not_match(self) -> None:
+        """Unknown prefix 'other-submit_patch' does NOT match 'submit_patch'."""
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="submit_patch",
+            expected_tools=["submit_patch"],
+            tool_steps=(_make_tool_step(tool_name="other-submit_patch", output="ok"),),
+        )
+        score = await ToolCallStrategy().score(ctx, renderer=object())
+        assert score.value == 0.0
+
 
 # ── ToolCallCountStrategy with normalization ────────────────────────
 
@@ -1218,6 +1260,19 @@ class TestToolCallCountStrategyNormalization:
             min_executions=1,
             tool_steps=(
                 _make_tool_step(tool_name="mcp__saber_tools__submit_patch", output="ok"),
+            ),
+        )
+        score = await ToolCallCountStrategy().score(ctx, renderer=object())
+        assert score.value == 1.0
+
+    async def test_copilot_sdk_hyphen_prefixed_tool_counted(self) -> None:
+        """Copilot SDK 'saber_tools-submit_patch' is counted as 'submit_patch'."""
+        ctx = _make_tool_call_ctx(
+            scorer_target=ScorerTarget.TRAJECTORY,
+            tool_name="submit_patch",
+            min_executions=1,
+            tool_steps=(
+                _make_tool_step(tool_name="saber_tools-submit_patch", output="ok"),
             ),
         )
         score = await ToolCallCountStrategy().score(ctx, renderer=object())

@@ -41,7 +41,6 @@ logger = get_logger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MAX_STEPS = 50
 _STORE_PORT_KEY = "claude_code_model_port"
 _DEFAULT_PORT_BASE = 3000
 _AUTH_TOKEN = "sk-ant-api03-DOq5tyLPrk9M4hPE"
@@ -251,6 +250,8 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         instruction_prompt: str = "",
         assistant_prompt: str = "",
         tools: "Sequence[Tool] | None" = None,
+        *,
+        max_steps: int,
         **extra_kwargs: object,
     ) -> "Solver":
         """Build a Solver that drives Claude Code CLI via sandbox_agent_bridge.
@@ -273,7 +274,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         disallowed_tools: list[str] = list(  # type: ignore[call-overload]
             outer_kwargs.get("disallowed_tools", [])
         )
-        max_steps: int = int(outer_kwargs.get("max_steps", _DEFAULT_MAX_STEPS))  # type: ignore[call-overload]
         _pf = outer_kwargs.get("persona_file")
         persona_file: str | None = str(_pf) if _pf else None
         _sd = outer_kwargs.get("skills_dir")

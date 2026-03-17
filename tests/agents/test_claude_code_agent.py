@@ -60,7 +60,7 @@ class TestClaudeCodeCreateAgent:
         from saber.agents.registry.claude_code.solver import create_agent
 
         create_with_prompts = create_agent()
-        solver = create_with_prompts(instruction_prompt="Do the task.")
+        solver = create_with_prompts(instruction_prompt="Do the task.", max_steps=200)
         assert isinstance(solver, Solver)
 
     def test_create_with_prompts_returns_solver_with_tools(self) -> None:
@@ -74,6 +74,7 @@ class TestClaudeCodeCreateAgent:
         solver = create_with_prompts(
             instruction_prompt="Do the task.",
             tools=[bash()],
+            max_steps=200,
         )
         assert isinstance(solver, Solver)
 
@@ -390,7 +391,7 @@ class TestClaudeCodePersonaSkills:
         from saber.agents.registry.claude_code.solver import create_agent
 
         create_with_prompts = create_agent(persona_file="/tmp/persona.md")
-        solver = create_with_prompts(instruction_prompt="Do the task.")
+        solver = create_with_prompts(instruction_prompt="Do the task.", max_steps=200)
         assert isinstance(solver, Solver)
 
     def test_create_agent_passes_skills_dir_to_inner(self) -> None:
@@ -400,7 +401,7 @@ class TestClaudeCodePersonaSkills:
         from saber.agents.registry.claude_code.solver import create_agent
 
         create_with_prompts = create_agent(skills_dir="/tmp/skills")
-        solver = create_with_prompts(instruction_prompt="Do the task.")
+        solver = create_with_prompts(instruction_prompt="Do the task.", max_steps=200)
         assert isinstance(solver, Solver)
 
 

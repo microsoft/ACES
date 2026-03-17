@@ -239,7 +239,8 @@ def build_bridged_tools_for_copilot(
         A BridgedToolsSpec list for non-native tools, or None if none remain.
     """
     filtered = filter_native_tools(tools, COPILOT_NATIVE_TOOLS)
-    return build_bridged_tools(filtered) if filtered else None
+    result = build_bridged_tools(filtered) if filtered else None
+    return result
 
 
 def build_user_prompt(messages: Sequence[ChatMessage]) -> tuple[str, bool]:

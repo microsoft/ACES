@@ -245,17 +245,35 @@ class LLMJudgeStrategy:
 def _normalize_tool_name(name: str) -> str:
     """Normalize a tool name for case- and prefix-insensitive comparison.
 
-    - Lowercases the name.
-    - Strips MCP bridge prefixes (``mcp__<server>__<tool>`` → ``<tool>``).
-    - If stripping the prefix would produce an empty string (e.g.
-      ``mcp__server__``), the original lowercased name is returned.
+    Handles two MCP bridge naming conventions:
+
+    1. **Claude Code** (double-underscore): ``mcp__<server>__<tool>`` → ``<tool>``
+    2. **Copilot SDK** (hyphen): ``<server_label>-<tool>`` → ``<tool>``
+
+    The Copilot SDK convention is only applied when the prefix matches a
+    known bridged-tools server name (currently ``saber_tools``) to avoid
+    false positives with tools that legitimately contain hyphens.
+
+    If stripping the prefix would produce an empty string, the original
+    lowercased name is returned.
     """
     lowered = name.lower()
+
+    # Convention 1: mcp__<server>__<tool_name>  (Claude Code)
     parts = lowered.split("__")
-    # MCP-bridged tools have the pattern: mcp__<server>__<tool_name>
     if len(parts) >= 3 and parts[0] == "mcp":
         stripped = "__".join(parts[2:])
         return stripped if stripped else lowered
+
+    # Convention 2: <server_label>-<tool_name>  (Copilot SDK)
+    # Only strip known server prefixes to avoid mangling tool names
+    # that legitimately contain hyphens (e.g. "my-tool").
+    _KNOWN_MCP_PREFIXES = ("saber_tools-",)
+    for prefix in _KNOWN_MCP_PREFIXES:
+        if lowered.startswith(prefix):
+            stripped = lowered[len(prefix) :]
+            return stripped if stripped else lowered
+
     return lowered
 
 

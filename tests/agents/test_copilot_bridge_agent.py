@@ -63,7 +63,6 @@ class TestCopilotBridgeConfig:
 
         cfg = CopilotBridgeConfig()
         assert cfg.sandbox_name == "default"
-        assert cfg.max_steps == 50
         assert cfg.port_base == 3000
         assert cfg.model == "inspect"
 
@@ -71,9 +70,8 @@ class TestCopilotBridgeConfig:
         """from_kwargs extracts known fields and ignores unknowns."""
         from saber.agents.registry.copilot.solver import CopilotBridgeConfig
 
-        cfg = CopilotBridgeConfig.from_kwargs({"max_steps": 10, "unknown": "ignored"})
-        assert cfg.max_steps == 10
-        assert cfg.sandbox_name == "default"
+        cfg = CopilotBridgeConfig.from_kwargs({"sandbox_name": "custom", "unknown": "ignored"})
+        assert cfg.sandbox_name == "custom"
 
     def test_frozen(self) -> None:
         """Config model is immutable."""
@@ -83,7 +81,7 @@ class TestCopilotBridgeConfig:
 
         cfg = CopilotBridgeConfig()
         with pytest.raises(ValidationError):
-            cfg.max_steps = 999  # type: ignore[misc]
+            cfg.sandbox_name = "other"  # type: ignore[misc]
 
 
 class TestBuildSystemPrompt:
@@ -153,7 +151,7 @@ class TestBuildRunnerEnv:
         assert "COPILOT_SYSTEM_PROMPT" not in env
 
     def test_mcp_config_serialized_as_json(self) -> None:
-        """MCP configs are serialized to JSON."""
+        """MCP configs are serialized as a dict keyed by server name."""
         import json
         from types import SimpleNamespace
 
@@ -173,11 +171,14 @@ class TestBuildRunnerEnv:
             mcp_configs=mcp_configs,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
-        assert len(parsed) == 1
-        assert parsed[0]["name"] == "saber_tools"
+        assert isinstance(parsed, dict)
+        assert "saber_tools" in parsed
+        assert parsed["saber_tools"]["url"] == "http://localhost:13131/mcp/saber_tools"
+        assert parsed["saber_tools"]["type"] == "http"
+        assert parsed["saber_tools"]["tools"] == ["*"]
 
     def test_empty_mcp_configs(self) -> None:
-        """Empty MCP configs serialize to empty JSON list."""
+        """Empty MCP configs serialize to empty JSON dict."""
         from saber.agents.registry.copilot.solver import _build_runner_env
 
         env = _build_runner_env(
@@ -186,7 +187,7 @@ class TestBuildRunnerEnv:
             prompt="Go",
             mcp_configs=[],
         )
-        assert env["COPILOT_MCP_CONFIG"] == "[]"
+        assert env["COPILOT_MCP_CONFIG"] == "{}"
 
     def test_timeout_flows_to_env(self) -> None:
         """Custom timeout is passed through to COPILOT_TIMEOUT."""
@@ -310,7 +311,7 @@ class TestCopilotCreateAgent:
 
         from saber.agents.registry.copilot.solver import create_agent
 
-        solver = create_agent()(instruction_prompt="Do the task.")
+        solver = create_agent()(instruction_prompt="Do the task.", max_steps=200)
         assert isinstance(solver, Solver)
 
     def test_create_with_prompts_returns_solver_with_tools(self) -> None:
@@ -320,7 +321,7 @@ class TestCopilotCreateAgent:
 
         from saber.agents.registry.copilot.solver import create_agent
 
-        solver = create_agent()(instruction_prompt="Do the task.", tools=[bash()])
+        solver = create_agent()(instruction_prompt="Do the task.", tools=[bash()], max_steps=200)
         assert isinstance(solver, Solver)
 
     def test_no_copilot_sdk_import_on_host(self) -> None:
@@ -483,13 +484,11 @@ class TestCopilotBridgeConfigEdgeCases:
         cfg = CopilotBridgeConfig.from_kwargs(
             {
                 "sandbox_name": "custom",
-                "max_steps": 10,
                 "port_base": 4000,
                 "model": "gpt-4",
             }
         )
         assert cfg.sandbox_name == "custom"
-        assert cfg.max_steps == 10
         assert cfg.port_base == 4000
         assert cfg.model == "gpt-4"
 
@@ -499,14 +498,13 @@ class TestCopilotBridgeConfigEdgeCases:
 
         cfg = CopilotBridgeConfig.from_kwargs({"foo": "bar", "baz": 123})
         assert cfg.sandbox_name == "default"
-        assert cfg.max_steps == 50
 
-    def test_boundary_max_steps_one(self) -> None:
-        """max_steps=1 is accepted."""
+    def test_boundary_port_base_one(self) -> None:
+        """port_base=1 is accepted (max_steps removed from config)."""
         from saber.agents.registry.copilot.solver import CopilotBridgeConfig
 
-        cfg = CopilotBridgeConfig(max_steps=1)
-        assert cfg.max_steps == 1
+        cfg = CopilotBridgeConfig(port_base=1)
+        assert cfg.port_base == 1
 
     def test_boundary_port_base_minimum(self) -> None:
         """port_base=1 is accepted."""
@@ -723,14 +721,16 @@ class TestBuildRunnerEnvEdgeCases:
         )
         assert env["OPENAI_API_KEY"] == "sk-placeholder-for-bridge"
 
-    def test_mcp_config_missing_url_attribute(self) -> None:
-        """Object with only .name (no .url) yields url='' in serialized JSON."""
+    def test_mcp_config_includes_tools_wildcard(self) -> None:
+        """Each MCP config entry includes tools=["*"] for the Copilot SDK."""
         import json
         from types import SimpleNamespace
 
         from saber.agents.registry.copilot.solver import _build_runner_env
 
-        mcp_configs = [SimpleNamespace(name="tool_a")]
+        mcp_configs = [
+            SimpleNamespace(name="tool_a", url="http://localhost:1/mcp", type="http"),
+        ]
         env = _build_runner_env(
             bridge_port=13131,
             model="inspect",
@@ -738,16 +738,18 @@ class TestBuildRunnerEnvEdgeCases:
             mcp_configs=mcp_configs,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
-        assert parsed[0]["url"] == ""
+        assert parsed["tool_a"]["tools"] == ["*"]
 
-    def test_mcp_config_missing_name_attribute(self) -> None:
-        """Object with only .url (no .name) yields name='' in serialized JSON."""
+    def test_mcp_config_type_defaults_to_http(self) -> None:
+        """MCP config type is captured from the config object."""
         import json
         from types import SimpleNamespace
 
         from saber.agents.registry.copilot.solver import _build_runner_env
 
-        mcp_configs = [SimpleNamespace(url="http://localhost:1234/mcp")]
+        mcp_configs = [
+            SimpleNamespace(name="sse_server", url="http://localhost:1234/mcp", type="sse"),
+        ]
         env = _build_runner_env(
             bridge_port=13131,
             model="inspect",
@@ -755,10 +757,10 @@ class TestBuildRunnerEnvEdgeCases:
             mcp_configs=mcp_configs,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
-        assert parsed[0]["name"] == ""
+        assert parsed["sse_server"]["type"] == "sse"
 
     def test_multiple_mcp_configs_serialized(self) -> None:
-        """Two MCP configs produce a JSON list of length 2."""
+        """Two MCP configs produce a JSON dict with 2 keys."""
         import json
         from types import SimpleNamespace
 
@@ -775,7 +777,12 @@ class TestBuildRunnerEnvEdgeCases:
             mcp_configs=mcp_configs,
         )
         parsed = json.loads(env["COPILOT_MCP_CONFIG"])
+        assert isinstance(parsed, dict)
         assert len(parsed) == 2
+        assert "tool_a" in parsed
+        assert "tool_b" in parsed
+        assert parsed["tool_a"]["url"] == "http://localhost:1/mcp"
+        assert parsed["tool_b"]["url"] == "http://localhost:2/mcp"
 
     def test_all_return_values_are_strings(self) -> None:
         """Every value in the returned dict is a str."""
@@ -800,12 +807,12 @@ class TestCopilotCreateAgentEdgeCases:
     """Phase 7 extended: create_agent factory edge cases."""
 
     def test_default_all_prompts_empty_returns_solver(self) -> None:
-        """create_agent()() with no arguments returns a Solver."""
+        """create_agent()(max_steps=200) with no prompts returns a Solver."""
         from inspect_ai.solver import Solver
 
         from saber.agents.registry.copilot.solver import create_agent
 
-        solver = create_agent()()
+        solver = create_agent()(max_steps=200)
         assert isinstance(solver, Solver)
 
     def test_extra_kwargs_absorbed_without_error(self) -> None:
@@ -814,7 +821,7 @@ class TestCopilotCreateAgentEdgeCases:
 
         from saber.agents.registry.copilot.solver import create_agent
 
-        solver = create_agent()(instruction_prompt="X", unknown_kwarg="ignored")
+        solver = create_agent()(instruction_prompt="X", max_steps=200, unknown_kwarg="ignored")
         assert isinstance(solver, Solver)
 
 
@@ -1336,7 +1343,7 @@ class TestCopilotPersonaSkillsWiring:
 
         factory = create_agent(persona_file="/tmp/p.md")
         assert callable(factory)
-        solver = factory(instruction_prompt="Do it")
+        solver = factory(instruction_prompt="Do it", max_steps=200)
         assert isinstance(solver, Solver)
 
     def test_create_agent_with_skills_dir(self) -> None:
@@ -1347,7 +1354,7 @@ class TestCopilotPersonaSkillsWiring:
 
         factory = create_agent(skills_dir="/tmp/skills")
         assert callable(factory)
-        solver = factory(instruction_prompt="Do it")
+        solver = factory(instruction_prompt="Do it", max_steps=200)
         assert isinstance(solver, Solver)
 
 

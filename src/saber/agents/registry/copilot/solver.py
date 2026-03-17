@@ -45,6 +45,7 @@ from saber.logging import get_logger
 if TYPE_CHECKING:
     from inspect_ai.solver import Solver
     from inspect_ai.tool import Tool
+    from inspect_ai.tool._mcp._config import MCPServerConfigHTTP
 
 logger = get_logger(__name__)
 
@@ -687,7 +688,6 @@ class CopilotBridgeConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     sandbox_name: str = "default"
-    max_steps: int = 50
     port_base: int = _DEFAULT_PORT_BASE
     model: str = "inspect"
     persona_file: str | None = None
@@ -756,7 +756,7 @@ def _build_runner_env(
     bridge_port: int,
     model: str,
     prompt: str,
-    mcp_configs: Sequence[object],
+    mcp_configs: "Sequence[MCPServerConfigHTTP]",
     timeout: int = _DEFAULT_TIMEOUT,
     persona_prompt: str = "",
     skill_directories_json: str = "[]",
@@ -768,8 +768,7 @@ def _build_runner_env(
         bridge_port: Port where the bridge proxy is listening.
         model: Model identifier to pass to the runner.
         prompt: User prompt text (SABER system prompt already prepended).
-        mcp_configs: MCP server config objects from bridge
-            (each with ``.name``, ``.url``, ``.type`` attributes).
+        mcp_configs: MCP server config objects from the bridge.
         timeout: Timeout in seconds for ``session.send_and_wait()``.
             Derived from inspect_ai's ``sample_limits().time.remaining``
             so the runner respects the overall sample time budget.
@@ -783,20 +782,22 @@ def _build_runner_env(
     Returns:
         Dict of env vars to pass to ``sbox.exec()``.
     """
-    mcp_list = [
-        {
-            "name": getattr(c, "name", ""),
-            "url": getattr(c, "url", ""),
-            "type": getattr(c, "type", "http"),
+    # The Copilot SDK expects mcp_servers as dict[str, MCPRemoteServerConfig]
+    # (server name → config), NOT a list.  See:
+    # copilot.types.MCPRemoteServerConfig — type, url, tools, headers.
+    mcp_dict: dict[str, dict[str, str | list[str]]] = {}
+    for c in mcp_configs:
+        mcp_dict[c.name] = {
+            "type": c.type,
+            "url": c.url,
+            "tools": ["*"],
         }
-        for c in mcp_configs
-    ]
     return {
         "OPENAI_BASE_URL": f"http://localhost:{bridge_port}/v1",
         "OPENAI_API_KEY": "sk-placeholder-for-bridge",
         "COPILOT_MODEL": model,
         "COPILOT_PROMPT": prompt,
-        "COPILOT_MCP_CONFIG": json.dumps(mcp_list),
+        "COPILOT_MCP_CONFIG": json.dumps(mcp_dict),
         "COPILOT_TIMEOUT": str(timeout),
         "COPILOT_PERSONA_PROMPT": persona_prompt,
         "COPILOT_SKILL_DIRECTORIES": skill_directories_json,
@@ -824,6 +825,8 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         instruction_prompt: str = "",
         assistant_prompt: str = "",
         tools: "Sequence[Tool] | None" = None,
+        *,
+        max_steps: int,
         **extra_kwargs: object,
     ) -> "Solver":
         """Build a Solver that drives Copilot via sandbox_agent_bridge.
@@ -1068,7 +1071,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
         return as_solver(
             _copilot_agent(),
-            limits=[tool_call_limit(config.max_steps)],
+            limits=[tool_call_limit(max_steps)],
         )
 
     return create_with_prompts

@@ -67,11 +67,16 @@ def create_saber_solver(
                 "assistant_prompt": assistant,
             }
 
-            # Per-sample max_steps from metadata
+            # Per-sample max_steps from metadata — REQUIRED
             per_sample_max_steps = metadata.get("max_steps")
-            if isinstance(per_sample_max_steps, int) and per_sample_max_steps > 0:
-                state.tool_call_limit = per_sample_max_steps  # safety net
-                agent_kwargs["max_steps"] = per_sample_max_steps  # forwarded to agent
+            if not isinstance(per_sample_max_steps, int) or per_sample_max_steps <= 0:
+                raise ValueError(
+                    f"Task metadata must define a positive integer 'max_steps', "
+                    f"got {per_sample_max_steps!r}. "
+                    f"Set max_steps in your task YAML (e.g. global_defaults.max_steps: 200)."
+                )
+            state.tool_call_limit = per_sample_max_steps  # safety net
+            agent_kwargs["max_steps"] = per_sample_max_steps  # forwarded to agent
 
             # Per-sample tool resolution from metadata
             resolved: ResolvedTools | None = None

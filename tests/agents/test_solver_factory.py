@@ -79,6 +79,7 @@ class TestSaberSolverBehavior:
         state.metadata = {
             "instruction_prompt": "Do X",
             "assistant_prompt": "You are Y",
+            "max_steps": 200,
         }
         generate = MagicMock()
 
@@ -103,7 +104,7 @@ class TestSaberSolverBehavior:
         solver = create_saber_solver(agent_name="test", agent_factory=mock_factory)
 
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         generate = MagicMock()
 
         result = await solver(state, generate)
@@ -124,6 +125,7 @@ class TestSaberSolverBehavior:
         state.metadata = {
             "instruction_prompt": None,
             "assistant_prompt": None,
+            "max_steps": 200,
         }
         generate = MagicMock()
 
@@ -136,7 +138,7 @@ class TestSaberSolverBehavior:
 
     @pytest.mark.asyncio
     async def test_solve_missing_metadata_defaults_empty(self) -> None:
-        """When metadata is empty, all prompts default to empty strings."""
+        """When metadata has max_steps but no prompts, prompts default to empty strings."""
         mock_inner_solver = AsyncMock(return_value=MagicMock())
         mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
         mock_factory = MagicMock(return_value=mock_create_with_prompts)
@@ -144,7 +146,7 @@ class TestSaberSolverBehavior:
         solver = create_saber_solver(agent_name="test", agent_factory=mock_factory)
 
         state = MagicMock()
-        state.metadata = None
+        state.metadata = {"max_steps": 200}
         generate = MagicMock()
 
         await solver(state, generate)
@@ -178,7 +180,7 @@ class TestKwargsPassthrough:
         )
 
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         generate = MagicMock()
 
         await solver(state, generate)
@@ -205,7 +207,7 @@ class TestKwargsPassthrough:
         )
 
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         generate = MagicMock()
 
         await solver(state, generate)
@@ -229,7 +231,7 @@ class TestNonCallableAgentRaises:
         solver = create_saber_solver("broken", broken_factory)
 
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         generate = MagicMock()
 
         with pytest.raises(TypeError, match="non-callable"):
@@ -285,6 +287,7 @@ class TestCapabilitiesGating:
         state = MagicMock()
         state.metadata = {
             "tools": {"bash": {"timeout": 120}},
+            "max_steps": 200,
         }
         generate = MagicMock()
 
@@ -316,7 +319,7 @@ class TestCapabilitiesGating:
 
         # Sample 1: only bash
         state1 = MagicMock()
-        state1.metadata = {"tools": {"bash": {"timeout": 120}}}
+        state1.metadata = {"tools": {"bash": {"timeout": 120}}, "max_steps": 200}
         generate = MagicMock()
         await solver(state1, generate)
 
@@ -324,7 +327,7 @@ class TestCapabilitiesGating:
         mock_factory.reset_mock()
         mock_factory.return_value = capture_create
         state2 = MagicMock()
-        state2.metadata = {"tools": {"bash": {"timeout": 120}, "python": {"timeout": 60}}}
+        state2.metadata = {"tools": {"bash": {"timeout": 120}, "python": {"timeout": 60}}, "max_steps": 200}
         await solver(state2, generate)
 
         assert len(call_records) == 2
@@ -361,7 +364,7 @@ class TestCapabilitiesGating:
         # Call twice with identical metadata
         for _ in range(2):
             state = MagicMock()
-            state.metadata = {"tools": tools_meta}
+            state.metadata = {"tools": tools_meta, "max_steps": 200}
             await solver(state, generate)
 
         # resolve() should only be called once (second call uses cache)
@@ -382,7 +385,7 @@ class TestCapabilitiesGating:
         )
 
         state = MagicMock()
-        state.metadata = {}  # no tools key
+        state.metadata = {"max_steps": 200}  # no tools key
         generate = MagicMock()
 
         await solver(state, generate)
@@ -405,7 +408,7 @@ class TestCapabilitiesGating:
         )
 
         state = MagicMock()
-        state.metadata = {"tools": {"bash": {"timeout": 120}}}
+        state.metadata = {"tools": {"bash": {"timeout": 120}}, "max_steps": 200}
         generate = MagicMock()
 
         await solver(state, generate)
@@ -428,7 +431,7 @@ class TestCapabilitiesGating:
         )
 
         state = MagicMock()
-        state.metadata = {"tools": {"python": {"timeout": 60}}}
+        state.metadata = {"tools": {"bash": {"timeout": 120}}, "max_steps": 200}
         generate = MagicMock()
 
         await solver(state, generate)
@@ -452,7 +455,7 @@ class TestCapabilitiesGating:
         )
 
         state = MagicMock()
-        state.metadata = {"tools": {"bash": {"timeout": 180}}}
+        state.metadata = {"tools": {"bash": {"timeout": 180}}, "max_steps": 200}
         generate = MagicMock()
 
         await solver(state, generate)
@@ -492,8 +495,8 @@ class TestPerSampleMaxSteps:
         assert 100 in captured_limit
 
     @pytest.mark.asyncio
-    async def test_no_max_steps_does_not_set_limit(self) -> None:
-        """Without max_steps in metadata, tool_call_limit is not touched."""
+    async def test_no_max_steps_raises_valueerror(self) -> None:
+        """Without max_steps in metadata, ValueError is raised."""
         mock_inner_solver = AsyncMock(return_value=MagicMock())
         mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
         mock_factory = MagicMock(return_value=mock_create_with_prompts)
@@ -502,24 +505,14 @@ class TestPerSampleMaxSteps:
 
         state = MagicMock()
         state.metadata = {}
-        captured_limit: list[int] = []
-        original_setattr = type(state).__setattr__
+        generate = MagicMock()
 
-        def tracking_setattr(self: object, name: str, value: object) -> None:
-            if name == "tool_call_limit":
-                captured_limit.append(value)  # type: ignore[arg-type]
-            original_setattr(self, name, value)
-
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(type(state), "__setattr__", tracking_setattr)
-            generate = MagicMock()
+        with pytest.raises(ValueError, match="must define a positive integer 'max_steps'"):
             await solver(state, generate)
 
-        assert len(captured_limit) == 0
-
     @pytest.mark.asyncio
-    async def test_invalid_max_steps_ignored(self) -> None:
-        """Non-int or non-positive max_steps should be ignored."""
+    async def test_invalid_max_steps_raises_valueerror(self) -> None:
+        """Non-int or non-positive max_steps should raise ValueError."""
         mock_inner_solver = AsyncMock(return_value=MagicMock())
         mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
         mock_factory = MagicMock(return_value=mock_create_with_prompts)
@@ -529,23 +522,26 @@ class TestPerSampleMaxSteps:
         for bad_value in [0, -5, "ten", None]:
             state = MagicMock()
             state.metadata = {"max_steps": bad_value}
-            captured_limit: list[int] = []
-            _orig = type(state).__setattr__
-            _cap = captured_limit  # bind for closure
+            generate = MagicMock()
 
-            def tracking_setattr(
-                self: object, name: str, value: object, _o: object = _orig, _c: list[int] = _cap
-            ) -> None:
-                if name == "tool_call_limit":
-                    _c.append(value)  # type: ignore[arg-type]
-                _o(self, name, value)  # type: ignore[operator]
-
-            with pytest.MonkeyPatch.context() as mp:
-                mp.setattr(type(state), "__setattr__", tracking_setattr)
-                generate = MagicMock()
+            with pytest.raises(ValueError, match="must define a positive integer 'max_steps'"):
                 await solver(state, generate)
 
-            assert len(captured_limit) == 0, f"tool_call_limit should not be set for max_steps={bad_value!r}"
+    @pytest.mark.asyncio
+    async def test_none_metadata_raises_valueerror(self) -> None:
+        """When metadata is None, ValueError is raised for missing max_steps."""
+        mock_inner_solver = AsyncMock(return_value=MagicMock())
+        mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
+        mock_factory = MagicMock(return_value=mock_create_with_prompts)
+
+        solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
+
+        state = MagicMock()
+        state.metadata = None
+        generate = MagicMock()
+
+        with pytest.raises(ValueError, match="must define a positive integer 'max_steps'"):
+            await solver(state, generate)
 
 
 class TestToolCallLimitRecovery:
@@ -571,7 +567,7 @@ class TestToolCallLimitRecovery:
 
         # Build a state with a mutable messages list
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         state.messages = []
 
         fake_output = ModelOutput.from_content(model="test", content="My final answer", stop_reason="stop")
@@ -648,12 +644,9 @@ class TestMaxStepsForwarding:
 
     @pytest.mark.asyncio
     async def test_max_steps_not_forwarded_when_absent(self) -> None:
-        """When metadata has no max_steps, it is NOT in agent_kwargs."""
-        captured_prompt_kwargs: list[dict[str, object]] = []
-
+        """When metadata has no max_steps, ValueError is raised."""
         def mock_factory(**kw: object) -> object:
             def create_with_prompts(**prompt_kwargs: object) -> object:
-                captured_prompt_kwargs.append(dict(prompt_kwargs))
                 return AsyncMock(return_value=MagicMock())
 
             return create_with_prompts
@@ -664,22 +657,16 @@ class TestMaxStepsForwarding:
         state.metadata = {}
         generate = MagicMock()
 
-        await solver(state, generate)
-
-        assert len(captured_prompt_kwargs) == 1
-        assert "max_steps" not in captured_prompt_kwargs[0]
+        with pytest.raises(ValueError, match="must define a positive integer 'max_steps'"):
+            await solver(state, generate)
 
     @pytest.mark.asyncio
     async def test_max_steps_not_forwarded_when_invalid(self) -> None:
-        """When max_steps is invalid (0, negative, string), it is NOT forwarded."""
+        """When max_steps is invalid (0, negative, string), ValueError is raised."""
         for bad_value in [0, -5, "ten", None]:
-            captured_prompt_kwargs: list[dict[str, object]] = []
 
             def mock_factory(**kw: object) -> object:
-                _cap = captured_prompt_kwargs  # bind for closure
-
                 def create_with_prompts(**prompt_kwargs: object) -> object:
-                    _cap.append(dict(prompt_kwargs))
                     return AsyncMock(return_value=MagicMock())
 
                 return create_with_prompts
@@ -690,11 +677,8 @@ class TestMaxStepsForwarding:
             state.metadata = {"max_steps": bad_value}
             generate = MagicMock()
 
-            await solver(state, generate)
-
-            assert "max_steps" not in captured_prompt_kwargs[0], (
-                f"max_steps should not be forwarded for value={bad_value!r}"
-            )
+            with pytest.raises(ValueError, match="must define a positive integer 'max_steps'"):
+                await solver(state, generate)
     @pytest.mark.asyncio
     async def test_limit_exceeded_appends_assistant_message(self) -> None:
         """The model's response message is appended to state.messages."""
@@ -710,7 +694,7 @@ class TestMaxStepsForwarding:
         solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
 
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         state.messages = []
 
         fake_output = ModelOutput.from_content(model="test", content="Here is my answer", stop_reason="stop")
@@ -737,7 +721,7 @@ class TestMaxStepsForwarding:
         solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
 
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         generate = MagicMock()
 
         result = await solver(state, generate)
@@ -769,7 +753,7 @@ class TestMaxStepsForwarding:
 
         # State has assistant with 3 tool calls, only 1 has a result
         state = MagicMock()
-        state.metadata = {}
+        state.metadata = {"max_steps": 200}
         state.messages = [
             ChatMessageUser(content="Investigate the incident"),
             ChatMessageAssistant(

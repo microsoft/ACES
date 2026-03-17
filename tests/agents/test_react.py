@@ -19,22 +19,19 @@ class TestReactCreateAgent:
 
 
 class TestReactCreateWithPrompts:
-    """create_with_prompts respects max_steps parameter."""
+    """create_with_prompts requires max_steps as keyword-only parameter."""
 
     @patch("inspect_ai.agent.react")
     @patch("inspect_ai.agent.as_solver")
-    def test_without_max_steps_model_is_none(
+    def test_without_max_steps_raises_type_error(
         self, mock_as_solver: MagicMock, mock_react: MagicMock
     ) -> None:
-        """Without max_steps, react() is called with model=None."""
+        """Without max_steps keyword arg, TypeError is raised."""
         from saber.agents.registry.react import create_agent
 
         factory = create_agent()
-        factory(instruction_prompt="do X", assistant_prompt="you are Y")
-
-        mock_react.assert_called_once()
-        call_kwargs = mock_react.call_args[1]
-        assert call_kwargs.get("model") is None
+        with pytest.raises(TypeError):
+            factory(instruction_prompt="do X", assistant_prompt="you are Y")
 
     @patch("inspect_ai.agent.react")
     @patch("inspect_ai.agent.as_solver")
@@ -50,33 +47,3 @@ class TestReactCreateWithPrompts:
         mock_react.assert_called_once()
         call_kwargs = mock_react.call_args[1]
         assert call_kwargs.get("model") is not None
-
-    @patch("inspect_ai.agent.react")
-    @patch("inspect_ai.agent.as_solver")
-    def test_with_max_steps_zero_model_is_none(
-        self, mock_as_solver: MagicMock, mock_react: MagicMock
-    ) -> None:
-        """With max_steps=0, react() is called with model=None."""
-        from saber.agents.registry.react import create_agent
-
-        factory = create_agent()
-        factory(instruction_prompt="do X", max_steps=0)
-
-        mock_react.assert_called_once()
-        call_kwargs = mock_react.call_args[1]
-        assert call_kwargs.get("model") is None
-
-    @patch("inspect_ai.agent.react")
-    @patch("inspect_ai.agent.as_solver")
-    def test_with_max_steps_negative_model_is_none(
-        self, mock_as_solver: MagicMock, mock_react: MagicMock
-    ) -> None:
-        """With max_steps=-5, react() is called with model=None."""
-        from saber.agents.registry.react import create_agent
-
-        factory = create_agent()
-        factory(instruction_prompt="do X", max_steps=-5)
-
-        mock_react.assert_called_once()
-        call_kwargs = mock_react.call_args[1]
-        assert call_kwargs.get("model") is None
