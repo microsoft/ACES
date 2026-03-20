@@ -132,6 +132,11 @@ async def _list_compose_projects() -> list[ComposeProject]:
 async def _teardown_project(project_name: str) -> tuple[bool, str]:
     """Stop a compose project and remove volumes.
 
+    When ``docker compose down`` fails because init containers (containers
+    that ran to completion and were auto-removed) are "not found", falls
+    back to force-removing all project containers via the Docker CLI, then
+    cleaning up networks and volumes.
+
     Returns:
         Tuple of (success, stderr_text).
     """
@@ -147,7 +152,89 @@ async def _teardown_project(project_name: str) -> tuple[bool, str]:
         stderr=asyncio.subprocess.PIPE,
     )
     _, stderr = await proc.communicate()
-    return proc.returncode == 0, stderr.decode().strip()
+    stderr_text = stderr.decode().strip()
+
+    if proc.returncode == 0:
+        return True, stderr_text
+
+    # docker compose down fails when init containers that already exited have
+    # been removed by Docker — it cannot find them to stop.  Fall back to raw
+    # Docker commands that are tolerant of missing containers.
+    if "not found" in stderr_text.lower():
+        return await _force_teardown_project(project_name, stderr_text)
+
+    return False, stderr_text
+
+
+async def _force_teardown_project(
+    project_name: str, original_stderr: str,
+) -> tuple[bool, str]:
+    """Force-remove all containers, networks and volumes for a project.
+
+    Used as a fallback when ``docker compose down`` fails due to missing
+    init containers.
+    """
+    label = f"com.docker.compose.project={project_name}"
+
+    # 1. Force-remove all containers belonging to this project
+    list_proc = await asyncio.create_subprocess_exec(
+        "docker", "ps", "-aq", "--filter", f"label={label}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    list_stdout, _ = await list_proc.communicate()
+    container_ids = list_stdout.decode().split()
+    if container_ids:
+        rm_proc = await asyncio.create_subprocess_exec(
+            "docker", "rm", "-f", *container_ids,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await rm_proc.communicate()
+
+    # 2. Remove project networks
+    net_proc = await asyncio.create_subprocess_exec(
+        "docker", "network", "ls", "--filter", f"label={label}", "-q",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    net_stdout, _ = await net_proc.communicate()
+    network_ids = net_stdout.decode().split()
+    if network_ids:
+        netrm = await asyncio.create_subprocess_exec(
+            "docker", "network", "rm", *network_ids,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await netrm.communicate()
+
+    # 3. Remove project volumes
+    vol_proc = await asyncio.create_subprocess_exec(
+        "docker", "volume", "ls", "--filter", f"label={label}", "-q",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    vol_stdout, _ = await vol_proc.communicate()
+    volume_ids = vol_stdout.decode().split()
+    if volume_ids:
+        volrm = await asyncio.create_subprocess_exec(
+            "docker", "volume", "rm", "-f", *volume_ids,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await volrm.communicate()
+
+    # Verify nothing remains
+    verify = await asyncio.create_subprocess_exec(
+        "docker", "ps", "-aq", "--filter", f"label={label}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    verify_stdout, _ = await verify.communicate()
+    if verify_stdout.decode().strip():
+        return False, original_stderr
+
+    return True, original_stderr
 
 
 def _is_saber_project(name: str, known_slugs: frozenset[str]) -> bool:
