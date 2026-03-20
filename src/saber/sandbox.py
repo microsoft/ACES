@@ -226,7 +226,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                 # Exponential backoff with jitter to avoid thundering herd
                 # when many samples fail simultaneously.
                 delay = min(
-                    _RETRY_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, _RETRY_JITTER),
+                    _RETRY_BACKOFF_BASE * (2**attempt) + random.uniform(0, _RETRY_JITTER),
                     _RETRY_BACKOFF_MAX,
                 )
                 logger.warning(

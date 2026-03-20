@@ -8,8 +8,10 @@ The cascade is: global.yaml → shared.yaml → task.yaml.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -122,6 +124,27 @@ def merge_task_configs(
     return result
 
 
+def _substitute_task_variable_value(value: object, task_variables: Mapping[str, str]) -> object:
+    """Recursively substitute ``{name}`` placeholders in YAML-derived values."""
+    if isinstance(value, str):
+        rendered = value
+        for name, replacement in task_variables.items():
+            rendered = rendered.replace(f"{{{name}}}", replacement)
+        return rendered
+    if isinstance(value, list):
+        return [_substitute_task_variable_value(item, task_variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _substitute_task_variable_value(item, task_variables) for key, item in value.items()}
+    return value
+
+
+def _substitute_task_variables(config: dict[str, object], task_variables: Mapping[str, str]) -> dict[str, object]:
+    """Substitute task-variable placeholders in a merged task config."""
+    substituted = _substitute_task_variable_value(config, task_variables)
+    # Defensive guard: root value is always a dict for merged task configs.
+    return cast(dict[str, object], substituted)
+
+
 def _deep_copy_value(value: object) -> object:
     """Create an independent copy of a value to prevent mutation leaking."""
     if isinstance(value, dict):
@@ -166,7 +189,12 @@ class ConfigLoader:
         defaults = self._load_global_defaults()
         return GlobalDefaults(**defaults)
 
-    def load_tasks(self, task_filter: str | None = None, dataset: str | None = None) -> list[TaskConfig]:
+    def load_tasks(
+        self,
+        task_filter: str | None = None,
+        dataset: str | None = None,
+        task_variables: dict[str, str] | None = None,
+    ) -> list[TaskConfig]:
         """Load all tasks with inheritance applied.
 
         1. Load ``global.yaml`` from *tasks_dir*.
@@ -182,6 +210,9 @@ class ConfigLoader:
             dataset: Optional dataset name. When set, only tasks whose
                 ``dataset`` field matches are returned. Falls back to
                 ``default_dataset`` from ``global.yaml`` when ``None``.
+            task_variables: Optional mapping of ``{variable}`` placeholders
+                to replacement values, applied recursively to merged task
+                dict values before validation.
 
         Returns:
             List of fully-resolved :class:`TaskConfig` objects.
@@ -190,6 +221,7 @@ class ConfigLoader:
 
         # Extract default_dataset before merge cascade (not a TaskConfig field)
         default_dataset_value = global_defaults.pop("default_dataset", None)
+        resolved_task_variables = task_variables or {}
 
         task_files = self._discover_task_files()
 
@@ -199,6 +231,8 @@ class ConfigLoader:
             raw_tasks = self._load_task_file(task_path)
             for raw in raw_tasks:
                 merged = merge_task_configs(global_defaults, shared, raw)
+                if resolved_task_variables:
+                    merged = _substitute_task_variables(merged, resolved_task_variables)
                 configs.append(TaskConfig(**merged))
 
         # Resolve effective dataset: explicit param > global default > None (all tasks)

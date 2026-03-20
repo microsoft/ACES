@@ -62,6 +62,7 @@ def create_task(
     rebuild: str | bool | None = None,
     run_preflight: str | bool = False,
     keep_permanent: str | bool = False,
+    judge_llm: str = "openai/azure/gpt-4.1-mini",
     **kwargs: object,
 ) -> Task:
     """Create an inspect_ai Task from a SABER domain directory.
@@ -119,6 +120,8 @@ def create_task(
         keep_permanent: Keep permanent Docker Compose services alive after
             evaluation so the next run can reuse them.
             Accepts ``True``, ``"true"`` (from CLI ``-T``), or ``False``.
+        judge_llm: Task variable available as ``{judge_llm}`` in task YAML.
+            Defaults to ``"openai/azure/gpt-4.1-mini"``.
 
     Returns:
         Fully configured inspect_ai Task.
@@ -160,6 +163,7 @@ def create_task(
             rebuild=nested.pop("rebuild", rebuild),
             run_preflight=nested.pop("run_preflight", run_preflight),
             keep_permanent=nested.pop("keep_permanent", keep_permanent),
+            judge_llm=nested.pop("judge_llm", judge_llm),
             **nested,
         )
 
@@ -201,7 +205,11 @@ def create_task(
     config_root = _find_config_root(domain_root)
     loader = ConfigLoader(config_root)
     global_config = loader.load_global_config()
-    tasks = loader.load_tasks(task_filter=task_filter, dataset=dataset)
+    tasks = loader.load_tasks(
+        task_filter=task_filter,
+        dataset=dataset,
+        task_variables={"judge_llm": judge_llm},
+    )
 
     # 1b. Resolve permanent compose from global.yaml (explicit kwargs win)
     perm_env = global_config.permanent_environment
@@ -252,12 +260,12 @@ def create_task(
             registry.register(name, strategy)
     scorer_factory = ScorerFactory(domain_root=domain_root, registry=registry)
 
-    # saber_overall goes FIRST so it becomes scores[0] (the headline).
-    # It computes the aggregate independently and caches LLM results
-    # in state.metadata so subsequent per-task scorers skip repeat calls.
-    scorers: list[Scorer] = [scorer_factory.create_overall_scorer(tasks)]
-    for task_cfg in tasks:
-        scorers.extend(scorer_factory.create_scorers(task_cfg))
+    # Register one runtime scorer per logical scorer name rather than one
+    # scorer per YAML task. inspect_ai opens scorer spans before the scorer
+    # can decide whether it applies to the current sample, so flattening all
+    # task-local scorers here would flood each sample transcript with spans
+    # for unrelated tasks.
+    scorers: list[Scorer] = scorer_factory.create_runtime_scorers(tasks)
 
     # 4. Register domain tools
     all_extra_tools = _discover_tools(domain_root)

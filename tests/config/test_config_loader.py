@@ -490,6 +490,80 @@ class TestLoadTasks:
         ids = sorted(t.task_id for t in tasks)
         assert ids == ["a", "b"]
 
+    def test_task_variables_substitute_judge_llm_in_llm_judge_model(self, tmp_path: Path) -> None:
+        """``{judge_llm}`` placeholder is substituted before TaskConfig validation."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={
+                "global_defaults": {
+                    **_minimal_global_defaults(),
+                    "scoring_defaults": {
+                        "llm_judge": {
+                            "judge_system_template": "judge/system.j2",
+                            "judge_user_template": "judge/user.j2",
+                        }
+                    },
+                }
+            },
+            tasks={
+                "sub/task_with_llm.yaml": [
+                    _minimal_task(
+                        "llm_task_1",
+                        scoring={
+                            "llm_judge": {
+                                "checkpoint_1": {
+                                    "target": "trajectory",
+                                    "model": "{judge_llm}",
+                                }
+                            }
+                        },
+                    )
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        tasks = loader.load_tasks(task_variables={"judge_llm": "openai/azure/gpt-4.1-mini"})
+        assert len(tasks) == 1
+        assert len(tasks[0].scorers) == 1
+        assert tasks[0].scorers[0].strategy == "llm_judge"
+        assert tasks[0].scorers[0].criteria.model == "openai/azure/gpt-4.1-mini"  # type: ignore[attr-defined]
+
+    def test_task_variables_absent_leave_placeholder_literal(self, tmp_path: Path) -> None:
+        """Without task_variables, placeholders remain unchanged."""
+        domain = _make_domain(
+            tmp_path,
+            global_yaml={
+                "global_defaults": {
+                    **_minimal_global_defaults(),
+                    "scoring_defaults": {
+                        "llm_judge": {
+                            "judge_system_template": "judge/system.j2",
+                            "judge_user_template": "judge/user.j2",
+                        }
+                    },
+                }
+            },
+            tasks={
+                "sub/task_with_llm.yaml": [
+                    _minimal_task(
+                        "llm_task_2",
+                        scoring={
+                            "llm_judge": {
+                                "checkpoint_1": {
+                                    "target": "trajectory",
+                                    "model": "{judge_llm}",
+                                }
+                            }
+                        },
+                    )
+                ],
+            },
+        )
+        loader = ConfigLoader(domain)
+        tasks = loader.load_tasks()
+        assert len(tasks) == 1
+        assert tasks[0].scorers[0].criteria.model == "{judge_llm}"  # type: ignore[attr-defined]
+
     def test_task_filter_applied(self, tmp_path: Path) -> None:
         """load_tasks with task_filter only returns matching tasks."""
         domain = _make_domain(

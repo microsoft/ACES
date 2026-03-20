@@ -21,6 +21,7 @@ from saber.task import _find_config_root, _find_prompts_dir
 
 _EXCYTIN_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent / "domains" / "excytin"
 _HAS_EXCYTIN = (_EXCYTIN_ROOT / "tasks" / "global.yaml").exists()
+_EXCYTIN_DEFAULT_JUDGE_LLM = "openai/azure/gpt-4.1"
 
 pytestmark = pytest.mark.skipif(not _HAS_EXCYTIN, reason="excytin domain not available")
 
@@ -43,13 +44,16 @@ def loader(config_root: Path) -> ConfigLoader:
 @pytest.fixture(scope="module")
 def all_tasks(loader: ConfigLoader) -> list[TaskConfig]:
     """All excytin tasks loaded via ConfigLoader."""
-    return loader.load_tasks()
+    return loader.load_tasks(task_variables={"judge_llm": _EXCYTIN_DEFAULT_JUDGE_LLM})
 
 
 @pytest.fixture(scope="module")
 def incident_5_task(loader: ConfigLoader) -> TaskConfig:
     """The specific incident_5_latest_test_set_task_1 task."""
-    tasks = loader.load_tasks(task_filter="incident_5_latest_test_set_task_1")
+    tasks = loader.load_tasks(
+        task_filter="incident_5_latest_test_set_task_1",
+        task_variables={"judge_llm": _EXCYTIN_DEFAULT_JUDGE_LLM},
+    )
     assert len(tasks) == 1
     return tasks[0]
 
@@ -69,7 +73,10 @@ def renderer(prompts_dir: Path) -> PromptRenderer:
 @pytest.fixture(scope="module")
 def incident_5_samples(loader: ConfigLoader, renderer: PromptRenderer) -> list:
     """Samples generated from incident_5_latest_test_set_task_1."""
-    tasks = loader.load_tasks(task_filter="incident_5_latest_test_set_task_1")
+    tasks = loader.load_tasks(
+        task_filter="incident_5_latest_test_set_task_1",
+        task_variables={"judge_llm": _EXCYTIN_DEFAULT_JUDGE_LLM},
+    )
     return tasks_to_samples(tasks, _EXCYTIN_ROOT, renderer)
 
 
@@ -118,6 +125,10 @@ class TestIncident5TaskFields:
         assert submission.strategy == "llm_judge"
         assert submission.target.value == "submission"
 
+    def test_submission_scorer_uses_excytin_default_judge_model(self, incident_5_task: TaskConfig) -> None:
+        submission = [s for s in incident_5_task.scorers if s.scorer_name == "submission"][0]
+        assert submission.criteria.model == _EXCYTIN_DEFAULT_JUDGE_LLM  # type: ignore[attr-defined]
+
     def test_max_steps_from_global(self, incident_5_task: TaskConfig) -> None:
         assert incident_5_task.max_steps == 25
 
@@ -142,6 +153,15 @@ class TestIncident5TaskFields:
         python_cfg = incident_5_task.tools["python"]
         assert python_cfg.timeout == 180
         assert python_cfg.security is None
+
+    def test_custom_judge_llm_task_variable_overrides_submission_model(self, loader: ConfigLoader) -> None:
+        custom_judge_llm = "openai/azure/gpt-4.1-mini"
+        task = loader.load_tasks(
+            task_filter="incident_5_latest_test_set_task_1",
+            task_variables={"judge_llm": custom_judge_llm},
+        )[0]
+        submission = [s for s in task.scorers if s.scorer_name == "submission"][0]
+        assert submission.criteria.model == custom_judge_llm  # type: ignore[attr-defined]
 
 
 # ── Test 3: PromptRenderer renders excytin prompts ──────────────────

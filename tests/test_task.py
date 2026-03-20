@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from inspect_ai._util.registry import registry_unqualified_name
 
 from saber.environments.images import RebuildMode, RebuildScope
 from saber.task import _find_config_root, _find_prompts_dir, create_task
@@ -213,6 +214,95 @@ class TestCreateTask:
         # Each task gets at least an aggregate scorer
         assert len(task.scorer) >= 1  # type: ignore[arg-type]
 
+    def test_task_runtime_scorers_are_deduplicated_across_loaded_tasks(
+        self, tmp_path: Path
+    ) -> None:
+        """create_task registers logical scorers once, not once per YAML task."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        from saber.config.models import (
+            PromptPaths,
+            ScorerConfig,
+            ScorerTarget,
+            StaticCriteria,
+            TaskConfig,
+        )
+
+        task_one = TaskConfig(
+            task_id="task_one",
+            title="Task One",
+            description="First task",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+            scorers=(
+                ScorerConfig(
+                    scorer_name="submission",
+                    strategy="static",
+                    target=ScorerTarget.SUBMISSION,
+                    criteria=StaticCriteria(expected_answers=["alpha"]),
+                ),
+                ScorerConfig(
+                    scorer_name="checkpoint_1",
+                    strategy="static",
+                    target=ScorerTarget.TRAJECTORY,
+                    criteria=StaticCriteria(expected_answers=["cp1"]),
+                ),
+            ),
+        )
+        task_two = TaskConfig(
+            task_id="task_two",
+            title="Task Two",
+            description="Second task",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+            scorers=(
+                ScorerConfig(
+                    scorer_name="submission",
+                    strategy="static",
+                    target=ScorerTarget.SUBMISSION,
+                    criteria=StaticCriteria(expected_answers=["beta"]),
+                ),
+                ScorerConfig(
+                    scorer_name="checkpoint_2",
+                    strategy="static",
+                    target=ScorerTarget.TRAJECTORY,
+                    criteria=StaticCriteria(expected_answers=["cp2"]),
+                ),
+            ),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_samples = [
+            InspectSample(input="task one", id="task_one"),
+            InspectSample(input="task two", id="task_two"),
+        ]
+
+        with (
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task.tasks_to_samples", return_value=fake_samples),
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(
+                permanent_environment=None
+            )
+            mock_loader.load_tasks.return_value = [task_one, task_two]
+
+            task = create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+            )
+
+        assert task.scorer is not None
+        assert [registry_unqualified_name(scorer) for scorer in task.scorer] == [
+            "saber_overall",
+            "submission",
+            "checkpoint_1",
+            "checkpoint_2",
+            "aggregate",
+        ]
+
     def test_permanent_compose_wired(self, tmp_path: Path) -> None:
         """create_task calls resolve_sandbox_spec with permanent compose args."""
         _write_minimal_domain(tmp_path)
@@ -329,8 +419,9 @@ class TestExtraStrategies:
             patch("saber.task.resolve_agent", return_value=mock_factory),
             patch("saber.task.ScorerFactory") as mock_scorer_cls,
         ):
-            mock_scorer_cls.return_value.create_scorers.return_value = []
-            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
             create_task(
                 tmp_path,
                 agent="react",
@@ -358,8 +449,9 @@ class TestExtraStrategies:
             patch("saber.task.resolve_agent", return_value=mock_factory),
             patch("saber.task.ScorerFactory") as mock_scorer_cls,
         ):
-            mock_scorer_cls.return_value.create_scorers.return_value = []
-            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
             create_task(
                 tmp_path,
                 agent="react",
@@ -784,8 +876,9 @@ class TestKwargsConsumption:
             mock_loader = mock_loader_cls.return_value
             mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
             mock_loader.load_tasks.return_value = [fake_task]
-            mock_scorer_cls.return_value.create_scorers.return_value = []
-            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
             mock_solver.return_value = MagicMock()
             create_task(
                 tmp_path,
@@ -1037,8 +1130,9 @@ class TestDiscoverTaskFilterIntegration:
             mock_loader = mock_loader_cls.return_value
             mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
             mock_loader.load_tasks.return_value = [fake_task]
-            mock_scorer_cls.return_value.create_scorers.return_value = []
-            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
             mock_solver.return_value = MagicMock()
             create_task(
                 tmp_path,
@@ -1052,7 +1146,9 @@ class TestDiscoverTaskFilterIntegration:
         mock_discover_filter.assert_not_called()
         # load_tasks should receive the explicit filter
         mock_loader.load_tasks.assert_called_once_with(
-            task_filter="explicit_filter", dataset="lite"
+            task_filter="explicit_filter",
+            dataset="lite",
+            task_variables={"judge_llm": "openai/azure/gpt-4.1-mini"},
         )
 
     def test_discovered_filter_applied_when_no_explicit(self, tmp_path: Path) -> None:
@@ -1089,8 +1185,9 @@ class TestDiscoverTaskFilterIntegration:
             mock_loader = mock_loader_cls.return_value
             mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
             mock_loader.load_tasks.return_value = [fake_task]
-            mock_scorer_cls.return_value.create_scorers.return_value = []
-            mock_scorer_cls.return_value.create_overall_scorer.return_value = _dummy_scorer()
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
             mock_solver.return_value = MagicMock()
             create_task(
                 tmp_path,
@@ -1102,5 +1199,100 @@ class TestDiscoverTaskFilterIntegration:
         mock_discover_filter.assert_called_once_with(tmp_path, "lite")
         # load_tasks should receive the discovered filter
         mock_loader.load_tasks.assert_called_once_with(
-            task_filter="auto_a,auto_b", dataset="lite"
+            task_filter="auto_a,auto_b",
+            dataset="lite",
+            task_variables={"judge_llm": "openai/azure/gpt-4.1-mini"},
+        )
+
+
+class TestJudgeLLMTaskVariable:
+    """Tests for judge_llm task variable wiring in create_task()."""
+
+    def test_default_judge_llm_forwarded_to_loader(self, tmp_path: Path) -> None:
+        """Without override, create_task forwards the default judge_llm."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        from saber.config.models import PromptPaths, TaskConfig
+
+        fake_task = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_sample = InspectSample(input="test", id="t1")
+
+        with (
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task.tasks_to_samples", return_value=[fake_sample]),
+            patch("saber.task.ScorerFactory") as mock_scorer_cls,
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
+            mock_loader.load_tasks.return_value = [fake_task]
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+            )
+
+        mock_loader.load_tasks.assert_called_once_with(
+            task_filter=None,
+            dataset=None,
+            task_variables={"judge_llm": "openai/azure/gpt-4.1-mini"},
+        )
+
+    def test_custom_judge_llm_forwarded_to_loader(self, tmp_path: Path) -> None:
+        """judge_llm override is forwarded and available for YAML substitution."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        from saber.config.models import PromptPaths, TaskConfig
+
+        fake_task = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_sample = InspectSample(input="test", id="t1")
+
+        with (
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task.tasks_to_samples", return_value=[fake_sample]),
+            patch("saber.task.ScorerFactory") as mock_scorer_cls,
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
+            mock_loader.load_tasks.return_value = [fake_task]
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                judge_llm="openai/azure/gpt-4.1",
+            )
+
+        mock_loader.load_tasks.assert_called_once_with(
+            task_filter=None,
+            dataset=None,
+            task_variables={"judge_llm": "openai/azure/gpt-4.1"},
         )

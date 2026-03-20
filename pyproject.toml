@@ -104,6 +104,7 @@ include = [
     "docs/",
     "tests/",
     "data/",
+    "docker/Dockerfile.saber_sandbox",
     "src/saber/domain/package_resources/**",
 ]
 

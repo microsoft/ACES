@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from inspect_ai._util.registry import registry_unqualified_name
 from inspect_ai.model import ChatMessageUser
 from inspect_ai.scorer import Score, Target
 
@@ -604,6 +605,123 @@ class TestUnifiedScoreCache:
         assert result is not None
         assert result.value == 1.0
         assert result.explanation == "from cache"
+
+
+class TestRuntimeScorers:
+    """Verify runtime scorer dispatch avoids cross-task scorer explosions."""
+
+    def test_create_runtime_scorers_deduplicates_logical_names(self) -> None:
+        factory = _make_factory()
+        task_one = _make_task(
+            task_id="task_one",
+            scorers=(
+                _make_scorer(
+                    name="submission",
+                    target=ScorerTarget.SUBMISSION,
+                    expected_answers=["alpha"],
+                ),
+                _make_scorer(name="checkpoint_1"),
+            ),
+        )
+        task_two = _make_task(
+            task_id="task_two",
+            scorers=(
+                _make_scorer(
+                    name="submission",
+                    target=ScorerTarget.SUBMISSION,
+                    expected_answers=["beta"],
+                ),
+                _make_scorer(name="checkpoint_2"),
+            ),
+        )
+
+        runtime_scorers = factory.create_runtime_scorers([task_one, task_two])
+
+        assert [registry_unqualified_name(scorer) for scorer in runtime_scorers] == [
+            "saber_overall",
+            "submission",
+            "checkpoint_1",
+            "checkpoint_2",
+            "aggregate",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_runtime_unit_scorer_dispatches_by_current_task_id(self) -> None:
+        factory = _make_factory()
+        task_one = _make_task(
+            task_id="task_one",
+            scorers=(
+                _make_scorer(
+                    name="submission",
+                    target=ScorerTarget.SUBMISSION,
+                    expected_answers=["alpha"],
+                ),
+            ),
+        )
+        task_two = _make_task(
+            task_id="task_two",
+            scorers=(
+                _make_scorer(
+                    name="submission",
+                    target=ScorerTarget.SUBMISSION,
+                    expected_answers=["beta"],
+                ),
+            ),
+        )
+
+        runtime_scorers = factory.create_runtime_scorers([task_one, task_two])
+        submission = next(
+            scorer
+            for scorer in runtime_scorers
+            if registry_unqualified_name(scorer) == "submission"
+        )
+
+        result = await submission(
+            _make_mock_state(task_id="task_two", completion="beta"),
+            Target("expected"),
+        )
+
+        assert result is not None
+        assert result.value == 1.0
+
+    @pytest.mark.asyncio
+    async def test_runtime_aggregate_reads_generic_score_names(self) -> None:
+        factory = _make_factory()
+        task = _make_task(
+            task_id="task_one",
+            scorers=(
+                _make_scorer(name="checkpoint_1", max_score=1.0),
+                _make_scorer(name="checkpoint_2", max_score=1.0),
+            ),
+            scoring_aggregation=AggregationConfig(
+                strategy=ScoreAggregation.AVERAGE,
+                scores=["checkpoint_1", "checkpoint_2"],
+            ),
+        )
+
+        runtime_scorers = factory.create_runtime_scorers([task])
+        aggregate = next(
+            scorer
+            for scorer in runtime_scorers
+            if registry_unqualified_name(scorer) == "aggregate"
+        )
+
+        result = await aggregate(
+            _make_mock_state(
+                task_id="task_one",
+                scores={
+                    "checkpoint_1": Score(value=1.0),
+                    "checkpoint_2": Score(value=0.0),
+                },
+            ),
+            Target("expected"),
+        )
+
+        assert result is not None
+        assert result.value == 0.5
+        assert result.explanation is not None
+        assert "checkpoint_1" in result.explanation
+        assert "checkpoint_2" in result.explanation
 
     @pytest.mark.asyncio
     async def test_llm_checkpoint_scorer_reads_unified_cache(self) -> None:

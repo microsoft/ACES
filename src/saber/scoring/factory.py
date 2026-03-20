@@ -9,6 +9,13 @@ in ``compute_task_aggregate`` (called by ``saber_overall``).  Individual
 unit scorers are cache-or-run: they check the unified cache first
 (populated by ``saber_overall``) and fall back to running their
 strategy directly when no cache exists.
+
+When a domain loads many YAML tasks into one inspect task, registering
+every per-task scorer directly would cause inspect_ai to open scorer spans
+for all of them on every sample. ``create_runtime_scorers()`` avoids that
+by registering one runtime scorer per logical scorer name
+(``submission``, ``checkpoint_1``, etc.) and dispatching to the current
+sample's task config at call time.
 """
 
 from __future__ import annotations
@@ -73,6 +80,25 @@ def _is_batch_eligible(sc: ScorerConfig) -> bool:
 
 
 logger = logging.getLogger("saber.scoring.factory")
+
+
+def _task_from_state(
+    task_map: dict[str, TaskConfig],
+    state: TaskState,
+) -> TaskConfig | None:
+    """Return the task config for the current sample state, if known."""
+    sample_task_id = state.metadata.get("task_id", "")
+    if not isinstance(sample_task_id, str):
+        return None
+    return task_map.get(sample_task_id)
+
+
+def _scorer_config_by_name(task: TaskConfig, scorer_name: str) -> ScorerConfig | None:
+    """Return the task-local scorer config matching *scorer_name*, if any."""
+    for task_scorer in task.scorers:
+        if task_scorer.scorer_name == scorer_name:
+            return task_scorer
+    return None
 
 
 def _make_scoring_context(
@@ -143,6 +169,43 @@ class ScorerFactory:
             Ordered list of :class:`Scorer` instances.
         """
         return self._create_scorers_from_config(task)
+
+    def create_runtime_scorers(self, tasks: list[TaskConfig]) -> list[Scorer]:
+        """Build the inspect runtime scorer list for a multi-task domain.
+
+        ``inspect_ai`` applies every scorer in ``Task.scorer`` to every sample
+        and emits scorer span events before the scorer has a chance to skip.
+        Registering one scorer per YAML task therefore scales transcript
+        traffic with the total number of tasks rather than the current sample.
+
+        To keep runtime scoring bounded, this method registers:
+
+        - ``saber_overall`` once
+        - one unit scorer per distinct logical scorer name across tasks
+        - one aggregate scorer that dispatches by ``state.metadata["task_id"]``
+
+        Args:
+            tasks: All loaded task configs for the current inspect task.
+
+        Returns:
+            Ordered list of runtime scorers for ``Task.scorer``.
+        """
+        task_map = {task.task_id: task for task in tasks}
+        logical_names: list[str] = []
+        seen_names: set[str] = set()
+
+        for task in tasks:
+            self._validate_strategies(task)
+            self._validate_aggregation_refs(task)
+            for task_scorer in task.scorers:
+                if task_scorer.scorer_name not in seen_names:
+                    seen_names.add(task_scorer.scorer_name)
+                    logical_names.append(task_scorer.scorer_name)
+
+        runtime_scorers: list[Scorer] = [self.create_overall_scorer(tasks)]
+        runtime_scorers.extend(self._create_runtime_unit_scorer(name, task_map) for name in logical_names)
+        runtime_scorers.append(self._create_runtime_aggregate_scorer(task_map))
+        return runtime_scorers
 
     async def compute_task_aggregate(
         self,
@@ -284,7 +347,7 @@ class ScorerFactory:
             A :class:`Scorer` named ``saber_overall`` using ``mean()``
             metric so the headline averages per-sample aggregate values.
         """
-        task_map = {t.task_id: t for t in tasks}
+        task_map = {task.task_id: task for task in tasks}
         factory = self
 
         @scorer(metrics=[mean(), stderr()], name="saber_overall")  # type: ignore[misc]
@@ -393,6 +456,47 @@ class ScorerFactory:
 
         return unit_scorer()
 
+    def _create_runtime_unit_scorer(
+        self,
+        scorer_name: str,
+        task_map: dict[str, TaskConfig],
+    ) -> Scorer:
+        """Create a logical unit scorer that dispatches by sample task id."""
+        renderer = self._renderer
+        domain_slug = self._domain_slug
+
+        @scorer(metrics=[accuracy(), stderr()], name=scorer_name)  # type: ignore[misc]
+        def runtime_unit_scorer() -> Scorer:
+            async def do_score(state: TaskState, target: Target) -> Score | None:
+                task = _task_from_state(task_map, state)
+                if task is None:
+                    return None
+
+                scorer_config = _scorer_config_by_name(task, scorer_name)
+                if scorer_config is None:
+                    return None
+
+                task_id = task.task_id
+
+                # Check unified cache (populated by saber_overall)
+                unified = state.metadata.get(CacheKeys.unified_scores(task_id))
+                if isinstance(unified, dict) and scorer_name in unified:
+                    return unified[scorer_name]
+
+                strategy = self._registry.get(scorer_config.strategy)
+                ctx = _make_scoring_context(
+                    state=state,
+                    target=target,
+                    task_id=task_id,
+                    domain_slug=domain_slug,
+                    scorer=scorer_config,
+                )
+                return await strategy.score(ctx, renderer=renderer)
+
+            return do_score
+
+        return runtime_unit_scorer()
+
     def _create_aggregate_scorer_from_config(self, task: TaskConfig) -> Scorer:
         """Create aggregate scorer using task.scorers and task.scoring_aggregation."""
         task_id = task.task_id
@@ -433,3 +537,45 @@ class ScorerFactory:
             return do_score
 
         return aggregate()
+
+    def _create_runtime_aggregate_scorer(
+        self,
+        task_map: dict[str, TaskConfig],
+    ) -> Scorer:
+        """Create a logical aggregate scorer that dispatches by sample task id."""
+
+        @scorer(metrics=[accuracy(), stderr()], name="aggregate")  # type: ignore[misc]
+        def runtime_aggregate() -> Scorer:
+            async def do_score(state: TaskState, target: Target) -> Score | None:
+                task = _task_from_state(task_map, state)
+                if task is None:
+                    return None
+
+                scores = state.scores or {}
+                raw_scores = {
+                    sc.scorer_name: scores.get(sc.scorer_name, Score(value=0.0)).as_float() for sc in task.scorers
+                }
+                normalized, scorer_details = aggregate_scorer_results(
+                    scorer_configs=task.scorers,
+                    raw_scores=raw_scores,
+                    agg_config=task.scoring_aggregation,
+                )
+
+                answer = state.output.completion if state.output else ""
+                return Score(
+                    value=normalized,
+                    answer=answer,
+                    explanation=build_scorer_summary(scorer_details),
+                    metadata={
+                        "task_id": task.task_id,
+                        "scorer_details": scorer_details,
+                        "saber_score": normalized,
+                        "aggregation": (
+                            task.scoring_aggregation.strategy.value if task.scoring_aggregation else "average"
+                        ),
+                    },
+                )
+
+            return do_score
+
+        return runtime_aggregate()
