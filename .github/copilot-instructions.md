@@ -1,7 +1,13 @@
 ```instructions
-# SABER Repository – Copilot Instructions
+# ACES / SABER Repository – Copilot Instructions
 
-**SABER** (Security Agent Benchmarking and Evaluation Research) is a distributed system for benchmarking agentic workflows in cybersecurity domains using **inspect_ai** integration with **Model Context Protocol (MCP)**.
+> **Naming:** The external name for this project is **ACES** (Agent Capability Evaluation Suite). **SABER** (Security Agent Benchmarking and Evaluation Research) is the internal Microsoft codename. The Python package, CLI commands, and code all use the name `saber`. Both names refer to the same system.
+>
+> **Dual repositories:**
+> - **GitHub (external):** [ACESEvals](https://github.com/microsoft/ACESEvals) + [ACES](https://github.com/microsoft/ACES)
+> - **Azure DevOps (internal):** [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) + [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER)
+
+**SABER** is a distributed system for benchmarking agentic workflows in cybersecurity domains using **inspect_ai** integration with **Model Context Protocol (MCP)**.
 
 ## Repository Structure
 

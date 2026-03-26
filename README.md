@@ -1,6 +1,12 @@
 # saber
 
-**Security Agent Benchmarking and Evaluation Research**
+**Agent Capability Evaluation Suite (ACES) / Security Agent Benchmarking and Evaluation Research (SABER)**
+
+> **Naming:** The external name for this project is **ACES**. **SABER** is the internal Microsoft codename. The Python package, CLI commands, and code all use the name `saber`. Both names refer to the same system.
+>
+> **Dual repositories:**
+> - **GitHub (external):** [ACESEvals](https://github.com/microsoft/ACESEvals) (benchmarks) + [ACES](https://github.com/microsoft/ACES) (this library)
+> - **Azure DevOps (internal):** [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) (benchmarks) + [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER) (this library)
 
 A thin Python library (~5,200 LOC) that lets you define cybersecurity benchmarks using YAML files and run them through inspect_ai's native evaluation engine. No server, no client, no REST API.
 
