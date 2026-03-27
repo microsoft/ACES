@@ -1,4 +1,4 @@
-# saber
+# SABER — Security Agent Benchmarking and Evaluation Research
 
 **Agent Capability Evaluation Suite (ACES) / Security Agent Benchmarking and Evaluation Research (SABER)**
 
