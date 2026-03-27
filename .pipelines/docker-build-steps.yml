@@ -1,3 +1,6 @@
+# Azure DevOps pipeline steps for building Docker images.
+# These steps use ADO artifact feeds and container registries (Microsoft internal).
+# For GitHub-based builds, use GitHub Actions or adapt the Dockerfiles directly.
 steps:
   - task: Docker@2
     displayName: Docker - Build Server Image

@@ -259,7 +259,7 @@ class ConfigLoader:
         path = self._tasks_dir / "global.yaml"
         if not path.exists():
             return {}
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return {}
         result = data.get("global_defaults")
@@ -277,7 +277,7 @@ class ConfigLoader:
         path = task_dir / "shared.yaml"
         if not path.exists():
             return None
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return {}
         return data
@@ -305,7 +305,7 @@ class ConfigLoader:
         Raises:
             yaml.YAMLError: If the YAML is malformed.
         """
-        data = yaml.safe_load(path.read_text())
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return []
         tasks = data.get("tasks")
