@@ -110,7 +110,7 @@ def _find_source_binary(repo_root: Path) -> tuple[Path | None, str]:
     if not version_file.exists():
         return None, ""
 
-    version = version_file.read_text().strip()
+    version = version_file.read_text(encoding="utf-8").strip()
     arch = _detect_arch()
     binary_name = f"inspect-sandbox-tools-{arch}-v{version}"
 
