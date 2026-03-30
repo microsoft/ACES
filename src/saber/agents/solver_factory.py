@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import importlib
 import types
 from collections.abc import Callable
 
-from inspect_ai.model import ChatMessageUser, get_model
+from inspect_ai.model import ChatMessageUser, ModelOutput, get_model
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util._limit import LimitExceededError
 
 from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
-from saber.agents.models import AgentCapabilities, AgentPromptKwargs
+from saber.agents.models import CURRENT_CONTRACT_VERSION, AgentCapabilities, AgentPromptKwargs
 from saber.config.models import ToolConfig
 from saber.logging import get_logger
 from saber.tools.registry import ResolvedTools, ToolRegistry
@@ -64,6 +65,13 @@ def _resolve_capabilities(agent_name: str) -> AgentCapabilities:
                 mod_caps = getattr(mod, "AGENT_CAPABILITIES", None)
                 if isinstance(mod_caps, AgentCapabilities):
                     return mod_caps
+                if mod_caps is not None:
+                    logger.warning(
+                        "Agent '%s' exports AGENT_CAPABILITIES but it is %s, "
+                        "not AgentCapabilities. Using defaults.",
+                        agent_name,
+                        type(mod_caps).__name__,
+                    )
             except ImportError:
                 pass
 
@@ -142,6 +150,29 @@ def create_saber_solver(
 
             # Capabilities-gated kwarg forwarding
             caps = _resolve_capabilities(agent_name)
+
+            # Contract version check — fail fast if plugin is incompatible
+            if caps.contract_version != CURRENT_CONTRACT_VERSION:
+                raise ValueError(
+                    f"Agent '{agent_name}' declares contract_version={caps.contract_version}, "
+                    f"but ACES expects version {CURRENT_CONTRACT_VERSION}. "
+                    f"Update the agent's AgentCapabilities to match."
+                )
+
+            # Limit callback for agents that support it
+            if caps.supports_limit_callback:
+
+                def _limit_callback(current_step: int, max_steps: int) -> None:
+                    if current_step >= max_steps:
+                        logger.warning(
+                            "Agent '%s' exceeded max_steps (%d/%d)",
+                            agent_name,
+                            current_step,
+                            max_steps,
+                        )
+
+                agent_kwargs["limit_callback"] = _limit_callback  # type: ignore[typeddict-unknown-key]
+
             if resolved is not None and caps.supports_tools:
                 agent_solver = create_with_prompts(
                     tools=list(resolved.tools),
@@ -154,8 +185,29 @@ def create_saber_solver(
             if not callable(agent_solver):
                 raise TypeError(f"Agent '{agent_name}' factory returned non-callable: {type(agent_solver).__name__}")
 
+            # Per-agent timeout — tighter backstop than the task-level timeout.
+            # For self-managed agents, this is derived from max_steps.
+            # For Inspect-integrated agents, LimitExceededError fires first.
+            agent_timeout = per_sample_max_steps * 120  # 2 min per step budget
+
             try:
-                return await agent_solver(state, generate)
+                return await asyncio.wait_for(
+                    agent_solver(state, generate),
+                    timeout=agent_timeout,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Agent '%s' timed out after %ds (max_steps=%d). Writing partial output.",
+                    agent_name,
+                    agent_timeout,
+                    per_sample_max_steps,
+                )
+                if not state.output:
+                    state.output = ModelOutput.from_content(
+                        model=agent_name,
+                        content=f"Agent timed out after {agent_timeout}s with no output.",
+                    )
+                return state
             except LimitExceededError:
                 # The agent's tool call limit was exceeded.  Give it one
                 # tool-free generation to produce a final answer instead
@@ -177,6 +229,19 @@ def create_saber_solver(
                     tools=[],
                 )
                 state.messages.append(state.output.message)
+                return state
+            except Exception:
+                # Catch uncaught plugin agent exceptions — fail this sample
+                # with partial output rather than crashing the entire eval run.
+                logger.exception(
+                    "Agent '%s' raised an uncaught exception.",
+                    agent_name,
+                )
+                if not state.output:
+                    state.output = ModelOutput.from_content(
+                        model=agent_name,
+                        content=f"Agent '{agent_name}' failed with an internal error.",
+                    )
                 return state
 
         return solve

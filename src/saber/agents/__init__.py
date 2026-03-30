@@ -115,6 +115,13 @@ def _try_register_module(module_path: str, name: str) -> None:
     try:
         module = importlib.import_module(module_path)
         if hasattr(module, "create_agent"):
+            if not callable(module.create_agent):
+                logger.error(
+                    "Agent module '%s' exports non-callable create_agent: %s",
+                    module_path,
+                    type(module.create_agent).__name__,
+                )
+                return
             AgentRegistry.register(name, module.create_agent)
     except Exception:
         logger.error("Failed to load agent module '%s'", module_path, exc_info=True)

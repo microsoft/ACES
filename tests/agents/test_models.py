@@ -37,5 +37,9 @@ class TestAgentCapabilities:
         caps = AgentCapabilities()
         dumped = caps.model_dump()
         assert dumped == {
+            "contract_version": 1,
             "supports_tools": True,
+            "supports_limit_callback": False,
+            "required_services": (),
+            "preflight_check_name": None,
         }
