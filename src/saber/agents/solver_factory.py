@@ -104,6 +104,23 @@ def create_saber_solver(
     @solver  # type: ignore[misc]
     def saber_agent_solver() -> Solver:
         _tools_cache: dict[frozenset[tuple[str, str]], ResolvedTools] = {}
+        # Level-1 factory call — receives -T flags which don't change between
+        # samples.  Cache the result so we don't re-run per sample.
+        _create_with_prompts = agent_factory(**kwargs)
+
+        # Resolve capabilities once at solver creation (immutable per eval run).
+        caps = _resolve_capabilities(agent_name)
+
+        # Contract version check — fail fast if plugin uses a newer contract
+        if caps.contract_version > CURRENT_CONTRACT_VERSION:
+            raise ValueError(
+                f"Agent '{agent_name}' declares contract_version={caps.contract_version}, "
+                f"but ACES supports up to version {CURRENT_CONTRACT_VERSION}. "
+                f"Upgrade ACES or downgrade the agent's AgentCapabilities."
+            )
+
+        # Pre-compute whether this is a self-managed agent (no ACES tools).
+        is_self_managed = not caps.supports_tools
 
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             # Extract prompts from sample metadata (set by tasks_to_samples)
@@ -128,6 +145,28 @@ def create_saber_solver(
             state.tool_call_limit = per_sample_max_steps  # safety net
             agent_kwargs["max_steps"] = per_sample_max_steps  # forwarded to agent
 
+            # Limit callback for agents that support it — fires at 80% budget
+            if caps.supports_limit_callback:
+                threshold = int(per_sample_max_steps * 0.8)
+
+                def _limit_callback(current_step: int, max_steps: int) -> None:
+                    if current_step >= max_steps:
+                        logger.warning(
+                            "Agent '%s' exceeded max_steps (%d/%d)",
+                            agent_name,
+                            current_step,
+                            max_steps,
+                        )
+                    elif current_step >= threshold:
+                        logger.info(
+                            "Agent '%s' approaching limit (%d/%d — 80%% threshold)",
+                            agent_name,
+                            current_step,
+                            max_steps,
+                        )
+
+                agent_kwargs["limit_callback"] = _limit_callback  # type: ignore[typeddict-unknown-key]
+
             # Per-sample tool resolution from metadata
             resolved: ResolvedTools | None = None
             if tool_registry is not None:
@@ -145,56 +184,31 @@ def create_saber_solver(
                         _tools_cache[cache_key] = tool_registry.resolve(tool_configs)
                     resolved = _tools_cache[cache_key]
 
-            # Two-level factory call — forward kwargs (persona_file, skills_dir, etc.)
-            create_with_prompts = agent_factory(**kwargs)
-
-            # Capabilities-gated kwarg forwarding
-            caps = _resolve_capabilities(agent_name)
-
-            # Contract version check — fail fast if plugin is incompatible
-            if caps.contract_version != CURRENT_CONTRACT_VERSION:
-                raise ValueError(
-                    f"Agent '{agent_name}' declares contract_version={caps.contract_version}, "
-                    f"but ACES expects version {CURRENT_CONTRACT_VERSION}. "
-                    f"Update the agent's AgentCapabilities to match."
-                )
-
-            # Limit callback for agents that support it
-            if caps.supports_limit_callback:
-
-                def _limit_callback(current_step: int, max_steps: int) -> None:
-                    if current_step >= max_steps:
-                        logger.warning(
-                            "Agent '%s' exceeded max_steps (%d/%d)",
-                            agent_name,
-                            current_step,
-                            max_steps,
-                        )
-
-                agent_kwargs["limit_callback"] = _limit_callback  # type: ignore[typeddict-unknown-key]
-
             if resolved is not None and caps.supports_tools:
-                agent_solver = create_with_prompts(
+                agent_solver = _create_with_prompts(
                     tools=list(resolved.tools),
                     **agent_kwargs,
                 )
             else:
-                agent_solver = create_with_prompts(**agent_kwargs)
+                agent_solver = _create_with_prompts(**agent_kwargs)
 
             # If agent_solver is a Solver, call it
             if not callable(agent_solver):
                 raise TypeError(f"Agent '{agent_name}' factory returned non-callable: {type(agent_solver).__name__}")
 
-            # Per-agent timeout — tighter backstop than the task-level timeout.
-            # For self-managed agents, this is derived from max_steps.
-            # For Inspect-integrated agents, LimitExceededError fires first.
-            agent_timeout = per_sample_max_steps * 120  # 2 min per step budget
+            # Per-agent timeout — tighter backstop for self-managed agents.
+            # Built-in/Inspect-integrated agents already have LimitExceededError;
+            # wrapping them would mask that signal.
+            agent_timeout = per_sample_max_steps * 120 if is_self_managed else None
 
             try:
-                return await asyncio.wait_for(
-                    agent_solver(state, generate),
-                    timeout=agent_timeout,
-                )
+                if agent_timeout is not None:
+                    return await asyncio.wait_for(
+                        agent_solver(state, generate),
+                        timeout=agent_timeout,
+                    )
+                else:
+                    return await agent_solver(state, generate)
             except TimeoutError:
                 logger.warning(
                     "Agent '%s' timed out after %ds (max_steps=%d). Writing partial output.",
@@ -230,6 +244,9 @@ def create_saber_solver(
                 )
                 state.messages.append(state.output.message)
                 return state
+            except asyncio.CancelledError:
+                # Let Inspect handle task cancellation — do not swallow.
+                raise
             except Exception:
                 # Catch uncaught plugin agent exceptions — fail this sample
                 # with partial output rather than crashing the entire eval run.

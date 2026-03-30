@@ -553,6 +553,7 @@ class TestSolverFactoryErrorPaths:
     def test_timeout_produces_model_output(self) -> None:
         """Timeout fallback should set state.output to ModelOutput, not ChatMessageUser."""
         import asyncio
+        from types import ModuleType
         from unittest.mock import AsyncMock, MagicMock, patch
 
         from inspect_ai.model import ModelOutput
@@ -565,9 +566,15 @@ class TestSolverFactoryErrorPaths:
             return state
 
         mock_factory = MagicMock(return_value=MagicMock(return_value=slow_solve))
+        mock_factory.__module__ = "fake_slow_module"
         AgentRegistry.register("slow_agent", mock_factory)
 
-        slvr = create_saber_solver("slow_agent", mock_factory)
+        # Make it self-managed so asyncio.wait_for is used
+        fake_mod = ModuleType("fake_slow_module")
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)  # type: ignore[attr-defined]
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            slvr = create_saber_solver("slow_agent", mock_factory)
 
         state = MagicMock(spec=TaskState)
         state.metadata = {"instruction_prompt": "test", "max_steps": 1}
@@ -636,3 +643,222 @@ class TestSolverFactoryErrorPaths:
         # Should return default (supports_tools=True) because AGENT_CAPABILITIES was wrong type
         assert caps.supports_tools is True
         assert caps.contract_version == 1
+
+    def test_cancelled_error_propagates(self) -> None:
+        """asyncio.CancelledError must not be swallowed by generic except."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from inspect_ai.solver import TaskState
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        async def cancelled_solve(state: TaskState, generate: object) -> TaskState:
+            raise asyncio.CancelledError()
+
+        mock_factory = MagicMock(return_value=MagicMock(return_value=cancelled_solve))
+        AgentRegistry.register("cancel_agent", mock_factory)
+
+        slvr = create_saber_solver("cancel_agent", mock_factory)
+
+        state = MagicMock(spec=TaskState)
+        state.metadata = {"instruction_prompt": "test", "max_steps": 1}
+        state.output = None
+        state.tool_call_limit = None
+        state.messages = []
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.get_event_loop().run_until_complete(slvr(state, AsyncMock()))
+
+    def test_contract_version_rejects_newer(self) -> None:
+        """Solver creation should fail if plugin declares a newer contract version."""
+        from types import ModuleType
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        mock_factory = MagicMock(return_value=MagicMock())
+        mock_factory.__module__ = "fake_v99_module"
+        AgentRegistry.register("v99_agent", mock_factory)
+
+        fake_mod = ModuleType("fake_v99_module")
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(contract_version=99)  # type: ignore[attr-defined]
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            with pytest.raises(ValueError, match="contract_version=99"):
+                create_saber_solver("v99_agent", mock_factory)
+
+    def test_contract_version_accepts_older(self) -> None:
+        """Solver creation should succeed if plugin declares an older (compatible) version."""
+        from types import ModuleType
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        mock_factory = MagicMock(return_value=MagicMock())
+        mock_factory.__module__ = "fake_v0_module"
+        AgentRegistry.register("v0_agent", mock_factory)
+
+        fake_mod = ModuleType("fake_v0_module")
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(contract_version=0)  # type: ignore[attr-defined]
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            # Should not raise — v0 is older than CURRENT_CONTRACT_VERSION
+            slvr = create_saber_solver("v0_agent", mock_factory)
+            assert slvr is not None
+
+    def test_no_wait_for_on_tool_supporting_agents(self) -> None:
+        """Built-in agents (supports_tools=True) should NOT be wrapped in asyncio.wait_for."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from inspect_ai.solver import TaskState
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        async def simple_solve(state: TaskState, generate: object) -> TaskState:
+            return state
+
+        mock_factory = MagicMock(return_value=MagicMock(return_value=simple_solve))
+        # "react" is built-in with supports_tools=True
+        AgentRegistry.register("react_test", mock_factory)
+
+        from saber.agents.solver_factory import _BUILTIN_CAPABILITIES
+
+        _BUILTIN_CAPABILITIES["react_test"] = AgentCapabilities(supports_tools=True)
+
+        slvr = create_saber_solver("react_test", mock_factory)
+
+        state = MagicMock(spec=TaskState)
+        state.metadata = {"instruction_prompt": "test", "max_steps": 10}
+        state.output = None
+        state.tool_call_limit = None
+        state.messages = []
+
+        with patch("saber.agents.solver_factory.asyncio.wait_for") as mock_wait_for:
+            asyncio.get_event_loop().run_until_complete(slvr(state, AsyncMock()))
+            mock_wait_for.assert_not_called()
+
+    def test_limit_callback_fires_at_80_percent(self) -> None:
+        """Limit callback should log info at 80% threshold."""
+        import asyncio
+        from types import ModuleType
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from inspect_ai.solver import TaskState
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        captured_callback = {}
+
+        async def capturing_solve(state: TaskState, generate: object) -> TaskState:
+            return state
+
+        def mock_create_with_prompts(**inner_kwargs: object) -> object:
+            if "limit_callback" in inner_kwargs:
+                captured_callback["cb"] = inner_kwargs["limit_callback"]
+            return capturing_solve
+
+        mock_factory = MagicMock(return_value=mock_create_with_prompts)
+        mock_factory.__module__ = "fake_limit_cb_module"
+        AgentRegistry.register("limit_cb_agent", mock_factory)
+
+        fake_mod = ModuleType("fake_limit_cb_module")
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(  # type: ignore[attr-defined]
+            supports_tools=False,
+            supports_limit_callback=True,
+        )
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            slvr = create_saber_solver("limit_cb_agent", mock_factory)
+
+        state = MagicMock(spec=TaskState)
+        state.metadata = {"instruction_prompt": "test", "max_steps": 10}
+        state.output = None
+        state.tool_call_limit = None
+        state.messages = []
+
+        asyncio.get_event_loop().run_until_complete(slvr(state, AsyncMock()))
+
+        # The callback should have been captured
+        assert "cb" in captured_callback
+        cb = captured_callback["cb"]
+
+        # At 80% (step 8 of 10) — should log info, not warning
+        with patch("saber.agents.solver_factory.logger") as mock_logger:
+            cb(8, 10)
+            mock_logger.info.assert_called_once()
+            mock_logger.warning.assert_not_called()
+
+        # At 100% (step 10 of 10) — should log warning
+        with patch("saber.agents.solver_factory.logger") as mock_logger:
+            cb(10, 10)
+            mock_logger.warning.assert_called_once()
+
+
+class TestIntegrationDiscoverySolve:
+    """Integration test: full discovery -> resolve -> solve path with a fake plugin."""
+
+    def test_full_plugin_lifecycle(self) -> None:
+        """Register a fake plugin, resolve it, create solver, and solve a sample."""
+        import asyncio
+        from types import ModuleType
+        from unittest.mock import AsyncMock, MagicMock
+
+        from inspect_ai.model import ModelOutput
+        from inspect_ai.solver import TaskState
+
+        from saber.agents.resolver import register_agent_package
+        from saber.agents.solver_factory import create_saber_solver
+
+        # Create a real fake plugin module
+        fake_plugin = ModuleType("fake_integration_plugin")
+
+        fake_plugin.AGENT_CAPABILITIES = AgentCapabilities(  # type: ignore[attr-defined]
+            contract_version=1,
+            supports_tools=False,
+        )
+
+        async def _solve(state: TaskState, generate: object) -> TaskState:
+            state.output = ModelOutput.from_content(
+                model="fake_plugin",
+                content="integration test result",
+            )
+            return state
+
+        def _create_with_prompts(**kwargs: object) -> object:
+            return _solve
+
+        def create_agent(**kwargs: object) -> object:
+            return _create_with_prompts
+
+        fake_plugin.create_agent = create_agent  # type: ignore[attr-defined]
+
+        import sys
+
+        sys.modules["fake_integration_plugin"] = fake_plugin
+
+        try:
+            # Step 1: Register (simulates entry-point discovery)
+            register_agent_package("integration_test", "fake_integration_plugin")
+
+            # Step 2: Verify it's in the registry
+            assert AgentRegistry.get("integration_test") is not None
+
+            # Step 3: Create solver
+            factory = AgentRegistry.get("integration_test")
+            slvr = create_saber_solver("integration_test", factory)
+
+            # Step 4: Solve a sample
+            state = MagicMock(spec=TaskState)
+            state.metadata = {"instruction_prompt": "test prompt", "max_steps": 5}
+            state.output = None
+            state.tool_call_limit = None
+            state.messages = []
+
+            result = asyncio.get_event_loop().run_until_complete(slvr(state, AsyncMock()))
+
+            assert isinstance(result.output, ModelOutput)
+            assert "integration test result" in result.output.choices[0].message.content
+        finally:
+            del sys.modules["fake_integration_plugin"]
