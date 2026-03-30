@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict
 
@@ -35,6 +35,15 @@ class AgentCapabilities(BaseModel):
     #: fast with a clear error if the plugin was built against an incompatible
     #: version.  Increment when the factory contract changes in a breaking way.
     contract_version: int = 1
+
+    #: How ACES should enforce limits around this agent.
+    #:
+    #: - ``inspect_managed``: The agent participates in Inspect/bridge limit
+    #:   handling. ACES should not wrap it in ``asyncio.wait_for`` because that
+    #:   can mask ``LimitExceededError``.
+    #: - ``self_managed``: The agent brings its own execution loop/LLM client.
+    #:   ACES should apply the ``asyncio.wait_for(max_steps * 120)`` backstop.
+    execution_mode: Literal["inspect_managed", "self_managed"] = "inspect_managed"
 
     #: Whether the agent accepts ACES-resolved sandbox tools.  When False,
     #: the ``tools`` kwarg is omitted entirely (not passed as None).

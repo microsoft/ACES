@@ -225,6 +225,7 @@ class TestDynamicCapabilities:
         from saber.agents.solver_factory import _resolve_capabilities
 
         caps = _resolve_capabilities("react")
+        assert caps.execution_mode == "inspect_managed"
         assert caps.supports_tools is True
 
     def test_plugin_agent_reads_module_caps(self) -> None:
@@ -238,17 +239,63 @@ class TestDynamicCapabilities:
         AgentRegistry.register("caps_test_plugin", mock_factory)
 
         mock_module = MagicMock()
-        mock_module.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)
+        mock_module.AGENT_CAPABILITIES = AgentCapabilities(
+            execution_mode="self_managed",
+            supports_tools=False,
+        )
 
         with patch("importlib.import_module", return_value=mock_module):
             caps = _resolve_capabilities("caps_test_plugin")
+        assert caps.execution_mode == "self_managed"
         assert caps.supports_tools is False
 
     def test_unknown_agent_gets_default_caps(self) -> None:
         from saber.agents.solver_factory import _resolve_capabilities
 
         caps = _resolve_capabilities("nonexistent_agent_xyz")
+        assert caps.execution_mode == "inspect_managed"
         assert caps.supports_tools is True  # default
+
+    def test_variant_aware_capabilities_use_kwargs(self) -> None:
+        from types import ModuleType
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.solver_factory import resolve_capabilities_for_kwargs
+
+        mock_factory = MagicMock()
+        mock_factory.__module__ = "variant_caps_module"
+        AgentRegistry.register("variant_caps_agent", mock_factory)
+
+        fake_mod = ModuleType("variant_caps_module")
+
+        def get_agent_capabilities(variant: str = "planner", **kwargs: object) -> AgentCapabilities:
+            if variant == "hunter":
+                return AgentCapabilities(
+                    execution_mode="self_managed",
+                    supports_tools=False,
+                    required_services=("ws://localhost:8182/gremlin",),
+                )
+            return AgentCapabilities(
+                execution_mode="inspect_managed",
+                supports_tools=True,
+            )
+
+        fake_mod.get_agent_capabilities = get_agent_capabilities  # type: ignore[attr-defined]
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            hunter_caps = resolve_capabilities_for_kwargs(
+                "variant_caps_agent",
+                {"variant": "hunter"},
+            )
+            planner_caps = resolve_capabilities_for_kwargs(
+                "variant_caps_agent",
+                {"variant": "planner"},
+            )
+
+        assert hunter_caps.execution_mode == "self_managed"
+        assert hunter_caps.required_services == ("ws://localhost:8182/gremlin",)
+        assert planner_caps.execution_mode == "inspect_managed"
+        assert planner_caps.supports_tools is True
 
 
 # ---------------------------------------------------------------------------
@@ -347,13 +394,18 @@ class TestCapabilitiesCaching:
         AgentRegistry.register("cache_test_plugin", mock_factory)
 
         mock_module = MagicMock()
-        mock_module.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)
+        mock_module.AGENT_CAPABILITIES = AgentCapabilities(
+            execution_mode="self_managed",
+            supports_tools=False,
+        )
 
         with patch("saber.agents.solver_factory.importlib.import_module", return_value=mock_module) as mock_import:
             caps1 = _resolve_capabilities("cache_test_plugin")
             caps2 = _resolve_capabilities("cache_test_plugin")
 
+        assert caps1.execution_mode == "self_managed"
         assert caps1.supports_tools is False
+        assert caps2.execution_mode == "self_managed"
         assert caps2.supports_tools is False
         # import_module should only be called once due to caching
         assert mock_import.call_count == 1
@@ -378,18 +430,22 @@ class TestCapabilitiesCaching:
         caps_before = _resolve_capabilities("late_reg_agent")
         assert caps_before.supports_tools is True
 
-        # Now register with supports_tools=False
+        # Now register with self-managed capabilities
         mock_factory = MagicMock()
         mock_factory.__module__ = "late_reg_module"
         AgentRegistry.register("late_reg_agent", mock_factory)
 
         mock_module = MagicMock()
-        mock_module.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)
+        mock_module.AGENT_CAPABILITIES = AgentCapabilities(
+            execution_mode="self_managed",
+            supports_tools=False,
+        )
 
         with patch("saber.agents.solver_factory.importlib.import_module", return_value=mock_module):
             caps_after = _resolve_capabilities("late_reg_agent")
 
         # Should pick up the new capabilities, not the stale default
+        assert caps_after.execution_mode == "self_managed"
         assert caps_after.supports_tools is False
 
 
@@ -421,6 +477,10 @@ class TestContractVersion:
 class TestAgentCapabilitiesExtended:
     """Extended AgentCapabilities fields."""
 
+    def test_execution_mode_default_inspect_managed(self) -> None:
+        caps = AgentCapabilities()
+        assert caps.execution_mode == "inspect_managed"
+
     def test_required_services_default_empty(self) -> None:
         caps = AgentCapabilities()
         assert caps.required_services == ()
@@ -431,6 +491,7 @@ class TestAgentCapabilitiesExtended:
         )
         assert len(caps.required_services) == 2
         assert "gremlin://localhost:8182" in caps.required_services
+        assert isinstance(caps.required_services, tuple)
 
     def test_supports_limit_callback_default_false(self) -> None:
         caps = AgentCapabilities()
@@ -546,6 +607,37 @@ class TestAgentPreflight:
             with pytest.raises(RuntimeError, match="returned False"):
                 _run_agent_preflight("false_check_agent", caps)
 
+    def test_preflight_passes_variant_kwargs_to_check(self) -> None:
+        """Kwarg-aware preflight checks should receive matching task kwargs."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.task import _run_agent_preflight
+
+        mock_factory = MagicMock()
+        mock_factory.__module__ = "variant_preflight_module"
+        AgentRegistry.register("variant_preflight_agent", mock_factory)
+
+        received: dict[str, object] = {}
+
+        def my_check(variant: str, rag_enabled: bool = False) -> bool:
+            received["variant"] = variant
+            received["rag_enabled"] = rag_enabled
+            return True
+
+        mock_module = MagicMock()
+        mock_module.my_check = my_check
+
+        caps = AgentCapabilities(preflight_check_name="my_check")
+
+        with patch("importlib.import_module", return_value=mock_module):
+            _run_agent_preflight(
+                "variant_preflight_agent",
+                caps,
+                {"variant": "judge", "rag_enabled": True, "unused": "ignored"},
+            )
+
+        assert received == {"variant": "judge", "rag_enabled": True}
+
 
 class TestSolverFactoryErrorPaths:
     """Tests for timeout, exception, and malformed capabilities paths."""
@@ -571,7 +663,10 @@ class TestSolverFactoryErrorPaths:
 
         # Make it self-managed so asyncio.wait_for is used
         fake_mod = ModuleType("fake_slow_module")
-        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)  # type: ignore[attr-defined]
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(
+            execution_mode="self_managed",
+            supports_tools=False,
+        )  # type: ignore[attr-defined]
 
         with patch("importlib.import_module", return_value=fake_mod):
             slvr = create_saber_solver("slow_agent", mock_factory)
@@ -725,7 +820,10 @@ class TestSolverFactoryErrorPaths:
 
         from saber.agents.solver_factory import _BUILTIN_CAPABILITIES
 
-        _BUILTIN_CAPABILITIES["react_test"] = AgentCapabilities(supports_tools=True)
+        _BUILTIN_CAPABILITIES["react_test"] = AgentCapabilities(
+            execution_mode="inspect_managed",
+            supports_tools=True,
+        )
 
         slvr = create_saber_solver("react_test", mock_factory)
 
@@ -765,6 +863,7 @@ class TestSolverFactoryErrorPaths:
 
         fake_mod = ModuleType("fake_limit_cb_module")
         fake_mod.AGENT_CAPABILITIES = AgentCapabilities(  # type: ignore[attr-defined]
+            execution_mode="self_managed",
             supports_tools=False,
             supports_limit_callback=True,
         )
@@ -794,6 +893,82 @@ class TestSolverFactoryErrorPaths:
         with patch("saber.agents.solver_factory.logger") as mock_logger:
             cb(10, 10)
             mock_logger.warning.assert_called_once()
+
+    def test_self_managed_agents_can_still_receive_tools(self) -> None:
+        """execution_mode drives timeout, not supports_tools."""
+        import asyncio
+        from types import ModuleType
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from inspect_ai.solver import TaskState
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        async def simple_solve(state: TaskState, generate: object) -> TaskState:
+            return state
+
+        mock_factory = MagicMock(return_value=MagicMock(return_value=simple_solve))
+        mock_factory.__module__ = "self_managed_tools_module"
+        AgentRegistry.register("self_managed_tools_agent", mock_factory)
+
+        fake_mod = ModuleType("self_managed_tools_module")
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(  # type: ignore[attr-defined]
+            execution_mode="self_managed",
+            supports_tools=True,
+        )
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            slvr = create_saber_solver("self_managed_tools_agent", mock_factory)
+
+        state = MagicMock(spec=TaskState)
+        state.metadata = {"instruction_prompt": "test", "max_steps": 10}
+        state.output = None
+        state.tool_call_limit = None
+        state.messages = []
+
+        with patch("saber.agents.solver_factory.asyncio.wait_for") as mock_wait_for:
+            async def passthrough(awaitable: object, timeout: float) -> TaskState:
+                return await awaitable
+
+            mock_wait_for.side_effect = passthrough
+            asyncio.get_event_loop().run_until_complete(slvr(state, AsyncMock()))
+            mock_wait_for.assert_called_once()
+
+    def test_inspect_managed_agents_can_decline_tools_without_wait_for(self) -> None:
+        """supports_tools and execution_mode are orthogonal."""
+        import asyncio
+        from types import ModuleType
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from inspect_ai.solver import TaskState
+
+        from saber.agents.solver_factory import create_saber_solver
+
+        async def simple_solve(state: TaskState, generate: object) -> TaskState:
+            return state
+
+        mock_factory = MagicMock(return_value=MagicMock(return_value=simple_solve))
+        mock_factory.__module__ = "inspect_managed_no_tools_module"
+        AgentRegistry.register("inspect_managed_no_tools_agent", mock_factory)
+
+        fake_mod = ModuleType("inspect_managed_no_tools_module")
+        fake_mod.AGENT_CAPABILITIES = AgentCapabilities(  # type: ignore[attr-defined]
+            execution_mode="inspect_managed",
+            supports_tools=False,
+        )
+
+        with patch("importlib.import_module", return_value=fake_mod):
+            slvr = create_saber_solver("inspect_managed_no_tools_agent", mock_factory)
+
+        state = MagicMock(spec=TaskState)
+        state.metadata = {"instruction_prompt": "test", "max_steps": 10}
+        state.output = None
+        state.tool_call_limit = None
+        state.messages = []
+
+        with patch("saber.agents.solver_factory.asyncio.wait_for") as mock_wait_for:
+            asyncio.get_event_loop().run_until_complete(slvr(state, AsyncMock()))
+            mock_wait_for.assert_not_called()
 
 
 class TestIntegrationDiscoverySolve:

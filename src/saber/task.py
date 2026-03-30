@@ -21,7 +21,7 @@ from inspect_ai.scorer import Scorer
 from inspect_ai.tool import Tool
 
 from saber.agents.resolver import resolve_agent
-from saber.agents.solver_factory import create_saber_solver
+from saber.agents.solver_factory import create_saber_solver, resolve_capabilities_for_kwargs
 from saber.config.converter import tasks_to_samples
 from saber.config.loader import ConfigLoader
 from saber.environments import resolve_sandbox_spec
@@ -41,7 +41,11 @@ logger = get_logger(__name__)
 from saber.agents.models import AgentCapabilities
 
 
-def _run_agent_preflight(agent_name: str, caps: AgentCapabilities) -> None:
+def _run_agent_preflight(
+    agent_name: str,
+    caps: AgentCapabilities,
+    agent_kwargs: dict[str, object] | None = None,
+) -> None:
     """Validate plugin agent's required services and custom preflight checks.
 
     Called during ``run_preflight=true``.  Checks two things:
@@ -52,6 +56,7 @@ def _run_agent_preflight(agent_name: str, caps: AgentCapabilities) -> None:
     Args:
         agent_name: Name of the agent being validated.
         caps: Resolved capabilities for the agent.
+        agent_kwargs: Task-level agent kwargs (e.g. ``variant``, ``rag_enabled``).
 
     Raises:
         RuntimeError: If any service is unreachable or custom check fails.
@@ -61,8 +66,10 @@ def _run_agent_preflight(agent_name: str, caps: AgentCapabilities) -> None:
     from urllib.parse import urlparse
 
     from saber.agents import AgentRegistry
+    from saber.agents.resolver import invoke_with_supported_kwargs
 
     errors: list[str] = []
+    agent_kwargs = agent_kwargs or {}
 
     # Check required services via socket connect
     for service_url in caps.required_services:
@@ -85,7 +92,7 @@ def _run_agent_preflight(agent_name: str, caps: AgentCapabilities) -> None:
                     mod = importlib.import_module(module_name)
                     check_fn = getattr(mod, caps.preflight_check_name, None)
                     if callable(check_fn):
-                        result = check_fn()
+                        result = invoke_with_supported_kwargs(check_fn, agent_kwargs)
                         if result is not None and not result:
                             errors.append(
                                 f"Agent '{agent_name}' preflight check "
@@ -358,10 +365,8 @@ def create_task(
 
     # 5b. Agent preflight — validate plugin services and custom checks
     if run_preflight_bool:
-        from saber.agents.solver_factory import _resolve_capabilities
-
-        caps = _resolve_capabilities(agent)
-        _run_agent_preflight(agent, caps)
+        caps = resolve_capabilities_for_kwargs(agent, dict(kwargs))
+        _run_agent_preflight(agent, caps, dict(kwargs))
 
     solver = create_saber_solver(
         agent_name=agent,

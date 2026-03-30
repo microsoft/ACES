@@ -14,6 +14,7 @@ from inspect_ai.util._limit import LimitExceededError
 
 from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
 from saber.agents.models import CURRENT_CONTRACT_VERSION, AgentCapabilities, AgentPromptKwargs
+from saber.agents.resolver import invoke_with_supported_kwargs
 from saber.config.models import ToolConfig
 from saber.logging import get_logger
 from saber.tools.registry import ResolvedTools, ToolRegistry
@@ -27,9 +28,9 @@ __all__ = ["TOOL_CALL_LIMIT_MESSAGE", "create_saber_solver"]
 # Plugin agents declare their own capabilities via AGENT_CAPABILITIES module attribute.
 # Unknown agents fall back to the default AgentCapabilities() (supports_tools=True).
 _BUILTIN_CAPABILITIES: dict[str, AgentCapabilities] = {
-    "react": AgentCapabilities(supports_tools=True),
-    "copilot": AgentCapabilities(supports_tools=True),
-    "claude_code": AgentCapabilities(supports_tools=True),
+    "react": AgentCapabilities(execution_mode="inspect_managed", supports_tools=True),
+    "copilot": AgentCapabilities(execution_mode="inspect_managed", supports_tools=True),
+    "claude_code": AgentCapabilities(execution_mode="inspect_managed", supports_tools=True),
 }
 
 # Keep AGENT_CAPABILITIES as a read-only public alias for backward compatibility.
@@ -78,6 +79,46 @@ def _resolve_capabilities(agent_name: str) -> AgentCapabilities:
     return AgentCapabilities()
 
 
+def resolve_capabilities_for_kwargs(
+    agent_name: str,
+    capability_kwargs: dict[str, object] | None = None,
+) -> AgentCapabilities:
+    """Resolve capabilities for an agent, allowing kwarg-aware overrides.
+
+    Plugins may optionally export ``get_agent_capabilities(**kwargs)`` to
+    return capabilities that vary by task configuration (for example,
+    ``variant="hunter"`` or ``rag_enabled=True``). If absent, ACES falls
+    back to the cached static resolution path via ``AGENT_CAPABILITIES``.
+    """
+    capability_kwargs = capability_kwargs or {}
+
+    caps = _BUILTIN_CAPABILITIES.get(agent_name)
+    if caps is not None:
+        return caps
+
+    from saber.agents import AgentRegistry
+
+    factory = AgentRegistry.get(agent_name)
+    if factory is not None:
+        module = getattr(factory, "__module__", None)
+        if module:
+            try:
+                mod = importlib.import_module(module)
+                caps_getter = getattr(mod, "get_agent_capabilities", None)
+                if callable(caps_getter):
+                    resolved = invoke_with_supported_kwargs(caps_getter, capability_kwargs)
+                    if isinstance(resolved, AgentCapabilities):
+                        return resolved
+                    raise TypeError(
+                        f"Agent '{agent_name}' get_agent_capabilities() returned "
+                        f"{type(resolved).__name__}, not AgentCapabilities"
+                    )
+            except ImportError:
+                pass
+
+    return _resolve_capabilities(agent_name)
+
+
 def create_saber_solver(
     agent_name: str,
     agent_factory: Callable[..., Callable[..., Solver]],
@@ -109,7 +150,7 @@ def create_saber_solver(
         _create_with_prompts = agent_factory(**kwargs)
 
         # Resolve capabilities once at solver creation (immutable per eval run).
-        caps = _resolve_capabilities(agent_name)
+        caps = resolve_capabilities_for_kwargs(agent_name, dict(kwargs))
 
         # Contract version check — fail fast if plugin uses a newer contract
         if caps.contract_version > CURRENT_CONTRACT_VERSION:
@@ -120,7 +161,7 @@ def create_saber_solver(
             )
 
         # Pre-compute whether this is a self-managed agent (no ACES tools).
-        is_self_managed = not caps.supports_tools
+        is_self_managed = caps.execution_mode == "self_managed"
 
         async def solve(state: TaskState, generate: Generate) -> TaskState:
             # Extract prompts from sample metadata (set by tasks_to_samples)

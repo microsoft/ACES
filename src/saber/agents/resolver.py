@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 from collections.abc import Callable
+from typing import TypeVar
 
 from saber.agents import AgentNotFoundError, AgentRegistry
 from saber.logging import get_logger
 
 logger = get_logger(__name__)
+
+_T = TypeVar("_T")
+
+
+def invoke_with_supported_kwargs(func: Callable[..., _T], kwargs: dict[str, object]) -> _T:
+    """Invoke a callback with only the kwargs it declares.
+
+    If the callback accepts ``**kwargs``, all provided kwargs are forwarded.
+    Otherwise, ACES filters to the named parameters the callback declares.
+    """
+    sig = inspect.signature(func)
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return func(**kwargs)
+
+    supported = {
+        name: value
+        for name, value in kwargs.items()
+        if name in sig.parameters
+        and sig.parameters[name].kind
+        in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    }
+    return func(**supported)
 
 
 def register_agent_package(agent_name: str, module_path: str) -> None:
