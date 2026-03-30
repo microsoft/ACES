@@ -32,18 +32,14 @@ def register_agent_package(agent_name: str, module_path: str) -> None:
     module = importlib.import_module(module_path)
     factory = getattr(module, "create_agent", None)
     if factory is None or not callable(factory):
-        raise AttributeError(
-            f"Module '{module_path}' does not export a callable create_agent()"
-        )
+        raise AttributeError(f"Module '{module_path}' does not export a callable create_agent()")
     if AgentRegistry.get(agent_name) is not None:
         logger.warning(
             "Agent '%s' already registered — overriding with %s",
             agent_name,
             module_path,
         )
-        AgentRegistry._agents[agent_name] = factory
-    else:
-        AgentRegistry.register(agent_name, factory)
+    AgentRegistry.register(agent_name, factory, override=True)
     logger.info("Agent '%s' registered from module '%s'", agent_name, module_path)
 
 
@@ -69,6 +65,6 @@ def resolve_agent(agent_name: str) -> Callable[..., object]:
         f"Available agents: {', '.join(available) if available else '(none)'}\n\n"
         f"To add a built-in agent: create agents/registry/{agent_name}.py with create_agent()\n"
         f"To register an external agent: add a 'saber.agents' entry point in your package's pyproject.toml:\n"
-        f"  [project.entry-points.\"saber.agents\"]\n"
-        f"  {agent_name} = \"your_package.module:create_agent\""
+        f'  [project.entry-points."saber.agents"]\n'
+        f'  {agent_name} = "your_package.module:create_agent"'
     )

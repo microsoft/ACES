@@ -95,6 +95,11 @@ def create_task(
                let filtering happen inside :meth:`ConfigLoader.load_tasks`.
         agent: Agent name (default: "react"). Registered agents: react, copilot,
             claude_code.
+        agent_package: Optional dotted Python module path for an external agent.
+            When provided, the module is imported and its ``create_agent()`` is
+            registered under the ``agent`` name before resolution.  Use during
+            development when the package isn't installed with entry points.
+            Example: ``agent_package="my_pkg.saber_adapter"``
         sandbox_compose: Relative path to sandbox compose file within domain.
         permanent_compose: Relative path to permanent services compose, or ``None``.
             Each domain passes this explicitly (default: ``None``).
@@ -155,6 +160,7 @@ def create_task(
             task_filter=nested.pop("task_filter", task_filter),
             dataset=nested.pop("dataset", dataset),
             agent=nested.pop("agent", agent),
+            agent_package=nested.pop("agent_package", agent_package),
             sandbox_compose=nested.pop("sandbox_compose", sandbox_compose),
             permanent_compose=nested.pop("permanent_compose", permanent_compose),
             permanent_project=nested.pop("permanent_project", permanent_project),

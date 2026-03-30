@@ -37,20 +37,29 @@ class AgentRegistry:
     _agents: dict[str, Callable[..., object]] = {}
 
     @classmethod
-    def register(cls, name: str, agent_factory: Callable[..., object]) -> None:
+    def register(cls, name: str, agent_factory: Callable[..., object], *, override: bool = False) -> None:
         """Register an agent implementation.
 
         Args:
             name: Agent name for CLI lookup (e.g., "react", "copilot").
             agent_factory: Factory callable — called as factory() -> create_with_prompts.
+            override: If True, replace an existing registration silently.
 
         Raises:
-            ValueError: If name is already registered.
+            ValueError: If name is already registered and override is False.
         """
-        if name in cls._agents:
+        if name in cls._agents and not override:
             raise ValueError(f"Agent '{name}' is already registered")
         cls._agents[name] = agent_factory
         logger.info("Agent '%s' registered", name)
+
+        # Invalidate capability cache so late registrations are picked up.
+        try:
+            from saber.agents.solver_factory import _resolve_capabilities
+
+            _resolve_capabilities.cache_clear()
+        except ImportError:
+            pass
 
     @classmethod
     def get(cls, name: str) -> Callable[..., object] | None:

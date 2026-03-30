@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import importlib
+import types
 from collections.abc import Callable
 
 from inspect_ai.model import ChatMessageUser, get_model
@@ -29,12 +31,16 @@ _BUILTIN_CAPABILITIES: dict[str, AgentCapabilities] = {
     "claude_code": AgentCapabilities(supports_tools=True),
 }
 
-# Keep AGENT_CAPABILITIES as a public alias for backward compatibility (tests, etc.)
-AGENT_CAPABILITIES = _BUILTIN_CAPABILITIES
+# Keep AGENT_CAPABILITIES as a read-only public alias for backward compatibility.
+AGENT_CAPABILITIES: types.MappingProxyType[str, AgentCapabilities] = types.MappingProxyType(_BUILTIN_CAPABILITIES)
 
 
+@functools.lru_cache(maxsize=64)
 def _resolve_capabilities(agent_name: str) -> AgentCapabilities:
     """Resolve capabilities for an agent, checking built-in then plugin modules.
+
+    Results are cached — capabilities are immutable and should not change
+    between samples within a single eval run.
 
     Lookup order:
     1. Built-in capabilities dict

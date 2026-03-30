@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from saber.agents import AgentNotFoundError, AgentRegistry
+from saber.agents.models import AgentCapabilities
 from saber.agents.resolver import resolve_agent
 
 
@@ -12,8 +13,13 @@ from saber.agents.resolver import resolve_agent
 def _clean_registry() -> None:  # noqa: PT004
     """Save and restore registry state around each test."""
     saved = dict(AgentRegistry._agents)
+    # Clear capability cache to prevent cross-test pollution
+    from saber.agents.solver_factory import _resolve_capabilities
+
+    _resolve_capabilities.cache_clear()
     yield  # type: ignore[misc]
     AgentRegistry._agents = saved
+    _resolve_capabilities.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +287,107 @@ class TestRegisterAgentPackage:
         # os module exists but has no create_agent
         with pytest.raises(AttributeError, match="create_agent"):
             register_agent_package("bad_agent", "os")
+
+    def test_register_override_existing_agent(self) -> None:
+        """register_agent_package should override a previously registered agent."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.resolver import register_agent_package
+
+        # Register initial agent
+        original_factory = MagicMock(name="original")
+        AgentRegistry.register("override_test", original_factory)
+        assert AgentRegistry.get("override_test") is original_factory
+
+        # Override via register_agent_package
+        new_module = MagicMock()
+        new_module.create_agent = MagicMock(name="replacement")
+        with patch("importlib.import_module", return_value=new_module):
+            register_agent_package("override_test", "fake.override.module")
+
+        # Factory should be replaced
+        assert AgentRegistry.get("override_test") is new_module.create_agent
+        assert AgentRegistry.get("override_test") is not original_factory
+
+    def test_register_agent_package_integration_in_create_task(self) -> None:
+        """agent_package param in create_task should trigger registration."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.resolver import register_agent_package
+
+        mock_module = MagicMock()
+        mock_module.create_agent = MagicMock()
+
+        with patch("importlib.import_module", return_value=mock_module):
+            register_agent_package("task_integration_test", "fake.package")
+
+        factory = AgentRegistry.get("task_integration_test")
+        assert factory is mock_module.create_agent
+
+
+# ---------------------------------------------------------------------------
+# Capabilities caching
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilitiesCaching:
+    """_resolve_capabilities() should be cached."""
+
+    def test_capabilities_cached_across_calls(self) -> None:
+        """Repeated calls should not re-import the module."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.solver_factory import _resolve_capabilities
+
+        # Clear the lru_cache
+        _resolve_capabilities.cache_clear()
+
+        mock_factory = MagicMock()
+        mock_factory.__module__ = "cached_plugin_module"
+        AgentRegistry.register("cache_test_plugin", mock_factory)
+
+        mock_module = MagicMock()
+        mock_module.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)
+
+        with patch("saber.agents.solver_factory.importlib.import_module", return_value=mock_module) as mock_import:
+            caps1 = _resolve_capabilities("cache_test_plugin")
+            caps2 = _resolve_capabilities("cache_test_plugin")
+
+        assert caps1.supports_tools is False
+        assert caps2.supports_tools is False
+        # import_module should only be called once due to caching
+        assert mock_import.call_count == 1
+
+        # Clean up
+        _resolve_capabilities.cache_clear()
+
+    def test_builtin_capabilities_immutable(self) -> None:
+        """AGENT_CAPABILITIES public alias should be read-only."""
+        from saber.agents.solver_factory import AGENT_CAPABILITIES
+
+        with pytest.raises(TypeError):
+            AGENT_CAPABILITIES["custom"] = AgentCapabilities()  # type: ignore[index]
+
+    def test_late_registration_invalidates_cache(self) -> None:
+        """Registering an agent after a resolve should update cached caps."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.agents.solver_factory import _resolve_capabilities
+
+        # First call: agent not registered yet → default (supports_tools=True)
+        caps_before = _resolve_capabilities("late_reg_agent")
+        assert caps_before.supports_tools is True
+
+        # Now register with supports_tools=False
+        mock_factory = MagicMock()
+        mock_factory.__module__ = "late_reg_module"
+        AgentRegistry.register("late_reg_agent", mock_factory)
+
+        mock_module = MagicMock()
+        mock_module.AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)
+
+        with patch("saber.agents.solver_factory.importlib.import_module", return_value=mock_module):
+            caps_after = _resolve_capabilities("late_reg_agent")
+
+        # Should pick up the new capabilities, not the stale default
+        assert caps_after.supports_tools is False
