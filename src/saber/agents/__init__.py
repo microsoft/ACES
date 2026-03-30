@@ -1,7 +1,16 @@
 """Agent registry with auto-discovery.
 
-Agents are auto-discovered from the registry/ directory at import time.
-Each module or package exporting a create_agent() function is registered.
+Agents are discovered from two sources at import time:
+
+1. **Built-in agents**: Modules/packages in ``agents/registry/`` exporting
+   ``create_agent()``.
+2. **Plugin agents**: External packages registered via the
+   ``saber.agents`` entry-point group.  Any installed package with::
+
+       [project.entry-points."saber.agents"]
+       my_agent = "my_package.saber_adapter:create_agent"
+
+   will be auto-discovered alongside built-in agents.
 """
 
 from __future__ import annotations
@@ -103,5 +112,53 @@ def _try_register_module(module_path: str, name: str) -> None:
         raise
 
 
+def _discover_plugin_agents() -> None:
+    """Discover external agents registered via entry points.
+
+    External packages register agents by adding an entry point in the
+    ``saber.agents`` group::
+
+        [project.entry-points."saber.agents"]
+        my_agent = "my_package.adapter:create_agent"
+
+    The entry point name becomes the agent name.  The entry point value
+    must resolve to a ``create_agent()`` callable following the standard
+    SABER two-level factory contract.
+
+    Agents that conflict with already-registered names (built-in or
+    earlier plugins) are skipped with a warning.
+    """
+    from importlib.metadata import entry_points
+
+    eps = entry_points(group="saber.agents")
+    for ep in eps:
+        if AgentRegistry.get(ep.name) is not None:
+            logger.warning(
+                "Plugin agent '%s' (from %s) skipped — name already registered",
+                ep.name,
+                ep.value,
+            )
+            continue
+        try:
+            factory = ep.load()
+            if not callable(factory):
+                logger.error(
+                    "Plugin agent '%s' entry point did not resolve to a callable: %s",
+                    ep.name,
+                    type(factory).__name__,
+                )
+                continue
+            AgentRegistry.register(ep.name, factory)
+            logger.info("Plugin agent '%s' loaded from %s", ep.name, ep.value)
+        except Exception:
+            logger.error(
+                "Failed to load plugin agent '%s' from %s",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+
+
 # Auto-register on import
 _register_core_agents()
+_discover_plugin_agents()

@@ -53,6 +53,7 @@ def create_task(
     task_filter: str | None = None,
     dataset: str | None = None,
     agent: str = "react",
+    agent_package: str | None = None,
     sandbox_compose: str = "compose/sandbox.compose.yml",
     permanent_compose: str | None = None,
     permanent_project: str = "saber-permanent",
@@ -277,6 +278,10 @@ def create_task(
         tool_registry.register(tool_name, tool_factory)
 
     # 5. Resolve agent
+    if agent_package:
+        from saber.agents.resolver import register_agent_package
+
+        register_agent_package(agent, agent_package)
     agent_factory = resolve_agent(agent)
     solver = create_saber_solver(
         agent_name=agent,

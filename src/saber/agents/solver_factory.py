@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 
 from inspect_ai.model import ChatMessageUser, get_model
@@ -19,13 +20,48 @@ logger = get_logger(__name__)
 # Re-export so existing imports (tests, etc.) continue to work.
 __all__ = ["TOOL_CALL_LIMIT_MESSAGE", "create_saber_solver"]
 
-# Agent capabilities — gates which kwargs are forwarded to each agent.
+# Built-in agent capabilities — gates which kwargs are forwarded to each agent.
+# Plugin agents declare their own capabilities via AGENT_CAPABILITIES module attribute.
 # Unknown agents fall back to the default AgentCapabilities() (supports_tools=True).
-AGENT_CAPABILITIES: dict[str, AgentCapabilities] = {
+_BUILTIN_CAPABILITIES: dict[str, AgentCapabilities] = {
     "react": AgentCapabilities(supports_tools=True),
     "copilot": AgentCapabilities(supports_tools=True),
     "claude_code": AgentCapabilities(supports_tools=True),
 }
+
+# Keep AGENT_CAPABILITIES as a public alias for backward compatibility (tests, etc.)
+AGENT_CAPABILITIES = _BUILTIN_CAPABILITIES
+
+
+def _resolve_capabilities(agent_name: str) -> AgentCapabilities:
+    """Resolve capabilities for an agent, checking built-in then plugin modules.
+
+    Lookup order:
+    1. Built-in capabilities dict
+    2. Plugin agent module's AGENT_CAPABILITIES attribute
+    3. Default (supports_tools=True)
+    """
+    # Check built-in first
+    caps = _BUILTIN_CAPABILITIES.get(agent_name)
+    if caps is not None:
+        return caps
+
+    # Try to find capabilities from the agent's module
+    from saber.agents import AgentRegistry
+
+    factory = AgentRegistry.get(agent_name)
+    if factory is not None:
+        module = getattr(factory, "__module__", None)
+        if module:
+            try:
+                mod = importlib.import_module(module)
+                mod_caps = getattr(mod, "AGENT_CAPABILITIES", None)
+                if isinstance(mod_caps, AgentCapabilities):
+                    return mod_caps
+            except ImportError:
+                pass
+
+    return AgentCapabilities()
 
 
 def create_saber_solver(
@@ -99,7 +135,7 @@ def create_saber_solver(
             create_with_prompts = agent_factory(**kwargs)
 
             # Capabilities-gated kwarg forwarding
-            caps = AGENT_CAPABILITIES.get(agent_name, AgentCapabilities())
+            caps = _resolve_capabilities(agent_name)
             if resolved is not None and caps.supports_tools:
                 agent_solver = create_with_prompts(
                     tools=list(resolved.tools),
