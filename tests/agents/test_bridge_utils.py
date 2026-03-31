@@ -542,8 +542,8 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result = await filt(
                     MagicMock(),
                     messages,
@@ -572,9 +572,9 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock(), MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage") as mock_record:
+        with patch("saber.agents.bridge_utils.record_tool_call_usage") as mock_record:
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=5, limit=5),
             ):
                 result = await filt(
@@ -614,9 +614,9 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=3, limit=3),
             ):
                 result1 = await filt(
@@ -631,8 +631,8 @@ class TestCreateToolCallLimitFilter:
 
         # Second call: grace period, same messages (no new tool calls)
         tools2: list[object] = [MagicMock()]
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result2 = await filt(
                     MagicMock(),
                     messages,
@@ -666,9 +666,9 @@ class TestCreateToolCallLimitFilter:
         config = GenerateConfig()
 
         # Call 1: trigger limit (uses grace_remaining = 1)
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=3, limit=3),
             ):
                 result1 = await filt(
@@ -681,8 +681,8 @@ class TestCreateToolCallLimitFilter:
         assert isinstance(result1, GenerateInput)
 
         # Call 2: grace generation (decrements grace_remaining to 0)
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result2 = await filt(
                     MagicMock(),
                     messages,
@@ -693,8 +693,8 @@ class TestCreateToolCallLimitFilter:
         assert isinstance(result2, GenerateInput)
 
         # Call 3: grace exhausted — hard stop
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result3 = await filt(
                     MagicMock(),
                     messages,
@@ -725,9 +725,9 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=3, limit=3),
             ):
                 await filt(MagicMock(), messages, tools, "auto", config)  # type: ignore[arg-type]
@@ -736,9 +736,9 @@ class TestCreateToolCallLimitFilter:
         msg2 = self._make_assistant_msg(num_tool_calls=2)
         messages.append(msg2)  # Now total = 5, delta = 2
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage") as mock_rec:
+        with patch("saber.agents.bridge_utils.record_tool_call_usage") as mock_rec:
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=5, limit=3),
             ) as mock_check:
                 result2 = await filt(
@@ -759,8 +759,8 @@ class TestCreateToolCallLimitFilter:
         assert isinstance(result2, GenerateInput)
 
         # Call 3: grace exhausted — hard stop
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result3 = await filt(
                     MagicMock(),
                     messages,
@@ -799,9 +799,9 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=3, limit=3),
             ):
                 result = await filt(
@@ -861,9 +861,9 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=3, limit=3),
             ):
                 result = await filt(
@@ -916,9 +916,9 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=3, limit=3),
             ):
                 await filt(MagicMock(), messages, tools, "auto", config)  # type: ignore[arg-type]
@@ -937,8 +937,8 @@ class TestCreateToolCallLimitFilter:
         messages.append(msg2)
 
         # Second call: grace period — orphaned calls from msg2
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result2 = await filt(
                     MagicMock(),
                     messages,
@@ -973,16 +973,16 @@ class TestCreateToolCallLimitFilter:
         tools: list[object] = [MagicMock()]
         config = GenerateConfig()
 
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=2, limit=2),
             ):
                 await filt(MagicMock(), messages, tools, "auto", config)  # type: ignore[arg-type]
 
         # check_after_exec should raise
         with patch(
-            "inspect_ai.util._limit.check_tool_call_limit",
+            "saber.agents.bridge_utils.check_tool_call_limit",
             side_effect=LimitExceededError("tool_call", value=2, limit=2),
         ):
             with pytest.raises(LimitExceededError):
@@ -1025,8 +1025,8 @@ class TestToolCallLimitCountsSubagentCalls:
             ChatMessageUser(content="main task"),
             main_msg,
         ]
-        with patch("inspect_ai.util._limit.record_tool_call_usage") as rec1:
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage") as rec1:
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), main_messages, [MagicMock()], "auto", config)  # type: ignore[arg-type]
         rec1.assert_called_once_with(2)
 
@@ -1036,8 +1036,8 @@ class TestToolCallLimitCountsSubagentCalls:
             ChatMessageUser(content="subtask"),
             sub_msg,
         ]
-        with patch("inspect_ai.util._limit.record_tool_call_usage") as rec2:
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage") as rec2:
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), sub_messages, [MagicMock()], "auto", config)  # type: ignore[arg-type]
         # The filter sees 3 total in this message list, but previously
         # recorded 2 from the main thread.  The delta mechanism counts
@@ -1067,8 +1067,8 @@ class TestToolCallLimitCountsSubagentCalls:
             ChatMessageUser(content="main"),
             main_msg,
         ]
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 result1 = await filt(MagicMock(), main_messages, [MagicMock()], "auto", config)  # type: ignore[arg-type]
         assert result1 is None  # under limit
 
@@ -1078,9 +1078,9 @@ class TestToolCallLimitCountsSubagentCalls:
             ChatMessageUser(content="subtask"),
             sub_msg,
         ]
-        with patch("inspect_ai.util._limit.record_tool_call_usage"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage"):
             with patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=5, limit=5),
             ):
                 result2 = await filt(MagicMock(), sub_messages, [MagicMock()], "auto", config)  # type: ignore[arg-type]
@@ -1108,36 +1108,36 @@ class TestToolCallLimitCountsSubagentCalls:
         # Call 1: main — 2 tool calls
         msg1 = self._make_assistant_msg(num_tool_calls=2, prefix="m1")
         msgs1: list[object] = [ChatMessageUser(content="main1"), msg1]
-        with patch("inspect_ai.util._limit.record_tool_call_usage", side_effect=track_record):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage", side_effect=track_record):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), msgs1, [MagicMock()], "auto", config)  # type: ignore[arg-type]
 
         # Call 2: subagent — 1 tool call (total in list=1, recorded=2 → delta<0 → no record)
         msg2 = self._make_assistant_msg(num_tool_calls=1, prefix="s1")
         msgs2: list[object] = [ChatMessageUser(content="sub1"), msg2]
-        with patch("inspect_ai.util._limit.record_tool_call_usage", side_effect=track_record):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage", side_effect=track_record):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), msgs2, [MagicMock()], "auto", config)  # type: ignore[arg-type]
 
         # Call 3: main grows — 4 tool calls now
         msg3 = self._make_assistant_msg(num_tool_calls=4, prefix="m3")
         msgs3: list[object] = [ChatMessageUser(content="main2"), msg3]
-        with patch("inspect_ai.util._limit.record_tool_call_usage", side_effect=track_record):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage", side_effect=track_record):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), msgs3, [MagicMock()], "auto", config)  # type: ignore[arg-type]
 
         # Call 4: subagent — 3 tool calls (total=3, recorded=4 → no record)
         msg4 = self._make_assistant_msg(num_tool_calls=3, prefix="s2")
         msgs4: list[object] = [ChatMessageUser(content="sub2"), msg4]
-        with patch("inspect_ai.util._limit.record_tool_call_usage", side_effect=track_record):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage", side_effect=track_record):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), msgs4, [MagicMock()], "auto", config)  # type: ignore[arg-type]
 
         # Call 5: main grows — 6 tool calls
         msg5 = self._make_assistant_msg(num_tool_calls=6, prefix="m5")
         msgs5: list[object] = [ChatMessageUser(content="main3"), msg5]
-        with patch("inspect_ai.util._limit.record_tool_call_usage", side_effect=track_record):
-            with patch("inspect_ai.util._limit.check_tool_call_limit"):
+        with patch("saber.agents.bridge_utils.record_tool_call_usage", side_effect=track_record):
+            with patch("saber.agents.bridge_utils.check_tool_call_limit"):
                 await filt(MagicMock(), msgs5, [MagicMock()], "auto", config)  # type: ignore[arg-type]
 
         # Deltas should be: 2 (call1), then 2 (call3: 4-2), then 2 (call5: 6-4)

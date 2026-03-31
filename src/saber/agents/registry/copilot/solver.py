@@ -36,6 +36,7 @@ from saber.agents.bridge_utils import (
     parse_runner_metrics,
     record_bridge_summary,
     resolve_model_aliases,
+    tool_call_limit,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
@@ -842,7 +843,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         """
         from inspect_ai.agent import Agent, AgentState, agent, as_solver, sandbox_agent_bridge
         from inspect_ai.util import sandbox as sandbox_env
-        from inspect_ai.util import store, tool_call_limit
+        from inspect_ai.util import store
 
         config = CopilotBridgeConfig.from_kwargs(dict(outer_kwargs))
 
@@ -853,7 +854,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
         bridged = build_bridged_tools_for_copilot(tools)
 
-        @agent  # type: ignore[misc]
+        @agent
         def _copilot_agent() -> Agent:
             async def execute(state: AgentState) -> AgentState:
                 # Fail fast on model misconfiguration (e.g. wrong name)

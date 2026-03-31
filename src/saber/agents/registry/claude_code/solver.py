@@ -24,6 +24,7 @@ from saber.agents.bridge_utils import (
     record_bridge_summary,
     resolve_mcp_servers,
     resolve_model_aliases,
+    tool_call_limit,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
@@ -96,22 +97,22 @@ async def _seed_claude_config(
         user: Optional user to run the command as.
         cwd: Optional working directory for the command.
     """
-    kwargs: dict[str, str] = {}
-    if user is not None:
-        kwargs["user"] = user
-    if cwd is not None:
-        kwargs["cwd"] = cwd
-    await sbox.exec(
-        cmd=[
-            "bash",
-            "-c",
-            'mkdir -p "$HOME/.claude"'
-            " && echo '"
-            '{"apiKeyHelper": "echo ' + api_key + '"}'
-            '\' > "$HOME/.claude/settings.json"',
-        ],
-        **kwargs,
-    )
+    cmd = [
+        "bash",
+        "-c",
+        'mkdir -p "$HOME/.claude"'
+        " && echo '"
+        '{"apiKeyHelper": "echo ' + api_key + '"}'
+        '\' > "$HOME/.claude/settings.json"',
+    ]
+    if user is not None and cwd is not None:
+        await sbox.exec(cmd=cmd, user=user, cwd=cwd)
+    elif user is not None:
+        await sbox.exec(cmd=cmd, user=user)
+    elif cwd is not None:
+        await sbox.exec(cmd=cmd, cwd=cwd)
+    else:
+        await sbox.exec(cmd=cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +268,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         """
         from inspect_ai.agent import Agent, AgentState, agent, as_solver, sandbox_agent_bridge
         from inspect_ai.util import sandbox as sandbox_env
-        from inspect_ai.util import store, tool_call_limit
+        from inspect_ai.util import store
 
         sandbox_name: str = str(outer_kwargs.get("sandbox_name", "default"))
         version: str = str(outer_kwargs.get("version", "auto"))
@@ -286,7 +287,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
         bridged = build_bridged_tools_for_claude_code(tools)
 
-        @agent  # type: ignore[misc]
+        @agent
         def _claude_code_agent() -> Agent:
             async def execute(state: AgentState) -> AgentState:
                 # Fail fast on model misconfiguration (e.g. wrong name)

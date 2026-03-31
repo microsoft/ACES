@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal
 
 from saber.agents.bridge_tracking_models import (
     DELEGATION_TOOL_NAMES,
@@ -13,14 +14,19 @@ from saber.agents.bridge_tracking_models import (
 )
 
 try:
-    from inspect_ai.log._transcript import transcript
+    from inspect_ai.log._transcript import transcript as _transcript
+
+    transcript: Callable[[], Any] | None = _transcript
 except Exception:  # pragma: no cover
     transcript = None
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from inspect_ai.model import ChatMessage
+    from inspect_ai.model._generate_config import GenerateConfig
+    from inspect_ai.model._model import GenerateFilter, GenerateInput, Model
+    from inspect_ai.model._model_output import ModelOutput
+    from inspect_ai.tool._tool_choice import ToolFunction
+    from inspect_ai.tool._tool_info import ToolInfo
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +59,7 @@ def _has_active_delegation(messages: list[ChatMessage]) -> bool:
     return False
 
 
-def create_tracking_filter() -> tuple[object, Callable[[], BridgeSessionSummary]]:
+def create_tracking_filter() -> tuple[GenerateFilter, Callable[[], BridgeSessionSummary]]:
     """Create a GenerateFilter that classifies and records bridge generations.
 
     Uses a dual heuristic:
@@ -75,12 +81,12 @@ def create_tracking_filter() -> tuple[object, Callable[[], BridgeSessionSummary]
     _models_seen: set[str] = set()
 
     async def _filter(
-        model: object,
+        model: Model | str,
         messages: list[ChatMessage],
-        tools: list[object],
-        tool_choice: object | None,
-        config: object,
-    ) -> None:
+        tools: list[ToolInfo],
+        tool_choice: Literal["auto", "any", "none"] | ToolFunction | None,
+        config: GenerateConfig,
+    ) -> ModelOutput | GenerateInput | None:
         nonlocal _generation_index, _high_water_mark
         nonlocal _main_count, _subagent_count, _total_tool_calls, _models_seen
 
@@ -145,7 +151,7 @@ def create_tracking_filter() -> tuple[object, Callable[[], BridgeSessionSummary]
             metadata.tool_count,
         )
 
-        return None  # Observation only
+        return None
 
     def get_summary() -> BridgeSessionSummary:
         """Return a snapshot of the current bridge session summary."""

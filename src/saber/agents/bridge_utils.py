@@ -8,13 +8,21 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from contextvars import ContextVar, Token
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
+
+from inspect_ai.model import ChatMessage
+from inspect_ai.model._generate_config import GenerateConfig
+from inspect_ai.model._model import GenerateFilter, GenerateInput, Model
+from inspect_ai.model._model_output import ModelOutput
+from inspect_ai.tool._tool_choice import ToolFunction
+from inspect_ai.tool._tool_info import ToolInfo
+from inspect_ai.util._limit import Limit
 
 if TYPE_CHECKING:
-    from inspect_ai.model import ChatMessage
-    from inspect_ai.model._model import GenerateFilter
+    from inspect_ai.agent import BridgedToolsSpec
     from inspect_ai.tool import Tool
     from inspect_ai.tool._mcp._config import MCPServerConfigHTTP
     from inspect_ai.util import SandboxEnvironment
@@ -25,6 +33,89 @@ if TYPE_CHECKING:
 from saber.logging import get_logger
 
 logger = get_logger(__name__)
+
+_ACTIVE_TOOL_CALL_LIMIT: ContextVar[_BridgeToolCallLimit | None] = ContextVar(
+    "saber_bridge_tool_call_limit",
+    default=None,
+)
+
+
+class _BridgeToolCallLimit(Limit):
+    """inspect_ai-compatible Limit implementation for bridge tool calls."""
+
+    def __init__(self, max_calls: int) -> None:
+        super().__init__()
+        self._max_calls = max_calls
+        self._usage = 0
+        self._token: Token[_BridgeToolCallLimit | None] | None = None
+
+    def __enter__(self) -> _BridgeToolCallLimit:
+        self._check_reuse()
+        self._token = _ACTIVE_TOOL_CALL_LIMIT.set(self)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
+        if self._token is not None:
+            _ACTIVE_TOOL_CALL_LIMIT.reset(self._token)
+            self._token = None
+
+    @property
+    def limit(self) -> float | None:
+        return float(self._max_calls)
+
+    @property
+    def usage(self) -> float:
+        return float(self._usage)
+
+    def record_usage(self, delta: int) -> None:
+        self._usage += delta
+
+    def check(self) -> None:
+        from inspect_ai.util._limit import LimitExceededError
+
+        if self._usage >= self._max_calls:
+            raise LimitExceededError(
+                "custom",
+                value=self._usage,
+                limit=float(self._max_calls),
+                message=f"Exceeded tool-call limit: {self._max_calls}",
+                source=self,
+            )
+
+
+def tool_call_limit(max_calls: int) -> Limit:
+    """Create a bridge-local Limit for counting tool calls.
+
+    ACES cannot rely on ``inspect_ai.util.tool_call_limit`` because the
+    pinned PyPI ``inspect-ai`` version does not expose that API.  This local
+    limit provides the subset of behavior ACES bridge agents need so
+    ``as_solver(..., limits=[...])`` can still recognize the resulting
+    ``LimitExceededError`` as one of its active limits.
+    """
+    if max_calls <= 0:
+        raise ValueError(f"tool_call_limit must be positive, got {max_calls}")
+    return _BridgeToolCallLimit(max_calls)
+
+
+def record_tool_call_usage(delta: int) -> None:
+    """Record bridge-observed tool-call usage against the active limit."""
+    active_limit = _ACTIVE_TOOL_CALL_LIMIT.get()
+    if active_limit is None or delta <= 0:
+        return
+    active_limit.record_usage(delta)
+
+
+def check_tool_call_limit() -> None:
+    """Raise when the active bridge tool-call limit has been reached."""
+    active_limit = _ACTIVE_TOOL_CALL_LIMIT.get()
+    if active_limit is None:
+        return
+    active_limit.check()
 
 
 # Tools that Claude Code provides natively — don't bridge these via MCP
@@ -150,7 +241,7 @@ def build_system_prompt(
 
 def build_bridged_tools(
     tools: Sequence[Tool] | None,
-) -> list[object] | None:
+) -> list[BridgedToolsSpec] | None:
     """Convert a tool sequence to a list of BridgedToolsSpec.
 
     Args:
@@ -208,7 +299,7 @@ def filter_native_tools(
 
 def build_bridged_tools_for_claude_code(
     tools: Sequence[Tool] | None,
-) -> list[object] | None:
+) -> list[BridgedToolsSpec] | None:
     """Build bridged tools for Claude Code, excluding native tools.
 
     Claude Code has built-in bash, file operations, etc. We only bridge
@@ -226,7 +317,7 @@ def build_bridged_tools_for_claude_code(
 
 def build_bridged_tools_for_copilot(
     tools: Sequence[Tool] | None,
-) -> list[object] | None:
+) -> list[BridgedToolsSpec] | None:
     """Build bridged tools for Copilot, excluding native tools.
 
     Copilot has built-in terminal execution, file operations, etc. We only
@@ -390,13 +481,13 @@ async def validate_model_availability() -> None:
 # ---------------------------------------------------------------------------
 
 
-def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
+def create_tool_call_limit_filter() -> tuple[GenerateFilter, Callable[[], None]]:
     """Create a GenerateFilter that records tool call usage for bridge agents.
 
     The ``sandbox_agent_bridge`` does not natively record tool calls against
-    inspect_ai's ``tool_call_limit``.  This filter observes the conversation
+    ACES's bridge-local ``tool_call_limit``.  This filter observes the conversation
     before each model generation, counts new tool calls from assistant
-    messages, and records them via ``record_tool_call_usage()``.
+    messages, and records them via the active bridge limit.
 
     When the limit is exceeded the filter returns a text-only ``ModelOutput``
     telling the agent CLI to stop.  This avoids raising
@@ -431,19 +522,16 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
     _grace_remaining: int = 0
 
     async def _filter(
-        model: object,
+        model: Model | str,
         messages: list[ChatMessage],
-        tools: list[object],
-        tool_choice: object | None,
-        config: object,
-    ) -> object | None:
+        tools: list[ToolInfo],
+        tool_choice: Literal["auto", "any", "none"] | ToolFunction | None,
+        config: GenerateConfig,
+    ) -> ModelOutput | GenerateInput | None:
         nonlocal _recorded_count, _limit_exceeded, _grace_remaining
         from inspect_ai.model._model import GenerateInput
         from inspect_ai.model._model_output import ModelOutput
-        from inspect_ai.util._limit import (
-            LimitExceededError,
-            record_tool_call_usage,
-        )
+        from inspect_ai.util._limit import LimitExceededError
 
         # Count total tool calls across all assistant messages
         total = count_tool_calls(messages)
@@ -465,7 +553,7 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
                 patch_orphaned_tool_calls(messages)
                 # Return GenerateInput with empty tools so the real
                 # model generates text only (Bug 1 & Bug 2 fix).
-                return GenerateInput(  # type: ignore[no-any-return]
+                return GenerateInput(
                     input=messages,
                     tools=[],
                     tool_choice="none",
@@ -473,7 +561,7 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
                 )
 
             # Grace period exhausted — hard stop.
-            return ModelOutput.from_content(  # type: ignore[no-any-return]
+            return ModelOutput.from_content(
                 model="inspect",
                 content=("Tool call limit reached. No more generations allowed. Returning final state."),
                 stop_reason="stop",
@@ -487,8 +575,6 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
 
             # Check whether we've hit the limit.
             try:
-                from inspect_ai.util._limit import check_tool_call_limit
-
                 check_tool_call_limit()
             except LimitExceededError:
                 _limit_exceeded = True
@@ -507,7 +593,7 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
 
                 patch_orphaned_tool_calls(messages)
                 messages.append(ChatMessageUser(content=TOOL_CALL_LIMIT_MESSAGE))
-                return GenerateInput(  # type: ignore[no-any-return]
+                return GenerateInput(
                     input=messages,
                     tools=[],
                     tool_choice="none",
@@ -525,8 +611,6 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
         ``apply_limits(catch_errors=True)`` handles it properly.
         """
         if _limit_exceeded:
-            from inspect_ai.util._limit import check_tool_call_limit
-
             # This will raise LimitExceededError with the correct
             # source so apply_limits recognises it as one of its own.
             check_tool_call_limit()
@@ -541,7 +625,7 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
 
 def resolve_model_aliases(
     raw_aliases: dict[str, str] | None,
-) -> dict[str, str] | None:
+) -> dict[str, str | Model] | None:
     """Validate and normalize model alias mappings.
 
     Used with ``sandbox_agent_bridge(model_aliases=...)`` to route
@@ -562,7 +646,8 @@ def resolve_model_aliases(
         if not key or not value:
             msg = f"Model alias mapping has empty key or value: {key!r} \u2192 {value!r}"
             raise ValueError(msg)
-    return dict(raw_aliases)
+    aliases: dict[str, str | Model] = dict(raw_aliases)
+    return aliases
 
 
 # ---------------------------------------------------------------------------
@@ -593,14 +678,43 @@ def compose_filters(
         return active[0]
 
     async def _composed(
-        model: object,
+        model: Model | str,
         messages: list[ChatMessage],
-        tools: list[object],
-        tool_choice: object,
-        config: object,
-    ) -> object | None:
+        tools: list[ToolInfo],
+        tool_choice: Literal["auto", "any", "none"] | ToolFunction | None,
+        config: GenerateConfig,
+    ) -> ModelOutput | GenerateInput | None:
         for filt in active:
-            result: object | None = await filt(model, messages, tools, tool_choice, config)
+            if isinstance(model, str):
+                str_filter = cast(
+                    Callable[
+                        [
+                            str,
+                            list[ChatMessage],
+                            list[ToolInfo],
+                            Literal["auto", "any", "none"] | ToolFunction | None,
+                            GenerateConfig,
+                        ],
+                        Awaitable[ModelOutput | GenerateInput | None],
+                    ],
+                    filt,
+                )
+                result = await str_filter(model, messages, tools, tool_choice, config)
+            else:
+                model_filter = cast(
+                    Callable[
+                        [
+                            Model,
+                            list[ChatMessage],
+                            list[ToolInfo],
+                            Literal["auto", "any", "none"] | ToolFunction | None,
+                            GenerateConfig,
+                        ],
+                        Awaitable[ModelOutput | GenerateInput | None],
+                    ],
+                    filt,
+                )
+                result = await model_filter(model, messages, tools, tool_choice, config)
             if result is not None:
                 return result
         return None
