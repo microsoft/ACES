@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from textwrap import dedent
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from inspect_ai._util.registry import registry_unqualified_name
+from inspect_ai.model import ChatMessageUser
+from inspect_ai.solver import TaskState
 
 from saber.environments.images import RebuildMode, RebuildScope
 from saber.task import _find_config_root, _find_prompts_dir, create_task
@@ -17,7 +20,6 @@ from saber.task import _find_config_root, _find_prompts_dir, create_task
 def _dummy_scorer():
     """Create a minimal valid inspect_ai Scorer for use in mocked tests."""
     from inspect_ai.scorer import Score, Scorer, Target, mean, scorer
-    from inspect_ai.solver import TaskState
 
     @scorer(metrics=[mean()], name="test_dummy")  # type: ignore[misc]
     def dummy() -> Scorer:
@@ -183,6 +185,99 @@ class TestCreateTask:
             )
 
         mock_register.assert_called_once_with("retry_external_agent", "retry.package.adapter")
+
+    @pytest.mark.asyncio
+    async def test_agent_package_external_adapter_runs_through_task_solver(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A real external module can import ``saber.ext`` and run through ``create_task()``."""
+        _write_minimal_domain(tmp_path)
+
+        package_root = tmp_path / "external_public_adapter"
+        package_root.mkdir()
+        (package_root / "__init__.py").write_text("")
+        (package_root / "adapter.py").write_text(
+            dedent(
+                """
+                from inspect_ai.model import ChatMessageSystem, get_model
+                from saber.ext import AgentCapabilities, build_system_prompt
+
+                AGENT_CAPABILITIES = AgentCapabilities(supports_tools=False)
+
+
+                def create_agent(**kwargs):
+                    role = str(kwargs.get("role", "briefing"))
+
+                    def create_with_prompts(
+                        instruction_prompt="",
+                        assistant_prompt="",
+                        tools=None,
+                        *,
+                        max_steps,
+                        **extra_kwargs,
+                    ):
+                        del tools, max_steps, extra_kwargs
+
+                        async def solve(state, generate):
+                            del generate
+                            system_prompt = build_system_prompt(
+                                instruction_prompt,
+                                assistant_prompt,
+                            )
+                            if role:
+                                if system_prompt:
+                                    system_prompt = f"Role: {role}\\n\\n{system_prompt}"
+                                else:
+                                    system_prompt = f"Role: {role}"
+                            messages = list(state.messages)
+                            if system_prompt:
+                                messages = [ChatMessageSystem(content=system_prompt)] + messages
+                            state.output = await get_model().generate(input=messages, tools=[])
+                            state.messages.append(state.output.message)
+                            return state
+
+                        return solve
+
+                    return create_with_prompts
+                """
+            )
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        task = create_task(
+            tmp_path,
+            agent="external_public_adapter",
+            agent_package="external_public_adapter.adapter",
+            permanent_compose=None,
+        )
+        sample = list(task.dataset)[0]
+
+        state = TaskState(
+            model="test/model",
+            sample_id=sample.id,
+            epoch=1,
+            input=[ChatMessageUser(content="Start with the key facts.")],
+            messages=[ChatMessageUser(content="Start with the key facts.")],
+            metadata=sample.metadata,
+        )
+        output = MagicMock()
+        output.message = MagicMock()
+        model = MagicMock()
+        model.generate = AsyncMock(return_value=output)
+
+        with patch("external_public_adapter.adapter.get_model", return_value=model):
+            result = await task.solver(state, MagicMock())
+
+        assert result is state
+        call_kwargs = model.generate.await_args.kwargs
+        assert call_kwargs["tools"] == []
+        input_messages = call_kwargs["input"]
+        assert input_messages[0].content.startswith("Role: briefing")
+        assert "You are a tester." in input_messages[0].content
+        assert "Assistant prompt." in input_messages[0].content
+        assert state.messages[-1] is output.message
 
     def test_task_has_default_time_limit(self, tmp_path: Path) -> None:
         """create_task sets a default time_limit of 3600 on the Task."""
