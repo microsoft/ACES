@@ -94,10 +94,10 @@ include = [
 [tool.hatch.metadata]
 allow-direct-references = true
 
-# inspect-ai: resolves from PyPI by default (no source override needed).
-# Uncomment for ADO fork (Microsoft internal) or local development:
+# inspect-ai: ADO fork required for tool_call limit functionality not yet merged upstream.
+# Uncomment the PyPI or local lines below if/when upstream merges the feature.
 [tool.uv.sources]
-# inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
+inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
 # inspect-ai = { path = "../inspect_ai", editable = true }
 
 [tool.hatch.build.targets.sdist]
