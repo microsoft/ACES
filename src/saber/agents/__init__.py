@@ -16,9 +16,9 @@ Agents are discovered from two sources at import time:
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable
 from pathlib import Path
 
+from saber.agents.models import AgentFactory
 from saber.logging import get_logger
 
 logger = get_logger(__name__)
@@ -34,10 +34,10 @@ class AgentRegistry:
     Class-level singleton mapping agent names to factory callables.
     """
 
-    _agents: dict[str, Callable[..., object]] = {}
+    _agents: dict[str, AgentFactory] = {}
 
     @classmethod
-    def register(cls, name: str, agent_factory: Callable[..., object], *, override: bool = False) -> None:
+    def register(cls, name: str, agent_factory: AgentFactory, *, override: bool = False) -> None:
         """Register an agent implementation.
 
         Args:
@@ -62,7 +62,7 @@ class AgentRegistry:
             pass
 
     @classmethod
-    def get(cls, name: str) -> Callable[..., object] | None:
+    def get(cls, name: str) -> AgentFactory | None:
         """Get agent factory by name. Returns None if not found."""
         return cls._agents.get(name)
 

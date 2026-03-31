@@ -32,7 +32,7 @@ from saber.prompts.renderer import PromptRenderer
 from saber.scoring.factory import ScorerFactory
 from saber.scoring.registry import ScoringStrategyRegistry
 from saber.scoring.strategies import SaberScoringStrategy
-from saber.tools import ToolRegistry
+from saber.tools.registry import ToolRegistry
 from saber.tools.security import ToolSecurityConfig, build_tool_approval
 
 logger = get_logger(__name__)
@@ -343,9 +343,6 @@ def create_task(
         sandbox=sandbox_spec,
         approval=effective_approval,
         config=GenerateConfig(max_retries=None),
-        # Use max across all tasks as the ceiling; per-sample tightening
-        # happens in the solver via state.tool_call_limit from metadata.
-        tool_call_limit=max(t.max_steps for t in tasks),
         time_limit=_DEFAULT_TIME_LIMIT,
         # Empty reducer list suppresses the spurious "(mean)" display
         # suffix caused by an inspect_ai variable-shadowing bug in

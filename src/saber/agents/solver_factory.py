@@ -6,14 +6,13 @@ import asyncio
 import functools
 import importlib
 import types
-from collections.abc import Callable
 
 from inspect_ai.model import ChatMessageUser, ModelOutput, get_model
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util._limit import LimitExceededError
 
 from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
-from saber.agents.models import AgentCapabilities, AgentPromptKwargs
+from saber.agents.models import AgentCapabilities, AgentFactory, AgentPromptKwargs
 from saber.config.models import ToolConfig
 from saber.logging import get_logger
 from saber.tools.registry import ResolvedTools, ToolRegistry
@@ -69,7 +68,7 @@ def _resolve_capabilities(agent_name: str) -> AgentCapabilities:
 
 def create_saber_solver(
     agent_name: str,
-    agent_factory: Callable[..., Callable[..., Solver]],
+    agent_factory: AgentFactory,
     tool_registry: ToolRegistry | None = None,
     **kwargs: object,
 ) -> Solver:
@@ -90,7 +89,7 @@ def create_saber_solver(
         A Solver that invokes the agent with per-sample prompts and tools.
     """
 
-    @solver  # type: ignore[misc]
+    @solver
     def saber_agent_solver() -> Solver:
         _tools_cache: dict[frozenset[tuple[str, str]], ResolvedTools] = {}
         create_with_prompts = agent_factory(**kwargs)
@@ -113,7 +112,6 @@ def create_saber_solver(
                     f"got {per_sample_max_steps!r}. "
                     f"Set max_steps in your task YAML (e.g. global_defaults.max_steps: 200)."
                 )
-            state.tool_call_limit = per_sample_max_steps
             agent_kwargs["max_steps"] = per_sample_max_steps
 
             resolved: ResolvedTools | None = None

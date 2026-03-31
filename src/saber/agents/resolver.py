@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable
 
 from saber.agents import AgentNotFoundError, AgentRegistry
+from saber.agents.models import AgentFactory
 from saber.logging import get_logger
 
 logger = get_logger(__name__)
@@ -43,7 +43,7 @@ def register_agent_package(agent_name: str, module_path: str) -> None:
     logger.info("Agent '%s' registered from module '%s'", agent_name, module_path)
 
 
-def resolve_agent(agent_name: str) -> Callable[..., object]:
+def resolve_agent(agent_name: str) -> AgentFactory:
     """Resolve agent factory by name from the registry.
 
     Args:
@@ -57,7 +57,7 @@ def resolve_agent(agent_name: str) -> Callable[..., object]:
     """
     factory = AgentRegistry.get(agent_name)
     if factory is not None:
-        return factory  # type: ignore[no-any-return]
+        return factory
 
     available = AgentRegistry.list_agents()
     raise AgentNotFoundError(

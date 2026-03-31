@@ -315,7 +315,6 @@ class TestSolverFactory:
             state.metadata["tools"] = {"bash": {}}
         state.messages = []
         state.output = None
-        state.tool_call_limit = None
         return state
 
     def test_solver_omits_tools_when_plugin_declares_no_support(self) -> None:
@@ -344,9 +343,9 @@ class TestSolverFactory:
                 agent_factory=agent_factory,
                 tool_registry=ToolRegistry(),
             )
-            result = asyncio.run(solver(self._make_state(), AsyncMock()))
+            asyncio.run(solver(self._make_state(), AsyncMock()))
 
-        assert result.tool_call_limit == 5
+        assert captured["max_steps"] == 5
         assert "tools" not in captured
 
     def test_solver_passes_tools_by_default(self) -> None:
@@ -370,8 +369,8 @@ class TestSolverFactory:
             tool_registry=ToolRegistry(),
         )
 
-        result = asyncio.run(solver(self._make_state(), AsyncMock()))
-        assert result.tool_call_limit == 5
+        asyncio.run(solver(self._make_state(), AsyncMock()))
+        assert captured["max_steps"] == 5
         assert "tools" in captured
         assert isinstance(captured["tools"], list)
         assert len(captured["tools"]) == 1
