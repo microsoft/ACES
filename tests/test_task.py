@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from textwrap import dedent
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -278,6 +280,177 @@ class TestCreateTask:
         assert "You are a tester." in input_messages[0].content
         assert "Assistant prompt." in input_messages[0].content
         assert state.messages[-1] is output.message
+
+    @pytest.mark.asyncio
+    async def test_agent_package_external_bridge_adapter_runs_through_task_solver(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An external bridge-grade adapter can use ``saber.ext`` through the task path."""
+        _write_minimal_domain(tmp_path)
+
+        package_root = tmp_path / "external_bridge_adapter"
+        package_root.mkdir()
+        (package_root / "__init__.py").write_text("")
+        (package_root / "adapter.py").write_text(
+            dedent(
+                """
+                from inspect_ai.agent import agent, as_solver, sandbox_agent_bridge
+                from inspect_ai.util import sandbox as sandbox_env, store
+                from saber.ext import (
+                    AgentCapabilities,
+                    build_bridged_tools,
+                    build_system_prompt,
+                    build_user_prompt,
+                    compose_filters,
+                    create_tool_call_limit_filter,
+                    create_tracking_filter,
+                    resolve_model_aliases,
+                    tool_call_limit,
+                    validate_model_availability,
+                )
+
+                AGENT_CAPABILITIES = AgentCapabilities(supports_tools=True)
+                _RUNNER_PATH = "/tmp/bridge_runner.py"
+
+
+                def create_agent(**kwargs):
+                    del kwargs
+
+                    def create_with_prompts(
+                        instruction_prompt="",
+                        assistant_prompt="",
+                        tools=None,
+                        *,
+                        max_steps,
+                        **extra_kwargs,
+                    ):
+                        del extra_kwargs
+                        system_prompt = build_system_prompt(
+                            instruction_prompt,
+                            assistant_prompt,
+                        )
+                        bridged_tools = build_bridged_tools(tools)
+
+                        @agent
+                        def _bridge_agent():
+                            async def execute(state):
+                                await validate_model_availability()
+                                port = store().get("external_bridge_port", 3400) + 1
+                                store().set("external_bridge_port", port)
+                                bridge_filter, check_tool_limit = create_tool_call_limit_filter()
+                                tracking_filter, _get_tracking_summary = create_tracking_filter()
+                                composed = compose_filters(tracking_filter, bridge_filter)
+
+                                async with sandbox_agent_bridge(
+                                    state,
+                                    model="inspect",
+                                    port=port,
+                                    sandbox="default",
+                                    bridged_tools=bridged_tools,
+                                    filter=composed,
+                                    model_aliases=resolve_model_aliases(None),
+                                ) as bridge:
+                                    sbox = sandbox_env("default")
+                                    await sbox.write_file(_RUNNER_PATH, "print('ok')")
+                                    user_prompt, _ = build_user_prompt(state.messages)
+                                    if not user_prompt:
+                                        user_prompt = "Begin the task."
+                                    if system_prompt:
+                                        user_prompt = f"{system_prompt}\\n\\n{user_prompt}"
+                                    result = await sbox.exec(
+                                        ["python3", _RUNNER_PATH],
+                                        env={"BRIDGE_PROMPT": user_prompt},
+                                    )
+                                    if result.returncode != 0:
+                                        raise RuntimeError(result.stderr or "runner failed")
+
+                                check_tool_limit()
+                                return bridge.state
+
+                            return execute
+
+                        return as_solver(_bridge_agent(), limits=[tool_call_limit(max_steps)])
+
+                    return create_with_prompts
+                """
+            )
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        task = create_task(
+            tmp_path,
+            agent="external_bridge_adapter",
+            agent_package="external_bridge_adapter.adapter",
+            permanent_compose=None,
+        )
+        sample = list(task.dataset)[0]
+        state = TaskState(
+            model="test/model",
+            sample_id=sample.id,
+            epoch=1,
+            input=[ChatMessageUser(content="Start with the key facts.")],
+            messages=[ChatMessageUser(content="Start with the key facts.")],
+            metadata=sample.metadata,
+        )
+
+        bridge_calls: list[dict[str, object]] = []
+        fake_bridge = SimpleNamespace(
+            port=13131,
+            state=SimpleNamespace(messages=[{"role": "assistant", "content": "done"}]),
+            mcp_server_configs=[],
+        )
+
+        @asynccontextmanager
+        async def fake_bridge_cm(*args: object, **kwargs: object):
+            bridge_calls.append({"args": args, "kwargs": kwargs})
+            yield fake_bridge
+
+        fake_sbox = SimpleNamespace(
+            write_file=AsyncMock(),
+            exec=AsyncMock(return_value=SimpleNamespace(returncode=0, stdout="", stderr="")),
+        )
+
+        class _Store:
+            def __init__(self) -> None:
+                self._data: dict[str, int] = {}
+
+            def get(self, key: str, default: int) -> int:
+                return self._data.get(key, default)
+
+            def set(self, key: str, value: int) -> None:
+                self._data[key] = value
+
+        def fake_as_solver(agent: object, limits: object = None):
+            del limits
+
+            async def solver(state: object, generate: object):
+                del generate
+                return await agent(state)
+
+            return solver
+
+        with (
+            patch("external_bridge_adapter.adapter.agent", side_effect=lambda fn: fn),
+            patch("external_bridge_adapter.adapter.as_solver", side_effect=fake_as_solver),
+            patch("external_bridge_adapter.adapter.sandbox_agent_bridge", side_effect=fake_bridge_cm),
+            patch("external_bridge_adapter.adapter.sandbox_env", return_value=fake_sbox),
+            patch("external_bridge_adapter.adapter.store", return_value=_Store()),
+            patch("external_bridge_adapter.adapter.validate_model_availability", new=AsyncMock()),
+        ):
+            result = await task.solver(state, MagicMock())
+
+        assert result is fake_bridge.state
+        bridge_kwargs = bridge_calls[0]["kwargs"]
+        assert isinstance(bridge_kwargs, dict)
+        assert bridge_kwargs["model"] == "inspect"
+        fake_sbox.write_file.assert_awaited_once()
+        write_args = fake_sbox.write_file.await_args.args
+        assert write_args[0] == "/tmp/bridge_runner.py"
+        exec_env = fake_sbox.exec.await_args.kwargs["env"]
+        assert "You are a tester." in exec_env["BRIDGE_PROMPT"]
+        assert "Assistant prompt." in exec_env["BRIDGE_PROMPT"]
 
     def test_task_has_default_time_limit(self, tmp_path: Path) -> None:
         """create_task sets a default time_limit of 3600 on the Task."""
