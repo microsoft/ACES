@@ -21,7 +21,7 @@ from inspect_ai.scorer import Scorer
 from inspect_ai.tool import Tool
 
 from saber.agents.resolver import resolve_agent
-from saber.agents.solver_factory import create_saber_solver, resolve_capabilities_for_kwargs
+from saber.agents.solver_factory import create_saber_solver
 from saber.config.converter import tasks_to_samples
 from saber.config.loader import ConfigLoader
 from saber.environments import resolve_sandbox_spec
@@ -36,79 +36,6 @@ from saber.tools import ToolRegistry
 from saber.tools.security import ToolSecurityConfig, build_tool_approval
 
 logger = get_logger(__name__)
-
-
-from saber.agents.models import AgentCapabilities
-
-
-def _run_agent_preflight(
-    agent_name: str,
-    caps: AgentCapabilities,
-    agent_kwargs: dict[str, object] | None = None,
-) -> None:
-    """Validate plugin agent's required services and custom preflight checks.
-
-    Called during ``run_preflight=true``.  Checks two things:
-
-    1. **required_services**: Network reachability of declared service URLs.
-    2. **preflight_check_name**: Custom callable in the agent's module.
-
-    Args:
-        agent_name: Name of the agent being validated.
-        caps: Resolved capabilities for the agent.
-        agent_kwargs: Task-level agent kwargs (e.g. ``variant``, ``rag_enabled``).
-
-    Raises:
-        RuntimeError: If any service is unreachable or custom check fails.
-    """
-    import importlib
-    import socket
-    from urllib.parse import urlparse
-
-    from saber.agents import AgentRegistry
-    from saber.agents.resolver import invoke_with_supported_kwargs
-
-    errors: list[str] = []
-    agent_kwargs = agent_kwargs or {}
-
-    # Check required services via socket connect
-    for service_url in caps.required_services:
-        parsed = urlparse(service_url)
-        host = parsed.hostname or ""
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        try:
-            with socket.create_connection((host, port), timeout=5):
-                pass
-        except (OSError, TimeoutError) as exc:
-            errors.append(f"Service '{service_url}' unreachable: {exc}")
-
-    # Run custom preflight check if declared
-    if caps.preflight_check_name:
-        factory = AgentRegistry.get(agent_name)
-        if factory is not None:
-            module_name = getattr(factory, "__module__", None)
-            if module_name:
-                try:
-                    mod = importlib.import_module(module_name)
-                    check_fn = getattr(mod, caps.preflight_check_name, None)
-                    if callable(check_fn):
-                        result = invoke_with_supported_kwargs(check_fn, agent_kwargs)
-                        if result is not None and not result:
-                            errors.append(
-                                f"Agent '{agent_name}' preflight check "
-                                f"'{caps.preflight_check_name}' returned {result!r}"
-                            )
-                    else:
-                        errors.append(
-                            f"Agent '{agent_name}' declares preflight_check_name="
-                            f"'{caps.preflight_check_name}' but module '{module_name}' "
-                            f"has no such callable"
-                        )
-                except Exception as exc:
-                    errors.append(f"Agent '{agent_name}' preflight check failed: {exc}")
-
-    if errors:
-        raise RuntimeError(f"Agent '{agent_name}' preflight failed:\n" + "\n".join(f"  - {e}" for e in errors))
 
 
 def _cli_bool(value: str | bool | None) -> bool:
@@ -362,11 +289,6 @@ def create_task(
 
         register_agent_package(agent, agent_package)
     agent_factory = resolve_agent(agent)
-
-    # 5b. Agent preflight — validate plugin services and custom checks
-    if run_preflight_bool:
-        caps = resolve_capabilities_for_kwargs(agent, dict(kwargs))
-        _run_agent_preflight(agent, caps, dict(kwargs))
 
     solver = create_saber_solver(
         agent_name=agent,

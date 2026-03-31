@@ -144,6 +144,46 @@ class TestCreateTask:
 
         assert isinstance(task, InspectTask)
 
+    def test_agent_package_registers_external_agent_before_resolution(self, tmp_path: Path) -> None:
+        """agent_package should register the external module before resolve_agent()."""
+        _write_minimal_domain(tmp_path)
+
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        with (
+            patch("saber.agents.resolver.register_agent_package") as mock_register,
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+        ):
+            create_task(
+                tmp_path,
+                agent="external_agent",
+                agent_package="fake.package.adapter",
+                permanent_compose=None,
+            )
+
+        mock_register.assert_called_once_with("external_agent", "fake.package.adapter")
+
+    def test_eval_retry_kwargs_preserve_agent_package_registration(self, tmp_path: Path) -> None:
+        """Flattened eval-retry kwargs should preserve agent_package wiring."""
+        _write_minimal_domain(tmp_path)
+
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        with (
+            patch("saber.agents.resolver.register_agent_package") as mock_register,
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+        ):
+            create_task(
+                tmp_path,
+                kwargs={
+                    "agent": "retry_external_agent",
+                    "agent_package": "retry.package.adapter",
+                },
+                permanent_compose=None,
+            )
+
+        mock_register.assert_called_once_with("retry_external_agent", "retry.package.adapter")
+
     def test_task_has_default_time_limit(self, tmp_path: Path) -> None:
         """create_task sets a default time_limit of 3600 on the Task."""
         _write_minimal_domain(tmp_path)
