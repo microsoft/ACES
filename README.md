@@ -130,7 +130,7 @@ src/saber/
 
 ## Agents
 
-Three agents are available via `-T agent=<name>`:
+Built-in agents available by default via `-T agent=<name>`:
 
 ### React (Default)
 
@@ -155,8 +155,7 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
   -T agent=copilot \
   -T persona_file=path/to/persona.md \
   -T skills_dir=path/to/skills/ \
-  -T timeout=600 \
-  -T max_steps=100
+  -T timeout=600
 ```
 
 | Parameter | Default | Description |
@@ -164,7 +163,6 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
 | `persona_file` | None | Agent persona markdown file (YAML frontmatter + body) |
 | `skills_dir` | None | Skills directory — uploaded to sandbox at `.github/skills/` |
 | `timeout` | 300 | Runner timeout (seconds) |
-| `max_steps` | 50 | Max tool calls before forced completion |
 | `port_base` | 3000 | Bridge proxy starting port |
 
 ### Claude Code
@@ -192,7 +190,6 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
 | `version` | `"auto"` | Claude binary path or `"auto"` to search PATH |
 | `disallowed_tools` | `[]` | Tools to disallow via `--disallowed-tools` |
 | `timeout` | 300 | Execution timeout (seconds) |
-| `max_steps` | 50 | Max tool calls before forced completion |
 
 ### Bridge Architecture
 
@@ -213,6 +210,22 @@ Both copilot and claude_code use a sandbox bridge pattern:
 └─────────────────────┘     └─────────────────────┘
 ```
 
+### Public extensibility surface
+
+ACES exposes two public extension points:
+
+1. **Agent registration surface** — any external package can register an agent
+   via the `saber.agents` entry-point group or local `-T agent_package=...`
+   development registration.
+2. **Bridge-grade helper surface** — external adapters that want
+   benchmark-grade bridge behavior should import from the public `saber.ext`
+   module rather than reaching into internal helper modules directly.
+
+Prompt-only adapters are still loadable, but they are **not** the benchmark-grade
+bridge surface. They are suitable for prompt-only use cases and can opt out of
+ACES-resolved tools via `AgentCapabilities(supports_tools=False)`, but they do
+not stand in for sandbox-local, Inspect-visible bridge execution.
+
 ## CLI Usage
 
 ### Running Evaluations (`uv run inspect eval`)
@@ -229,7 +242,7 @@ All `-T` flags are passed as task parameters to the domain's `@task` function an
 |-----------|------|---------|-------------|
 | `task_filter` | `str` | `None` | Glob or comma-separated task name filter |
 | `dataset` | `str` | From `global.yaml` | Named task group selector |
-| `agent` | `str` | `"react"` | Agent implementation: `react`, `copilot`, `claude_code` |
+| `agent` | `str` | `"react"` | Agent implementation: built-in (`react`, `copilot`, `claude_code`) or any externally registered `saber.agents` entry point |
 | `rebuild` | `str\|bool` | `None` | `true` → rebuild all images; `"name1,name2"` → specific images |
 | `run_preflight` | `bool` | `false` | Validate compose files before evaluation |
 | `keep_permanent` | `bool` | `false` | Keep permanent Docker services alive after eval |
@@ -253,7 +266,6 @@ These are forwarded through `**kwargs` to the agent factory.
 | `persona_file` | `str` | `None` | Path to agent persona markdown file |
 | `skills_dir` | `str` | `None` | Path to skills directory (uploaded into sandbox) |
 | `timeout` | `int` | `300` | Agent execution timeout in seconds |
-| `max_steps` | `int` | `50` | Max tool calls before forced completion |
 
 **Copilot only:**
 
@@ -267,6 +279,14 @@ These are forwarded through `**kwargs` to the agent factory.
 |-----------|------|---------|-------------|
 | `version` | `str` | `"auto"` | Claude binary path or `"auto"` to search PATH |
 | `disallowed_tools` | `str` | `""` | Comma-separated tools to disallow via `--disallowed-tools` |
+
+#### Task-defined tool-call limits
+
+`max_steps` is a **task/sample metadata value**, not a normal outer
+agent-factory parameter. In current ACES it comes from the task YAML
+(`task.max_steps`) and is injected into the solver per sample. Setting
+`-T max_steps=...` does **not** override the effective per-sample tool-call
+limit unless a domain explicitly wires that through into task configuration.
 
 #### CRSBench Domain Parameters
 
