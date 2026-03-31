@@ -7,7 +7,6 @@ from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from inspect_ai.model import ModelOutput
 from inspect_ai.solver import TaskState
 
 from saber.agents import AgentNotFoundError, AgentRegistry, _discover_plugin_agents
@@ -375,7 +374,7 @@ class TestSolverFactory:
         assert isinstance(captured["tools"], list)
         assert len(captured["tools"]) == 1
 
-    def test_uncaught_exception_returns_model_output(self) -> None:
+    def test_uncaught_exception_propagates(self) -> None:
         def agent_factory(**outer_kwargs: object):
             def create_with_prompts(**inner_kwargs: object):
                 async def solve(state: TaskState, generate: object) -> TaskState:
@@ -390,9 +389,8 @@ class TestSolverFactory:
             agent_factory=agent_factory,
         )
 
-        result = asyncio.run(solver(self._make_state(include_tools=False), AsyncMock()))
-        assert isinstance(result.output, ModelOutput)
-        assert "internal error" in result.output.choices[0].message.content
+        with pytest.raises(RuntimeError, match="boom"):
+            asyncio.run(solver(self._make_state(include_tools=False), AsyncMock()))
 
     def test_cancelled_error_is_re_raised(self) -> None:
         def agent_factory(**outer_kwargs: object):

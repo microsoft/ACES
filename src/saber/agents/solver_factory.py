@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import importlib
 import types
 
-from inspect_ai.model import ChatMessageUser, ModelOutput, get_model
+from inspect_ai.model import ChatMessageUser, get_model
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util._limit import LimitExceededError
 
@@ -157,16 +156,6 @@ def create_saber_solver(
                     tools=[],
                 )
                 state.messages.append(state.output.message)
-                return state
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Agent '%s' raised an uncaught exception.", agent_name)
-                if not state.output:
-                    state.output = ModelOutput.from_content(
-                        model=agent_name,
-                        content=f"Agent '{agent_name}' failed with an internal error.",
-                    )
                 return state
 
         return solve
