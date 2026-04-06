@@ -25,7 +25,7 @@ RUN npm install -g --ignore-scripts \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Install Python packages for basic execution and agent SDKs
-RUN uv pip install --system --no-cache \
+RUN uv pip install --system --no-cache --break-system-packages \
     requests \
     github-copilot-sdk==0.1.32 \
     claude-code-sdk
