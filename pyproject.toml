@@ -95,9 +95,13 @@ include = [
 allow-direct-references = true
 
 # inspect-ai: ADO fork required for tool_call limit functionality not yet merged upstream.
-# Uncomment the PyPI or local lines below if/when upstream merges the feature.
+# Uncomment the following options based on your preference
 [tool.uv.sources]
-inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
+# Preferred github storage branch
+inspect-ai = { git = "https://github.com/microsoft/ACESEvals", branch = "inspect-ai/dev/aces_integration" }
+# ADO source
+# inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
+# Local if you clone and want to change the upstream
 # inspect-ai = { path = "../inspect_ai", editable = true }
 
 [tool.hatch.build.targets.sdist]
