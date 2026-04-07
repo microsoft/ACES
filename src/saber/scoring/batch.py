@@ -20,7 +20,8 @@ from saber.scoring.context import (
     TaskMetadata,
     ToolStep,
 )
-from saber.scoring.parsing import parse_llm_step_evaluations
+from saber.scoring.parsing import parse_llm_step_evaluations, parse_llm_not_completed_explanations
+from saber.scoring.strategies import _answer_text
 from saber.scoring.templates import TemplateRenderer
 
 
@@ -71,7 +72,7 @@ async def _score_criteria_group(
         scorer_map[sid] = ctx
         results[sid] = Score(
             value=0.0,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation="Not completed",
         )
 
@@ -126,6 +127,22 @@ async def _score_criteria_group(
         # Parse response for completed checkpoint IDs
         newly_completed = parse_llm_step_evaluations(result.completion)
 
+        # Parse NOT_COMPLETED explanations for uncompleted checkpoints
+        not_completed_explanations = parse_llm_not_completed_explanations(result.completion)
+        for cp_id, explanation in not_completed_explanations.items():
+            if cp_id in scorer_map and cp_id not in completed_ids:
+                ctx = scorer_map[cp_id]
+                results[cp_id] = Score(
+                    value=0.0,
+                    answer=_answer_text(ctx),
+                    explanation=explanation,
+                    metadata={
+                        "judge_model": criteria.model,
+                        "chunk_index": chunk_idx,
+                        "total_chunks": len(chunks),
+                    },
+                )
+
         # Update results for newly completed checkpoints
         for cp_id in newly_completed:
             if cp_id in scorer_map and cp_id not in completed_ids:
@@ -133,7 +150,7 @@ async def _score_criteria_group(
                 ctx = scorer_map[cp_id]
                 results[cp_id] = Score(
                     value=ctx.scorer.max_score,
-                    answer=ctx.submission,
+                    answer=_answer_text(ctx),
                     explanation=result.completion,
                     metadata={
                         "judge_model": criteria.model,

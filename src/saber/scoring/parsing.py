@@ -60,6 +60,37 @@ def parse_llm_step_evaluations(response: str) -> list[str]:
     return [m.group(2) for m in re.finditer(r"\[(\d+):\s*(\S+)\]", response)]
 
 
+def parse_llm_not_completed_explanations(response: str) -> dict[str, str]:
+    """Parse ``[checkpoint_id] - explanation`` from a NOT_COMPLETED block.
+
+    Format::
+
+        NOT_COMPLETED:
+        [checkpoint_1] - The agent never queried the UrlClickEvents table...
+        [checkpoint_2] - No evidence of the specific timestamp...
+
+    Args:
+        response: Raw LLM response text.
+
+    Returns:
+        Mapping of checkpoint_id → explanation string.
+    """
+    explanations: dict[str, str] = {}
+    in_block = False
+    for line in response.splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith("NOT_COMPLETED"):
+            in_block = True
+            continue
+        if in_block:
+            m = re.match(r"\[([\w]+)\]\s*[-–—]\s*(.+)", stripped)
+            if m:
+                explanations[m.group(1)] = m.group(2).strip()
+            elif stripped.startswith("```") or stripped.startswith("STEP_EVALUATION"):
+                in_block = False
+    return explanations
+
+
 def parse_checkpoint_score(
     response: str,
     checkpoint_id: str,

@@ -46,7 +46,7 @@ class NoneStrategy:
     async def score(self, ctx: ScoringContext, renderer: TemplateRenderer | None) -> Score:
         return Score(
             value=0.0,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation="No evaluation configured",
         )
 
@@ -69,6 +69,23 @@ def _resolve_params(ctx: ScoringContext) -> _ScoringParams:
     )
 
 
+def _answer_text(ctx: ScoringContext) -> str:
+    """Return the appropriate answer text for a scorer.
+
+    Submission-targeted scorers show the agent's final answer.
+    Trajectory-targeted scorers (checkpoints) show their description
+    so each checkpoint is distinguishable in the eval viewer.
+    """
+    if ctx.scorer.target == ScorerTarget.SUBMISSION:
+        return ctx.submission
+    parts: list[str] = []
+    if ctx.scorer.title:
+        parts.append(ctx.scorer.title)
+    if ctx.scorer.description:
+        parts.append(ctx.scorer.description)
+    return " — ".join(parts) if parts else ctx.scorer.scorer_name
+
+
 class StaticStrategy:
     """Exact/substring match against expected answers.
 
@@ -87,7 +104,7 @@ class StaticStrategy:
         if not isinstance(criteria, StaticCriteria):
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=f"StaticStrategy requires StaticCriteria, got {type(criteria).__name__}",
             )
 
@@ -105,13 +122,13 @@ class StaticStrategy:
             if normalised in text_to_search:
                 return Score(
                     value=max_score,
-                    answer=ctx.submission,
+                    answer=_answer_text(ctx),
                     explanation=f"Match found: '{answer}'",
                 )
 
         return Score(
             value=0.0,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation=f"No match for {criteria.expected_answers}",
         )
 
@@ -182,14 +199,14 @@ class LLMJudgeStrategy:
         if not isinstance(criteria, LLMJudgeCriteria):
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=(f"LLMJudgeStrategy requires LLMJudgeCriteria, got {type(criteria).__name__}"),
             )
 
         if not isinstance(renderer, TemplateRenderer):
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation="LLMJudgeStrategy requires a TemplateRenderer",
             )
 
@@ -230,7 +247,7 @@ class LLMJudgeStrategy:
 
         return Score(
             value=score_val,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation=result.completion,
             metadata={
                 "judge_model": criteria.model,
@@ -294,14 +311,14 @@ class ToolCallStrategy:
         if is_submission:
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation="N/A for submission",
             )
 
         if not isinstance(criteria, ToolCallCriteria):
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=(f"ToolCallStrategy requires ToolCallCriteria, got {type(criteria).__name__}"),
             )
 
@@ -312,12 +329,12 @@ class ToolCallStrategy:
         if matched:
             return Score(
                 value=max_score,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=f"Called expected tool: {matched}",
             )
         return Score(
             value=0.0,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation=f"Expected {expected_tools}, called {sorted(called_tools)}",
         )
 
@@ -339,14 +356,14 @@ class ToolCallCountStrategy:
         if is_submission:
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation="N/A for submission",
             )
 
         if not isinstance(criteria, ToolCallCriteria):
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=(f"ToolCallCountStrategy requires ToolCallCriteria, got {type(criteria).__name__}"),
             )
 
@@ -358,12 +375,12 @@ class ToolCallCountStrategy:
         if count >= min_count:
             return Score(
                 value=max_score,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=f"Called '{tool_name}' {count}x (min: {min_count})",
             )
         return Score(
             value=0.0,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation=f"Called '{tool_name}' {count}x, need {min_count}",
         )
 
@@ -385,7 +402,7 @@ class StaticJaccardStrategy:
         if not isinstance(criteria, StaticCriteria):
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation=(f"StaticJaccardStrategy requires StaticCriteria, got {type(criteria).__name__}"),
             )
 
@@ -407,7 +424,7 @@ class StaticJaccardStrategy:
         if not expected or not actual_tokens:
             return Score(
                 value=0.0,
-                answer=ctx.submission,
+                answer=_answer_text(ctx),
                 explanation="Empty expected or actual set — jaccard = 0.0",
             )
 
@@ -417,7 +434,7 @@ class StaticJaccardStrategy:
 
         return Score(
             value=jaccard * max_score,
-            answer=ctx.submission,
+            answer=_answer_text(ctx),
             explanation=(
                 f"Jaccard similarity: {jaccard:.3f} (matched {len(intersection)}/{len(expected)} expected tokens)"
             ),
