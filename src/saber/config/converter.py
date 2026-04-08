@@ -117,7 +117,11 @@ def _resolve_sandbox(task: TaskConfig, domain_root: Path) -> tuple[str, str] | N
     """Resolve a sandbox name to a Docker Compose file path.
 
     Maps ``sandbox_environment: "labyrinth_linguist_sandbox"`` to
-    ``("docker", "<domain_root>/compose/labyrinth_linguist_sandbox.compose.yml")``.
+    ``("docker", "<domain_root>/compose/labyrinth_linguist_sandbox.compose.yaml")``.
+
+    Tries ``.compose.yaml`` first (required by Inspect AI's
+    ``is_compose_yaml`` pattern), then falls back to ``.compose.yml``
+    for backwards compatibility with existing domains.
 
     Args:
         task: The task configuration.
@@ -129,7 +133,10 @@ def _resolve_sandbox(task: TaskConfig, domain_root: Path) -> tuple[str, str] | N
     if task.sandbox is None:
         return None
 
-    compose_path = domain_root / "compose" / f"{task.sandbox}.compose.yml"
+    # Prefer .compose.yaml (Inspect AI's is_compose_yaml regex requires it)
+    compose_path = domain_root / "compose" / f"{task.sandbox}.compose.yaml"
+    if not compose_path.exists():
+        compose_path = domain_root / "compose" / f"{task.sandbox}.compose.yml"
     return ("docker", str(compose_path))
 
 
