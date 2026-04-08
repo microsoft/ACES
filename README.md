@@ -32,6 +32,40 @@ YAML task configs  →  saber  →  inspect_ai Task  →  inspect eval
 - Implement its own agent loop (wraps `react()` and other agents)
 - Implement its own MCP server (uses `@tool` directly)
 
+## Dual Repository Setup
+
+This project is maintained in two repositories. Use whichever you have access to — the content is the same:
+
+| | GitHub (external) | Azure DevOps (Microsoft internal) |
+|---|---|---|
+| **Benchmarks** | [ACESEvals](https://github.com/microsoft/ACESEvals) | [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) |
+| **Library** (this repo) | [ACES](https://github.com/microsoft/ACES) | [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER) |
+
+The `pyproject.toml` has labeled source blocks for `inspect-ai` — uncomment the matching block for your environment. The GitHub source is active by default.
+
+> **⚠️ Azure DevOps (Microsoft internal) users — required setup step:**
+>
+> The `pyproject.toml` defaults to **GitHub** sources for `inspect-ai`. If you cloned from Azure DevOps (`SABER`), you **must** switch to the ADO source before running `uv sync`:
+>
+> 1. Open `pyproject.toml` and find the `[tool.uv.sources]` section
+> 2. Comment the GitHub line, uncomment the ADO line:
+>    ```toml
+>    # inspect-ai = { git = "https://github.com/microsoft/ACESEvals", branch = "inspect-ai/dev/aces_integration" }
+>    inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
+>    ```
+> 3. Run `uv sync --all-extras`
+>
+> **Without this step, `uv sync` will fail** because GitHub sources may not be accessible from internal networks.
+
+> **💡 Local development with inspect-ai:**
+>
+> If you have a local clone of inspect_ai and want to iterate on it, you can also use the local path source:
+> ```toml
+> inspect-ai = { path = "../inspect_ai", editable = true }
+> ```
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -43,6 +77,7 @@ YAML task configs  →  saber  →  inspect_ai Task  →  inspect eval
 ### Installation
 
 ```bash
+# ⚠️ ADO users: switch inspect-ai source in pyproject.toml first (see above)
 uv sync --all-extras
 
 # Verify
