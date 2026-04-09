@@ -991,8 +991,8 @@ class TestToolCallLimitFilter:
         )
 
         with (
-            patch("inspect_ai.util._limit.record_tool_call_usage") as mock_record,
-            patch("inspect_ai.util._limit.check_tool_call_limit") as mock_check,
+            patch("saber.agents.bridge_utils.record_tool_call_usage") as mock_record,
+            patch("saber.agents.bridge_utils.check_tool_call_limit") as mock_check,
         ):
             result = await f(MagicMock(), [msg], [], None, MagicMock())
             assert result is None
@@ -1019,8 +1019,8 @@ class TestToolCallLimitFilter:
         )
 
         with (
-            patch("inspect_ai.util._limit.record_tool_call_usage") as mock_record,
-            patch("inspect_ai.util._limit.check_tool_call_limit"),
+            patch("saber.agents.bridge_utils.record_tool_call_usage") as mock_record,
+            patch("saber.agents.bridge_utils.check_tool_call_limit"),
         ):
             # First call: 1 tool call
             await f(MagicMock(), [msg1], [], None, MagicMock())
@@ -1051,8 +1051,8 @@ class TestToolCallLimitFilter:
         msg = ChatMessageAssistant(content="just text")
 
         with (
-            patch("inspect_ai.util._limit.record_tool_call_usage") as mock_record,
-            patch("inspect_ai.util._limit.check_tool_call_limit") as mock_check,
+            patch("saber.agents.bridge_utils.record_tool_call_usage") as mock_record,
+            patch("saber.agents.bridge_utils.check_tool_call_limit") as mock_check,
         ):
             await f(MagicMock(), [msg], [], None, MagicMock())
             mock_record.assert_not_called()
@@ -1079,9 +1079,9 @@ class TestToolCallLimitFilter:
         )
 
         with (
-            patch("inspect_ai.util._limit.record_tool_call_usage"),
+            patch("saber.agents.bridge_utils.record_tool_call_usage"),
             patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=50, limit=50),
             ),
         ):
@@ -1119,9 +1119,9 @@ class TestToolCallLimitFilter:
         )
 
         with (
-            patch("inspect_ai.util._limit.record_tool_call_usage"),
+            patch("saber.agents.bridge_utils.record_tool_call_usage"),
             patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=50, limit=50),
             ),
         ):
@@ -1177,9 +1177,9 @@ class TestToolCallLimitFilter:
 
         # Trigger the limit in the filter
         with (
-            patch("inspect_ai.util._limit.record_tool_call_usage"),
+            patch("saber.agents.bridge_utils.record_tool_call_usage"),
             patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=50, limit=50),
             ),
         ):
@@ -1188,7 +1188,7 @@ class TestToolCallLimitFilter:
         # Now check_after_exec should raise
         with (
             patch(
-                "inspect_ai.util._limit.check_tool_call_limit",
+                "saber.agents.bridge_utils.check_tool_call_limit",
                 side_effect=LimitExceededError("tool_call", value=50, limit=50),
             ),
             pytest.raises(LimitExceededError),

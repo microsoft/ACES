@@ -32,7 +32,7 @@ from saber.prompts.renderer import PromptRenderer
 from saber.scoring.factory import ScorerFactory
 from saber.scoring.registry import ScoringStrategyRegistry
 from saber.scoring.strategies import SaberScoringStrategy
-from saber.tools import ToolRegistry
+from saber.tools.registry import ToolRegistry
 from saber.tools.security import ToolSecurityConfig, build_tool_approval
 
 logger = get_logger(__name__)
@@ -53,6 +53,7 @@ def create_task(
     task_filter: str | None = None,
     dataset: str | None = None,
     agent: str = "react",
+    agent_package: str | None = None,
     sandbox_compose: str = "compose/sandbox.compose.yml",
     permanent_compose: str | None = None,
     permanent_project: str = "saber-permanent",
@@ -94,6 +95,11 @@ def create_task(
                let filtering happen inside :meth:`ConfigLoader.load_tasks`.
         agent: Agent name (default: "react"). Registered agents: react, copilot,
             claude_code.
+        agent_package: Optional dotted Python module path for an external agent.
+            When provided, the module is imported and its ``create_agent()`` is
+            registered under the ``agent`` name before resolution.  Use during
+            development when the package isn't installed with entry points.
+            Example: ``agent_package="my_pkg.saber_adapter"``
         sandbox_compose: Relative path to sandbox compose file within domain.
         permanent_compose: Relative path to permanent services compose, or ``None``.
             Each domain passes this explicitly (default: ``None``).
@@ -154,6 +160,7 @@ def create_task(
             task_filter=nested.pop("task_filter", task_filter),
             dataset=nested.pop("dataset", dataset),
             agent=nested.pop("agent", agent),
+            agent_package=nested.pop("agent_package", agent_package),
             sandbox_compose=nested.pop("sandbox_compose", sandbox_compose),
             permanent_compose=nested.pop("permanent_compose", permanent_compose),
             permanent_project=nested.pop("permanent_project", permanent_project),
@@ -277,7 +284,12 @@ def create_task(
         tool_registry.register(tool_name, tool_factory)
 
     # 5. Resolve agent
+    if agent_package:
+        from saber.agents.resolver import register_agent_package
+
+        register_agent_package(agent, agent_package)
     agent_factory = resolve_agent(agent)
+
     solver = create_saber_solver(
         agent_name=agent,
         agent_factory=agent_factory,
@@ -331,9 +343,6 @@ def create_task(
         sandbox=sandbox_spec,
         approval=effective_approval,
         config=GenerateConfig(max_retries=None),
-        # Use max across all tasks as the ceiling; per-sample tightening
-        # happens in the solver via state.tool_call_limit from metadata.
-        tool_call_limit=max(t.max_steps for t in tasks),
         time_limit=_DEFAULT_TIME_LIMIT,
         # Empty reducer list suppresses the spurious "(mean)" display
         # suffix caused by an inspect_ai variable-shadowing bug in

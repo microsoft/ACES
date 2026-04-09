@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import functools
+import importlib
+import types
 
 from inspect_ai.model import ChatMessageUser, get_model
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util._limit import LimitExceededError
 
 from saber.agents.message_utils import TOOL_CALL_LIMIT_MESSAGE
-from saber.agents.models import AgentCapabilities, AgentPromptKwargs
+from saber.agents.models import AgentCapabilities, AgentFactory, AgentPromptKwargs
 from saber.config.models import ToolConfig
 from saber.logging import get_logger
 from saber.tools.registry import ResolvedTools, ToolRegistry
@@ -19,18 +21,53 @@ logger = get_logger(__name__)
 # Re-export so existing imports (tests, etc.) continue to work.
 __all__ = ["TOOL_CALL_LIMIT_MESSAGE", "create_saber_solver"]
 
-# Agent capabilities — gates which kwargs are forwarded to each agent.
-# Unknown agents fall back to the default AgentCapabilities() (supports_tools=True).
-AGENT_CAPABILITIES: dict[str, AgentCapabilities] = {
+# Built-in agent capabilities — gates which kwargs are forwarded to each agent.
+# Plugin agents may declare a module-level AGENT_CAPABILITIES object to opt out
+# of ACES-resolved sandbox tools.
+_BUILTIN_CAPABILITIES: dict[str, AgentCapabilities] = {
     "react": AgentCapabilities(supports_tools=True),
     "copilot": AgentCapabilities(supports_tools=True),
     "claude_code": AgentCapabilities(supports_tools=True),
 }
 
+# Keep AGENT_CAPABILITIES as a read-only public alias for backward compatibility.
+AGENT_CAPABILITIES: types.MappingProxyType[str, AgentCapabilities] = types.MappingProxyType(_BUILTIN_CAPABILITIES)
+
+
+@functools.lru_cache(maxsize=64)
+def _resolve_capabilities(agent_name: str) -> AgentCapabilities:
+    """Resolve capabilities for an agent, checking built-in then plugin modules."""
+    caps = _BUILTIN_CAPABILITIES.get(agent_name)
+    if caps is not None:
+        return caps
+
+    from saber.agents import AgentRegistry
+
+    factory = AgentRegistry.get(agent_name)
+    if factory is not None:
+        module = getattr(factory, "__module__", None)
+        if module:
+            try:
+                mod = importlib.import_module(module)
+            except ImportError:
+                return AgentCapabilities()
+
+            mod_caps = getattr(mod, "AGENT_CAPABILITIES", None)
+            if isinstance(mod_caps, AgentCapabilities):
+                return mod_caps
+            if mod_caps is not None:
+                logger.warning(
+                    "Agent '%s' exports AGENT_CAPABILITIES but it is %s, not AgentCapabilities. Using defaults.",
+                    agent_name,
+                    type(mod_caps).__name__,
+                )
+
+    return AgentCapabilities()
+
 
 def create_saber_solver(
     agent_name: str,
-    agent_factory: Callable[..., Callable[..., Solver]],
+    agent_factory: AgentFactory,
     tool_registry: ToolRegistry | None = None,
     **kwargs: object,
 ) -> Solver:
@@ -51,23 +88,22 @@ def create_saber_solver(
         A Solver that invokes the agent with per-sample prompts and tools.
     """
 
-    @solver  # type: ignore[misc]
+    @solver
     def saber_agent_solver() -> Solver:
         _tools_cache: dict[frozenset[tuple[str, str]], ResolvedTools] = {}
+        create_with_prompts = agent_factory(**kwargs)
+        caps = _resolve_capabilities(agent_name)
 
         async def solve(state: TaskState, generate: Generate) -> TaskState:
-            # Extract prompts from sample metadata (set by tasks_to_samples)
             metadata = state.metadata or {}
             instruction = metadata.get("instruction_prompt") or ""
             assistant = metadata.get("assistant_prompt") or ""
 
-            # Build agent kwargs
             agent_kwargs: AgentPromptKwargs = {
                 "instruction_prompt": instruction,
                 "assistant_prompt": assistant,
             }
 
-            # Per-sample max_steps from metadata — REQUIRED
             per_sample_max_steps = metadata.get("max_steps")
             if not isinstance(per_sample_max_steps, int) or per_sample_max_steps <= 0:
                 raise ValueError(
@@ -75,10 +111,8 @@ def create_saber_solver(
                     f"got {per_sample_max_steps!r}. "
                     f"Set max_steps in your task YAML (e.g. global_defaults.max_steps: 200)."
                 )
-            state.tool_call_limit = per_sample_max_steps  # safety net
-            agent_kwargs["max_steps"] = per_sample_max_steps  # forwarded to agent
+            agent_kwargs["max_steps"] = per_sample_max_steps
 
-            # Per-sample tool resolution from metadata
             resolved: ResolvedTools | None = None
             if tool_registry is not None:
                 raw_tools = metadata.get("tools") or {}
@@ -95,11 +129,6 @@ def create_saber_solver(
                         _tools_cache[cache_key] = tool_registry.resolve(tool_configs)
                     resolved = _tools_cache[cache_key]
 
-            # Two-level factory call — forward kwargs (persona_file, skills_dir, etc.)
-            create_with_prompts = agent_factory(**kwargs)
-
-            # Capabilities-gated kwarg forwarding
-            caps = AGENT_CAPABILITIES.get(agent_name, AgentCapabilities())
             if resolved is not None and caps.supports_tools:
                 agent_solver = create_with_prompts(
                     tools=list(resolved.tools),
@@ -108,24 +137,16 @@ def create_saber_solver(
             else:
                 agent_solver = create_with_prompts(**agent_kwargs)
 
-            # If agent_solver is a Solver, call it
             if not callable(agent_solver):
                 raise TypeError(f"Agent '{agent_name}' factory returned non-callable: {type(agent_solver).__name__}")
 
             try:
                 return await agent_solver(state, generate)
             except LimitExceededError:
-                # The agent's tool call limit was exceeded.  Give it one
-                # tool-free generation to produce a final answer instead
-                # of letting the sample die with no output.
                 logger.info(
                     "Tool call limit exceeded for agent '%s'. Injecting final-answer prompt.",
                     agent_name,
                 )
-                # Patch any orphaned tool calls (assistant messages with
-                # tool_calls that lack matching tool-result messages)
-                # before sending to the API.  Without this, the API
-                # rejects the request with a 400 error.
                 from saber.agents.message_utils import patch_orphaned_tool_calls
 
                 patch_orphaned_tool_calls(state.messages)

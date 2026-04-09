@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TypedDict
 
+from inspect_ai.solver import Solver
 from pydantic import BaseModel, ConfigDict
+
+AgentSolverFactory = Callable[..., Solver]
+AgentFactory = Callable[..., AgentSolverFactory]
 
 
 class AgentPromptKwargs(TypedDict, total=False):

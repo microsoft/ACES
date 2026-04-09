@@ -465,34 +465,29 @@ class TestCapabilitiesGating:
 
 
 class TestPerSampleMaxSteps:
-    """Per-sample max_steps propagation via state.tool_call_limit."""
+    """Per-sample max_steps validation and forwarding."""
 
     @pytest.mark.asyncio
-    async def test_max_steps_from_metadata_sets_tool_call_limit(self) -> None:
-        """max_steps in metadata should set state.tool_call_limit."""
+    async def test_max_steps_from_metadata_does_not_require_dynamic_state_fields(self) -> None:
+        """max_steps should be forwarded without mutating undeclared TaskState attrs."""
         mock_inner_solver = AsyncMock(return_value=MagicMock())
         mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
         mock_factory = MagicMock(return_value=mock_create_with_prompts)
 
         solver = create_saber_solver(agent_name="react", agent_factory=mock_factory)
 
-        state = MagicMock()
-        state.metadata = {"max_steps": 100}
-        # Track what tool_call_limit is set to
-        captured_limit: list[int] = []
-        original_setattr = type(state).__setattr__
+        class MinimalState:
+            __slots__ = ("metadata",)
 
-        def tracking_setattr(self: object, name: str, value: object) -> None:
-            if name == "tool_call_limit":
-                captured_limit.append(value)  # type: ignore[arg-type]
-            original_setattr(self, name, value)
+            def __init__(self) -> None:
+                self.metadata = {"max_steps": 100}
 
-        with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(type(state), "__setattr__", tracking_setattr)
-            generate = MagicMock()
-            await solver(state, generate)
+        state = MinimalState()
+        generate = MagicMock()
 
-        assert 100 in captured_limit
+        await solver(state, generate)  # type: ignore[arg-type]
+        call_kwargs = mock_create_with_prompts.call_args[1]
+        assert call_kwargs["max_steps"] == 100
 
     @pytest.mark.asyncio
     async def test_no_max_steps_raises_valueerror(self) -> None:

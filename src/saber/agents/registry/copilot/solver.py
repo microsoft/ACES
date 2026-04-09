@@ -10,7 +10,7 @@ Two-level factory pattern:
 
 Architecture:
     1. solver writes RUNNER_SCRIPT to sandbox filesystem
-    2. sandbox_agent_bridge() opens a local proxy on a free port
+    2. sandbox_agent_bridge() opens a local proxy on the configured port
     3. runner script starts CopilotClient with BYOK provider pointed at proxy
     4. all model traffic flows: runner -> bridge proxy -> inspect_ai model
     5. bridge.state captures the full message transcript
@@ -36,6 +36,7 @@ from saber.agents.bridge_utils import (
     parse_runner_metrics,
     record_bridge_summary,
     resolve_model_aliases,
+    tool_call_limit,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
@@ -475,6 +476,7 @@ async def main() -> int:
     idle_extensions = 0
     proc_snapshots = {}
     last_heartbeat_time = start_time
+    exit_reason = "started"
 
     # Event types that count as "activity" (agent is doing work)
     ACTIVITY_EVENTS = {
@@ -615,12 +617,14 @@ async def main() -> int:
                                     except (ProcessLookupError, OSError):
                                         pass
                             _print_metrics("stuck_processes")
+                            exit_reason = "stuck_processes"
                             break
                         elif decision["action"] == "extend":
                             last_activity_time = time.monotonic()
                             idle_extensions += 1
                             if idle_extensions > MAX_IDLE_EXTENSIONS:
                                 _print_metrics("max_idle_extensions")
+                                exit_reason = "max_idle_extensions"
                                 break
                             continue
                         else:  # "timeout"
@@ -630,6 +634,7 @@ async def main() -> int:
                                 file=sys.stderr,
                             )
                             _print_metrics("idle_timeout")
+                            exit_reason = "idle_timeout"
                             break
 
                     if total_elapsed > max_timeout:
@@ -639,6 +644,7 @@ async def main() -> int:
                             file=sys.stderr,
                         )
                         _print_metrics("max_timeout")
+                        exit_reason = "max_timeout"
                         break
 
                 else:
@@ -646,12 +652,14 @@ async def main() -> int:
                     if session_error_msg:
                         print(f"COPILOT_SESSION_ERROR: {session_error_msg}", file=sys.stderr)
                         _print_metrics("session_error")
+                        exit_reason = "session_error"
                     else:
                         if last_response:
                             content = getattr(getattr(last_response, "data", None), "content", None)
                             if content:
                                 print(f"COPILOT_RESPONSE: {content[:500]}", file=sys.stderr)
                         _print_metrics("completed")
+                        exit_reason = "completed"
 
             finally:
                 unsubscribe()
@@ -663,6 +671,10 @@ async def main() -> int:
         return 1
     finally:
         await client.stop()
+
+    if exit_reason != "completed":
+        print(f"ERROR: Copilot runner incomplete exit: {exit_reason}", file=sys.stderr)
+        return 1
 
     print("COPILOT_RUNNER_COMPLETE")
     return 0
@@ -842,7 +854,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         """
         from inspect_ai.agent import Agent, AgentState, agent, as_solver, sandbox_agent_bridge
         from inspect_ai.util import sandbox as sandbox_env
-        from inspect_ai.util import store, tool_call_limit
+        from inspect_ai.util import store
 
         config = CopilotBridgeConfig.from_kwargs(dict(outer_kwargs))
 
@@ -853,7 +865,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
         bridged = build_bridged_tools_for_copilot(tools)
 
-        @agent  # type: ignore[misc]
+        @agent
         def _copilot_agent() -> Agent:
             async def execute(state: AgentState) -> AgentState:
                 # Fail fast on model misconfiguration (e.g. wrong name)
@@ -974,16 +986,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         stderr = result.stderr or ""
                         stdout = result.stdout or ""
 
-                        # Check if this is a timeout from the old-style
-                        # runner ("Timeout after ...s waiting for session.idle")
-                        # — treat as non-fatal so partial scoring can proceed.
-                        if "Timeout after" in stderr and "session.idle" in stderr:
-                            logger.warning(
-                                "Copilot runner timed out (non-fatal, returning partial transcript): %s",
-                                stderr[:500],
-                            )
-                            return bridge.state
-
                         # Parse bridge proxy errors for structured diagnostics
                         diagnostics = parse_bridge_stderr(stderr)
                         if diagnostics:
@@ -1022,17 +1024,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                                 "Copilot idle decision: action=%s classifications=%d",
                                 idle_decision.action,
                                 len(idle_decision.classifications),
-                            )
-
-                        if "COPILOT_RUNNER_IDLE_TIMEOUT" in result.stderr:
-                            logger.warning(
-                                "Copilot session appeared orphaned (idle timeout). "
-                                "Returning partial transcript for scoring.",
-                            )
-                        elif "COPILOT_RUNNER_MAX_TIMEOUT" in result.stderr:
-                            logger.info(
-                                "Copilot session hit max time limit but was actively working. "
-                                "Returning partial transcript for scoring.",
                             )
 
                         # Log bridge warnings even on success
