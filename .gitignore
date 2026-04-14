@@ -64,4 +64,5 @@ worktrees/
 
 # AI Assistant directories
 **/.github
+!/.github
 **/.claude

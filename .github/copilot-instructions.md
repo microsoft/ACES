@@ -156,6 +156,28 @@ uv run inspect eval domains/excytin_demo --model openai/gpt-4 --max-samples 4 --
 3. Add REST endpoint in `src/saber/server/api/`
 4. Add tests in `tests/server/`
 
+## Contributing & PR Workflow
+
+- **Contributing guide**: See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and standards
+- **PR Template**: See [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) — always use when creating PRs
+- **Agent workflows**: See [AGENTS.md](AGENTS.md) for the Master Checklist and workflow commands
+- **Claude Code guide**: See [CLAUDE.md](CLAUDE.md) for Claude Code-specific instructions
+- **Agent artifacts**: Agent-generated reviews and reports go in `agent_artifacts/`
+- **Repo context**: Institutional knowledge in `agent_artifacts/repo_context/REPO_CONTEXT.md`
+
+## Available Workflow Skills
+
+| Skill | Trigger | Purpose |
+|-------|---------|---------|
+| `prepare-submission-workflow` | `/prepare-submission-workflow` | Prepare domain for PR submission |
+| `domain-quality-workflow` | `/domain-quality-workflow` | Review/fix domain quality |
+| `domain-validity-review` | `/domain-validity-review` | Validate domain claims and scoring |
+| `ci-maintenance-workflow` | `/ci-maintenance-workflow` | Fix failing tests, review PRs |
+| `eval-report-workflow` | `/eval-report-workflow` | Generate evaluation reports |
+| `check-trajectories-workflow` | `/check-trajectories-workflow` | Analyze agent trajectories |
+| `ensure-test-coverage` | `/ensure-test-coverage` | Audit and create tests |
+| `build-repo-context` | `/build-repo-context` | Crawl PRs/issues for institutional knowledge |
+
 **Documentation**: [docs/README.md](docs/README.md) | **Domains**: [domains/](domains/) | **Architecture**: [docs/assets/](docs/assets/)
 
 ```
