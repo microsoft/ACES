@@ -111,33 +111,30 @@ jobs:
         if: steps.validate.outputs.skip != 'true'
         run: uv sync --all-extras
 
-      # TODO: Uncomment and configure once ANTHROPIC_API_KEY is added as a GitHub secret.
-      # See: https://github.com/anthropics/claude-code-action
-      #
-      # - name: Run Claude Code to solve issue
-      #   if: steps.validate.outputs.skip != 'true'
-      #   uses: anthropics/claude-code-action@v1
-      #   with:
-      #     github_token: ${{ secrets.GITHUB_TOKEN }}
-      #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-      #     prompt: |
-      #       You are an autonomous issue-solving agent. Read AGENTS.md and CLAUDE.md
-      #       for repo context.
-      #
-      #       ## Issue
-      #       Number: #${{ steps.validate.outputs.issue_number }}
-      #       Title: ${{ steps.validate.outputs.issue_title }}
-      #       Labels: ${{ steps.validate.outputs.issue_labels }}
-      #
-      #       ## Instructions
-      #       1. Read the full issue body and comments
-      #       2. Understand the problem (read relevant code in src/saber/ or domains/)
-      #       3. Create a fix branch: `git checkout -b fix/issue-${{ steps.validate.outputs.issue_number }}`
-      #       4. Implement the fix
-      #       5. Add/update tests
-      #       6. Run tests: `uv run pytest tests/ -v`
-      #       7. Run lint: `uv run ruff check`
-      #       8. Commit and push
-      #       9. Create a draft PR linking to the issue
-      #
-      #       ALL production code must be human-reviewed before merge.
+      - name: Run Claude Code to solve issue
+        if: steps.validate.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are an autonomous issue-solving agent. Read AGENTS.md and CLAUDE.md
+            for repo context.
+
+            ## Issue
+            Number: #${{ steps.validate.outputs.issue_number }}
+            Title: ${{ steps.validate.outputs.issue_title }}
+            Labels: ${{ steps.validate.outputs.issue_labels }}
+
+            ## Instructions
+            1. Read the full issue body and comments
+            2. Understand the problem (read relevant code in src/saber/ or domains/)
+            3. Create a fix branch: `git checkout -b fix/issue-${{ steps.validate.outputs.issue_number }}`
+            4. Implement the fix
+            5. Add/update tests
+            6. Run tests: `uv run pytest tests/ -v`
+            7. Run lint: `uv run ruff check`
+            8. Commit and push
+            9. Create a draft PR linking to the issue
+
+            ALL production code must be human-reviewed before merge.

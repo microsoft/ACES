@@ -109,34 +109,31 @@ jobs:
         if: steps.validate.outputs.skip != 'true'
         run: echo "proceed=true" >> $GITHUB_OUTPUT
 
-      # TODO: Uncomment and configure once ANTHROPIC_API_KEY is added as a GitHub secret.
-      # See: https://github.com/anthropics/claude-code-action
-      #
-      # - name: Run Code Review with Claude
-      #   if: steps.gate.outputs.proceed == 'true'
-      #   id: claude-code
-      #   uses: anthropics/claude-code-action@v1
-      #   with:
-      #     github_token: ${{ secrets.GITHUB_TOKEN }}
-      #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-      #     prompt: |
-      #       REPO: ${{ github.repository }}
-      #       PR NUMBER: ${{ env.PR_NUMBER }}
-      #       BASE BRANCH: origin/${{ env.BASE_REF }}
-      #
-      #       Please perform the "Review PR" workflow from the ci-maintenance-workflow skill.
-      #
-      #       Use these precomputed files as the AUTHORITATIVE source of what this PR changes:
-      #       - /tmp/PR_CHANGED_FILES.txt — the definitive list of files changed
-      #       - /tmp/PR_DIFF.patch — the full diff
-      #       - /tmp/PR_METADATA.txt — PR title, description, branch names
-      #
-      #       Before starting, read /tmp/CLAUDE_REVIEWS.md for your previous reviews
-      #       and /tmp/HUMAN_FEEDBACK.md for human reviewer activity.
-      #
-      #       Write your final review to /tmp/SUMMARY.md.
-      #     claude_args: |
-      #       --allowedTools "Bash(git diff *),Bash(git log *),View,GlobTool,GrepTool,Read,Write"
+      - name: Run Code Review with Claude
+        if: steps.gate.outputs.proceed == 'true'
+        id: claude-code
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ env.PR_NUMBER }}
+            BASE BRANCH: origin/${{ env.BASE_REF }}
+
+            Please perform the "Review PR" workflow from the ci-maintenance-workflow skill.
+
+            Use these precomputed files as the AUTHORITATIVE source of what this PR changes:
+            - /tmp/PR_CHANGED_FILES.txt — the definitive list of files changed
+            - /tmp/PR_DIFF.patch — the full diff
+            - /tmp/PR_METADATA.txt — PR title, description, branch names
+
+            Before starting, read /tmp/CLAUDE_REVIEWS.md for your previous reviews
+            and /tmp/HUMAN_FEEDBACK.md for human reviewer activity.
+
+            Write your final review to /tmp/SUMMARY.md.
+          claude_args: |
+            --allowedTools "Bash(git diff *),Bash(git log *),View,GlobTool,GrepTool,Read,Write"
 
       - name: Precompute PR diff and metadata
         if: steps.gate.outputs.proceed == 'true'

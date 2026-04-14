@@ -47,30 +47,27 @@ jobs:
             uv run pytest -v 2>&1 | tee /tmp/test_output.log
           fi
 
-      # TODO: Uncomment and configure once ANTHROPIC_API_KEY is added as a GitHub secret.
-      # See: https://github.com/anthropics/claude-code-action
-      #
-      # - name: Run Claude Code to fix failures
-      #   uses: anthropics/claude-code-action@v1
-      #   with:
-      #     github_token: ${{ secrets.GITHUB_TOKEN }}
-      #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-      #     prompt: |
-      #       You are an autonomous CI-fix agent. Read AGENTS.md for repo context,
-      #       especially the "Fix A Failing Test" workflow in the ci-maintenance-workflow skill.
-      #
-      #       ## Context
-      #       Test file: ${{ inputs.test_file || 'all' }}
-      #       Module: ${{ inputs.module || 'all' }}
-      #       Test output is in /tmp/test_output.log
-      #
-      #       ## Instructions
-      #       1. Read the test output to identify the failure
-      #       2. Read the failing test code
-      #       3. Read the implementation it tests
-      #       4. Identify root cause
-      #       5. Implement minimal fix
-      #       6. Verify fix: `uv run pytest <test_file> -v`
-      #       7. Run lint: `uv run ruff check`
-      #       8. Commit with descriptive message
-      #       9. Create a draft PR with: The bug, Error message, Root cause, Fix, Validation
+      - name: Run Claude Code to fix failures
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are an autonomous CI-fix agent. Read AGENTS.md for repo context,
+            especially the "Fix A Failing Test" workflow in the ci-maintenance-workflow skill.
+
+            ## Context
+            Test file: ${{ inputs.test_file || 'all' }}
+            Module: ${{ inputs.module || 'all' }}
+            Test output is in /tmp/test_output.log
+
+            ## Instructions
+            1. Read the test output to identify the failure
+            2. Read the failing test code
+            3. Read the implementation it tests
+            4. Identify root cause
+            5. Implement minimal fix
+            6. Verify fix: `uv run pytest <test_file> -v`
+            7. Run lint: `uv run ruff check`
+            8. Commit with descriptive message
+            9. Create a draft PR with: The bug, Error message, Root cause, Fix, Validation
