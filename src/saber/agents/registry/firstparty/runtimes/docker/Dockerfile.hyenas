@@ -1,0 +1,18 @@
+FROM node:25-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ripgrep \
+    git \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /app /workspace /output
+
+WORKDIR /app
+
+COPY . /app/
+
+RUN npm ci --production 2>/dev/null || npm install --production
+
+CMD ["tail", "-f", "/dev/null"]

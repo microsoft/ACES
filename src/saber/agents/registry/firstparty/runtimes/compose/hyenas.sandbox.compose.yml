@@ -1,0 +1,29 @@
+services:
+  default:
+    image: ${HYENAS_IMAGE:-saber/hyenas:latest}
+    init: true
+    working_dir: /app
+    command: "tail -f /dev/null"
+    environment:
+      LOG_LEVEL: "info"
+      NODE_ENV: "production"
+    volumes:
+      - workspace:/workspace
+      - output:/output
+    networks:
+      - default
+      - ${SABER_PROJECT}_default
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+
+volumes:
+  workspace:
+  output:
+
+networks:
+  default:
+  ${SABER_PROJECT}_default:
+    external: true
