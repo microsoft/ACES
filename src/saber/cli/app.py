@@ -167,7 +167,8 @@ async def _teardown_project(project_name: str) -> tuple[bool, str]:
 
 
 async def _force_teardown_project(
-    project_name: str, original_stderr: str,
+    project_name: str,
+    original_stderr: str,
 ) -> tuple[bool, str]:
     """Force-remove all containers, networks and volumes for a project.
 
@@ -178,7 +179,11 @@ async def _force_teardown_project(
 
     # 1. Force-remove all containers belonging to this project
     list_proc = await asyncio.create_subprocess_exec(
-        "docker", "ps", "-aq", "--filter", f"label={label}",
+        "docker",
+        "ps",
+        "-aq",
+        "--filter",
+        f"label={label}",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -186,7 +191,10 @@ async def _force_teardown_project(
     container_ids = list_stdout.decode().split()
     if container_ids:
         rm_proc = await asyncio.create_subprocess_exec(
-            "docker", "rm", "-f", *container_ids,
+            "docker",
+            "rm",
+            "-f",
+            *container_ids,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -194,7 +202,12 @@ async def _force_teardown_project(
 
     # 2. Remove project networks
     net_proc = await asyncio.create_subprocess_exec(
-        "docker", "network", "ls", "--filter", f"label={label}", "-q",
+        "docker",
+        "network",
+        "ls",
+        "--filter",
+        f"label={label}",
+        "-q",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -202,7 +215,10 @@ async def _force_teardown_project(
     network_ids = net_stdout.decode().split()
     if network_ids:
         netrm = await asyncio.create_subprocess_exec(
-            "docker", "network", "rm", *network_ids,
+            "docker",
+            "network",
+            "rm",
+            *network_ids,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -210,7 +226,12 @@ async def _force_teardown_project(
 
     # 3. Remove project volumes
     vol_proc = await asyncio.create_subprocess_exec(
-        "docker", "volume", "ls", "--filter", f"label={label}", "-q",
+        "docker",
+        "volume",
+        "ls",
+        "--filter",
+        f"label={label}",
+        "-q",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -218,7 +239,11 @@ async def _force_teardown_project(
     volume_ids = vol_stdout.decode().split()
     if volume_ids:
         volrm = await asyncio.create_subprocess_exec(
-            "docker", "volume", "rm", "-f", *volume_ids,
+            "docker",
+            "volume",
+            "rm",
+            "-f",
+            *volume_ids,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -226,7 +251,11 @@ async def _force_teardown_project(
 
     # Verify nothing remains
     verify = await asyncio.create_subprocess_exec(
-        "docker", "ps", "-aq", "--filter", f"label={label}",
+        "docker",
+        "ps",
+        "-aq",
+        "--filter",
+        f"label={label}",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

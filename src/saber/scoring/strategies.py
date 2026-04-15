@@ -77,7 +77,10 @@ def _answer_text(ctx: ScoringContext) -> str:
     so each checkpoint is distinguishable in the eval viewer.
     """
     if ctx.scorer.target == ScorerTarget.SUBMISSION:
-        return ctx.submission
+        submission = ctx.submission
+        if not isinstance(submission, str):
+            raise TypeError(f"Expected submission to be a string, got {type(submission).__name__}")
+        return submission
     parts: list[str] = []
     if ctx.scorer.title:
         parts.append(ctx.scorer.title)
