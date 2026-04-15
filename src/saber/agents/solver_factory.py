@@ -25,6 +25,7 @@ AGENT_CAPABILITIES: dict[str, AgentCapabilities] = {
     "react": AgentCapabilities(supports_tools=True),
     "copilot": AgentCapabilities(supports_tools=True),
     "claude_code": AgentCapabilities(supports_tools=True),
+    "firstparty": AgentCapabilities(supports_tools=False),
 }
 
 
