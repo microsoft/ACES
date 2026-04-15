@@ -1,13 +1,15 @@
-"""Tests for Copilot model conversion functions.
+"""Tests for Copilot model conversion functions and CopilotModelAPI.
 
-Tests the four pure conversion functions used by the Copilot model provider:
+Tests the pure conversion functions and the CopilotModelAPI class:
 - _messages_to_prompt: ChatMessage list → prompt string
 - _tool_info_to_sdk_tool: ToolInfo → CopilotToolDef
 - _sdk_response_to_model_output: SDK response → ModelOutput
 - _extract_usage: SDK events → ModelUsage
+- CopilotModelAPI: ModelAPI subclass with singleton client management
 """
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from inspect_ai.model import (
@@ -22,6 +24,7 @@ from inspect_ai.tool import ToolCall, ToolInfo
 from inspect_ai.tool._tool_params import ToolParams
 
 from saber.inspect_ai.integration.copilot_model import (
+    CopilotModelAPI,
     CopilotToolDef,
     _extract_usage,
     _messages_to_prompt,
@@ -309,3 +312,444 @@ class TestExtractUsage:
 
     def test_empty_events(self) -> None:
         assert _extract_usage([]) is None
+
+
+# ---------------------------------------------------------------------------
+# CopilotModelAPI – fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _reset_copilot_state():
+    """Reset class-level shared state between tests."""
+    CopilotModelAPI._client = None
+    CopilotModelAPI._client_lock = None
+    CopilotModelAPI._client_refcount = 0
+    CopilotModelAPI._github_token = None
+    yield
+    CopilotModelAPI._client = None
+    CopilotModelAPI._client_lock = None
+    CopilotModelAPI._client_refcount = 0
+    CopilotModelAPI._github_token = None
+
+
+# ---------------------------------------------------------------------------
+# CopilotModelAPI.__init__
+# ---------------------------------------------------------------------------
+class TestCopilotModelAPIInit:
+    """Tests for CopilotModelAPI constructor."""
+
+    def test_init_with_github_token_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        api = CopilotModelAPI(model_name="gpt-4o")
+        assert api._timeout == 120
+        assert CopilotModelAPI._github_token == "test-token"
+        assert CopilotModelAPI._client_refcount == 1
+
+    def test_init_with_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        api = CopilotModelAPI(model_name="gpt-4o", api_key="my-key")
+        assert CopilotModelAPI._github_token == "my-key"
+        assert api._timeout == 120
+
+    def test_init_custom_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+        api = CopilotModelAPI(model_name="gpt-4o", timeout="60")
+        assert api._timeout == 60
+
+    def test_init_without_token_or_gh_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        with patch("shutil.which", return_value=None):
+            with pytest.raises(Exception, match="Copilot model requires"):
+                CopilotModelAPI(model_name="gpt-4o")
+
+    def test_init_with_gh_cli_no_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """gh CLI present but no GITHUB_TOKEN should succeed with token=None."""
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        with patch("shutil.which", return_value="/usr/bin/gh"):
+            api = CopilotModelAPI(model_name="gpt-4o")
+        assert CopilotModelAPI._github_token is None
+        assert api._timeout == 120
+
+    def test_init_increments_refcount(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        CopilotModelAPI(model_name="gpt-4o")
+        CopilotModelAPI(model_name="gpt-4o")
+        assert CopilotModelAPI._client_refcount == 2
+
+    def test_init_api_key_takes_precedence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "env-token")
+        CopilotModelAPI(model_name="gpt-4o", api_key="key-token")
+        assert CopilotModelAPI._github_token == "key-token"
+
+
+# ---------------------------------------------------------------------------
+# CopilotModelAPI._get_or_create_client
+# ---------------------------------------------------------------------------
+class TestCopilotModelAPIGetOrCreateClient:
+    """Tests for the singleton client factory."""
+
+    async def test_creates_client_on_first_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        CopilotModelAPI(model_name="gpt-4o")
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+        mock_copilot_client_cls = MagicMock(return_value=mock_client_instance)
+        mock_subprocess_config_cls = MagicMock()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "copilot": MagicMock(CopilotClient=mock_copilot_client_cls),
+                    "copilot.client": MagicMock(
+                        SubprocessConfig=mock_subprocess_config_cls
+                    ),
+                },
+            ),
+        ):
+            client = await CopilotModelAPI._get_or_create_client()
+            assert client is mock_client_instance
+            assert CopilotModelAPI._client is mock_client_instance
+
+    async def test_returns_existing_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        CopilotModelAPI(model_name="gpt-4o")
+
+        sentinel = object()
+        CopilotModelAPI._client = sentinel
+
+        client = await CopilotModelAPI._get_or_create_client()
+        assert client is sentinel
+
+
+# ---------------------------------------------------------------------------
+# CopilotModelAPI.generate
+# ---------------------------------------------------------------------------
+class TestCopilotModelAPIGenerate:
+    """Tests for the generate method."""
+
+    def _make_api(self, monkeypatch: pytest.MonkeyPatch) -> CopilotModelAPI:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        return CopilotModelAPI(model_name="gpt-4o")
+
+    async def test_generate_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = self._make_api(monkeypatch)
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "sess-1"
+        mock_session.send_and_wait = AsyncMock(
+            return_value=SimpleNamespace(
+                data=SimpleNamespace(content="Hello!", tool_requests=None)
+            )
+        )
+        mock_session.get_messages = AsyncMock(
+            return_value=[
+                SimpleNamespace(
+                    data=SimpleNamespace(input_tokens=10, output_tokens=5)
+                ),
+            ]
+        )
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+
+        CopilotModelAPI._client = mock_client
+
+        # Mock the SDK imports used inside generate
+        mock_permission_handler = MagicMock()
+        mock_permission_handler.approve_all = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.session": MagicMock(
+                    PermissionHandler=mock_permission_handler
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=[ChatMessageUser(content="Hi")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.model == "gpt-4o"
+        assert output.choices[0].message.text == "Hello!"
+        assert output.usage is not None
+        assert output.usage.input_tokens == 10
+        mock_client.delete_session.assert_awaited_once_with("sess-1")
+
+    async def test_generate_timeout_returns_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = self._make_api(monkeypatch)
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "sess-2"
+        mock_session.send_and_wait = AsyncMock(side_effect=TimeoutError)
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+
+        CopilotModelAPI._client = mock_client
+
+        mock_permission_handler = MagicMock()
+        mock_permission_handler.approve_all = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.session": MagicMock(
+                    PermissionHandler=mock_permission_handler
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=[ChatMessageUser(content="Hi")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.stop_reason == "unknown"
+        assert output.choices[0].message.content == ""
+        mock_client.delete_session.assert_awaited_once_with("sess-2")
+
+    async def test_generate_session_cleanup_on_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = self._make_api(monkeypatch)
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "sess-3"
+        mock_session.send_and_wait = AsyncMock(
+            side_effect=RuntimeError("SDK error")
+        )
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+
+        CopilotModelAPI._client = mock_client
+
+        mock_permission_handler = MagicMock()
+        mock_permission_handler.approve_all = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.session": MagicMock(
+                    PermissionHandler=mock_permission_handler
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            with pytest.raises(RuntimeError, match="SDK error"):
+                await api.generate(
+                    input=[ChatMessageUser(content="Hi")],
+                    tools=[],
+                    tool_choice="auto",
+                    config=GenerateConfig(),
+                )
+
+        # Session cleanup should still happen
+        mock_client.delete_session.assert_awaited_once_with("sess-3")
+
+    async def test_generate_with_tools(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = self._make_api(monkeypatch)
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "sess-4"
+        mock_session.send_and_wait = AsyncMock(
+            return_value=SimpleNamespace(
+                data=SimpleNamespace(
+                    content="Calling tool.",
+                    tool_requests=[
+                        SimpleNamespace(
+                            tool_call_id="tc_1",
+                            name="read_file",
+                            arguments={"path": "/tmp/f"},
+                        )
+                    ],
+                )
+            )
+        )
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+
+        CopilotModelAPI._client = mock_client
+
+        mock_permission_handler = MagicMock()
+        mock_permission_handler.approve_all = MagicMock()
+
+        # Create a mock CopilotSdkTool class
+        mock_sdk_tool_cls = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.session": MagicMock(
+                    PermissionHandler=mock_permission_handler
+                ),
+                "copilot.tools": MagicMock(Tool=mock_sdk_tool_cls),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+            from inspect_ai.tool import ToolInfo
+
+            tool = ToolInfo(name="read_file", description="Read a file")
+            output = await api.generate(
+                input=[ChatMessageUser(content="Read it")],
+                tools=[tool],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.stop_reason == "tool_calls"
+        tc = output.choices[0].message.tool_calls[0]
+        assert tc.function == "read_file"
+
+    async def test_generate_delete_session_failure_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If delete_session fails, generate should still return normally."""
+        api = self._make_api(monkeypatch)
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "sess-5"
+        mock_session.send_and_wait = AsyncMock(
+            return_value=SimpleNamespace(
+                data=SimpleNamespace(content="OK", tool_requests=None)
+            )
+        )
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock(
+            side_effect=RuntimeError("cleanup fail")
+        )
+
+        CopilotModelAPI._client = mock_client
+
+        mock_permission_handler = MagicMock()
+        mock_permission_handler.approve_all = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.session": MagicMock(
+                    PermissionHandler=mock_permission_handler
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=[ChatMessageUser(content="Hi")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        # Should succeed despite delete_session error
+        assert output.choices[0].message.text == "OK"
+
+
+# ---------------------------------------------------------------------------
+# CopilotModelAPI.aclose
+# ---------------------------------------------------------------------------
+class TestCopilotModelAPIClose:
+    """Tests for aclose lifecycle management."""
+
+    async def test_aclose_decrements_refcount(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        api1 = CopilotModelAPI(model_name="gpt-4o")
+        CopilotModelAPI(model_name="gpt-4o")
+        assert CopilotModelAPI._client_refcount == 2
+
+        await api1.aclose()
+        assert CopilotModelAPI._client_refcount == 1
+
+    async def test_aclose_last_instance_closes_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        api = CopilotModelAPI(model_name="gpt-4o")
+        assert CopilotModelAPI._client_refcount == 1
+
+        mock_client = AsyncMock()
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        CopilotModelAPI._client = mock_client
+
+        await api.aclose()
+        assert CopilotModelAPI._client_refcount == 0
+        assert CopilotModelAPI._client is None
+        mock_client.__aexit__.assert_awaited_once()
+
+    async def test_aclose_client_exit_error_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        api = CopilotModelAPI(model_name="gpt-4o")
+
+        mock_client = AsyncMock()
+        mock_client.__aexit__ = AsyncMock(side_effect=RuntimeError("boom"))
+        CopilotModelAPI._client = mock_client
+
+        # Should not raise
+        await api.aclose()
+        assert CopilotModelAPI._client is None
+        assert CopilotModelAPI._client_refcount == 0
+
+    async def test_aclose_no_client_noop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        api = CopilotModelAPI(model_name="gpt-4o")
+        CopilotModelAPI._client = None
+
+        # Should not raise when client is None
+        await api.aclose()
+        assert CopilotModelAPI._client_refcount == 0
