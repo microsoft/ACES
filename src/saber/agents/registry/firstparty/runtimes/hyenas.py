@@ -85,6 +85,7 @@ async def hyenas_post_invoke(
 
 HYENAS_RUNTIME = RuntimeSpec(
     name="hyenas",
+    default_model="mockllm/model",
     sandbox_compose="runtimes/hyenas/compose/hyenas.sandbox.compose.yml",
     env_schema=EnvSchema(
         bridge_injected={

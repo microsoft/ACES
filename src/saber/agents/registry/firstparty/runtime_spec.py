@@ -58,6 +58,7 @@ class RuntimeSpec(BaseModel):
     env_schema: EnvSchema = EnvSchema()
     agents: list[AgentAlias] = []
     default_model_aliases: dict[str, str] = {}
+    default_model: str | None = None
     pre_invoke_hook: _HookField = None
     post_invoke_hook: _HookField = None
     timeout: int = 1800

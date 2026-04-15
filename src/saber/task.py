@@ -324,11 +324,24 @@ def create_task(
     # unlimited attempts with exponential backoff (capped at 30 min)
     # so samples survive prolonged rate-limit bursts.
 
+    # 9. Resolve default model for firstparty runtimes.
+    #    When agent=firstparty and the runtime declares a default_model,
+    #    set it on the Task so --model is not required from the CLI.
+    task_model: str | None = None
+    runtime_name = str(kwargs.get("runtime", ""))
+    if agent == "firstparty" and runtime_name:
+        from saber.agents.registry.firstparty.runtime_registry import RuntimeRegistry
+
+        runtime_spec = RuntimeRegistry.get(runtime_name)
+        if runtime_spec is not None and runtime_spec.default_model:
+            task_model = runtime_spec.default_model
+
     return Task(
         dataset=samples,
         solver=solver,
         scorer=scorers,
         sandbox=sandbox_spec,
+        model=task_model,
         approval=effective_approval,
         config=GenerateConfig(max_retries=None),
         # Use max across all tasks as the ceiling; per-sample tightening
