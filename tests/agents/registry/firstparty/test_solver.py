@@ -189,6 +189,9 @@ class TestSolverExecution:
             mock_tcl,
         )
 
+        # Pre-populate store with metadata (solver reads from store, not state.metadata)
+        mock_store().set("firstparty_sample_metadata", {"task_id": "abc-123"})
+
         state = self._make_state(metadata={"task_id": "abc-123"})
         await solver(state)
 
@@ -495,6 +498,12 @@ class TestMetadataEnvBridging:
             mock_tcl,
         )
 
+        # Pre-populate store with metadata (solver reads from store, not state.metadata)
+        mock_store().set("firstparty_sample_metadata", {
+            "repo_path": "/data/repos/task.tar.gz",
+            "task_id": "task_abc",
+        })
+
         state = TestSolverExecution._make_state(
             metadata={"repo_path": "/data/repos/task.tar.gz", "task_id": "task_abc"}
         )
@@ -534,6 +543,9 @@ class TestMetadataEnvBridging:
             mock_tcl,
         )
 
+        # Pre-populate store with metadata (solver reads from store, not state.metadata)
+        mock_store().set("firstparty_sample_metadata", {"task_id": "from_metadata"})
+
         state = TestSolverExecution._make_state(
             metadata={"task_id": "from_metadata"}
         )
@@ -566,6 +578,11 @@ class TestMetadataEnvBridging:
             mock_as_solver,
             mock_tcl,
         )
+
+        # Pre-populate store — only FIRSTPARTY_METADATA_KEYS are stashed by solver_factory
+        mock_store().set("firstparty_sample_metadata", {
+            "repo_path": "/data/repos/task.tar.gz",
+        })
 
         state = TestSolverExecution._make_state(
             metadata={
@@ -608,6 +625,9 @@ class TestMetadataEnvBridging:
             mock_tcl,
         )
 
+        # Pre-populate store with metadata (solver reads from store, not state.metadata)
+        mock_store().set("firstparty_sample_metadata", {"repo_tarball": "base64data=="})
+
         state = TestSolverExecution._make_state(
             metadata={"repo_tarball": "base64data=="}
         )
@@ -616,3 +636,83 @@ class TestMetadataEnvBridging:
         hook.assert_awaited_once()
         hook_env = hook.call_args[0][1]
         assert hook_env["repo_tarball"] == "base64data=="
+
+
+class TestMetadataFromStore:
+    """Verify execute() reads metadata from store, not state.metadata."""
+
+    @pytest.mark.asyncio
+    async def test_reads_from_store_not_state_metadata(self) -> None:
+        """execute() uses store().get('firstparty_sample_metadata') for env bridging."""
+        hook = AsyncMock(side_effect=lambda sbox, env: env)
+        spec = RuntimeSpec(
+            name="store-rt",
+            invoke_command=["echo"],
+            pre_invoke_hook=hook,
+        )
+        RuntimeRegistry.register(spec)
+
+        mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
+            _build_bridge_mocks()
+        )
+
+        solver = TestSolverExecution._create_solver_patched(
+            spec,
+            mock_bridge_ctx,
+            mock_sbox_env,
+            mock_store,
+            mock_as_solver,
+            mock_tcl,
+        )
+
+        # Put metadata in store (simulating solver_factory stash)
+        mock_store().set("firstparty_sample_metadata", {
+            "repo_path": "/from/store",
+            "task_id": "store_task",
+        })
+
+        # State.metadata has DIFFERENT values — should NOT be used
+        state = TestSolverExecution._make_state(
+            metadata={"repo_path": "/from/state", "task_id": "state_task"}
+        )
+        await solver(state)
+
+        hook.assert_awaited_once()
+        hook_env = hook.call_args[0][1]
+        # Values come from store, not state.metadata
+        assert hook_env["repo_path"] == "/from/store"
+        assert hook_env["task_id"] == "store_task"
+
+    @pytest.mark.asyncio
+    async def test_empty_store_no_keys_bridged(self) -> None:
+        """When store has no firstparty_sample_metadata, no metadata keys are bridged."""
+        hook = AsyncMock(side_effect=lambda sbox, env: env)
+        spec = RuntimeSpec(
+            name="emptystore-rt",
+            invoke_command=["echo"],
+            pre_invoke_hook=hook,
+        )
+        RuntimeRegistry.register(spec)
+
+        mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
+            _build_bridge_mocks()
+        )
+
+        solver = TestSolverExecution._create_solver_patched(
+            spec,
+            mock_bridge_ctx,
+            mock_sbox_env,
+            mock_store,
+            mock_as_solver,
+            mock_tcl,
+        )
+
+        # Store is empty; state.metadata has values that should NOT be used
+        state = TestSolverExecution._make_state(
+            metadata={"repo_path": "/should/not/appear"}
+        )
+        await solver(state)
+
+        hook.assert_awaited_once()
+        hook_env = hook.call_args[0][1]
+        assert "repo_path" not in hook_env

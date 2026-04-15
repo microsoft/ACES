@@ -44,6 +44,7 @@ def _build_bridge_mocks(
     *,
     exec_returncode: int = 0,
     exec_stderr: str = "",
+    initial_store: dict[str, object] | None = None,
 ) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock, MagicMock]:
     """Build mocks for sandbox_agent_bridge, sandbox_env, store, as_solver, tool_call_limit.
 
@@ -67,7 +68,7 @@ def _build_bridge_mocks(
     mock_sbox.exec = AsyncMock(return_value=exec_result)
     mock_sandbox_env = MagicMock(return_value=mock_sbox)
 
-    _store_data: dict[str, object] = {}
+    _store_data: dict[str, object] = dict(initial_store) if initial_store else {}
     mock_store_obj = MagicMock()
     mock_store_obj.get = MagicMock(side_effect=lambda k, default=None: _store_data.get(k, default))
     mock_store_obj.set = MagicMock(side_effect=lambda k, v: _store_data.__setitem__(k, v))
@@ -145,7 +146,11 @@ class TestFullPipeline:
         RuntimeRegistry.register(spec)
 
         mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
-            _build_bridge_mocks()
+            _build_bridge_mocks(
+                initial_store={
+                    "firstparty_sample_metadata": {"task_id": "smoke-1"},
+                },
+            )
         )
 
         # create_agent(runtime=...) returns inner factory; inner factory returns solver
@@ -154,7 +159,7 @@ class TestFullPipeline:
         )
         assert callable(solver)
 
-        state = _make_state(metadata={"task_id": "smoke-1"})
+        state = _make_state()
         result = await solver(state)
 
         # Bridge is opened

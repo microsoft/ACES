@@ -801,3 +801,106 @@ class TestMaxStepsForwarding:
         assert len(user_limit_msgs) == 1
 
         assert result is state
+
+
+class TestMetadataStash:
+    """solver_factory stashes firstparty metadata keys into store()."""
+
+    @pytest.mark.asyncio
+    async def test_stashes_repo_keys_into_store(self) -> None:
+        """After solve() runs, firstparty_sample_metadata is set in store()."""
+        from saber.agents.solver_factory import FIRSTPARTY_METADATA_KEYS
+
+        store_data: dict[str, object] = {}
+
+        mock_inner_solver = AsyncMock(return_value=MagicMock())
+        mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
+        mock_factory = MagicMock(return_value=mock_create_with_prompts)
+
+        solver = create_saber_solver(agent_name="firstparty", agent_factory=mock_factory)
+
+        state = MagicMock()
+        state.metadata = {
+            "max_steps": 200,
+            "repo_path": "/data/repos/task.tar.gz",
+            "task_id": "incident_42",
+            "repo_tarball": "base64data==",
+            "repo_tarball_url": "https://example.com/repo.tar.gz",
+        }
+        generate = MagicMock()
+
+        mock_store_obj = MagicMock()
+        mock_store_obj.set = MagicMock(side_effect=lambda k, v: store_data.__setitem__(k, v))
+        mock_store_fn = MagicMock(return_value=mock_store_obj)
+
+        with patch("inspect_ai.util.store", mock_store_fn):
+            await solver(state, generate)
+
+        assert "firstparty_sample_metadata" in store_data
+        stashed = store_data["firstparty_sample_metadata"]
+        assert isinstance(stashed, dict)
+        assert set(stashed.keys()) == FIRSTPARTY_METADATA_KEYS
+        assert stashed["repo_path"] == "/data/repos/task.tar.gz"
+        assert stashed["task_id"] == "incident_42"
+
+    @pytest.mark.asyncio
+    async def test_only_firstparty_keys_stashed(self) -> None:
+        """Non-firstparty metadata keys are NOT stashed."""
+        store_data: dict[str, object] = {}
+
+        mock_inner_solver = AsyncMock(return_value=MagicMock())
+        mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
+        mock_factory = MagicMock(return_value=mock_create_with_prompts)
+
+        solver = create_saber_solver(agent_name="firstparty", agent_factory=mock_factory)
+
+        state = MagicMock()
+        state.metadata = {
+            "max_steps": 200,
+            "instruction_prompt": "Do X",
+            "assistant_prompt": "You are Y",
+            "task_id": "t1",
+        }
+        generate = MagicMock()
+
+        mock_store_obj = MagicMock()
+        mock_store_obj.set = MagicMock(side_effect=lambda k, v: store_data.__setitem__(k, v))
+        mock_store_fn = MagicMock(return_value=mock_store_obj)
+
+        with patch("inspect_ai.util.store", mock_store_fn):
+            await solver(state, generate)
+
+        stashed = store_data["firstparty_sample_metadata"]
+        assert "instruction_prompt" not in stashed
+        assert "assistant_prompt" not in stashed
+        assert "max_steps" not in stashed
+        assert stashed == {"task_id": "t1"}
+
+    @pytest.mark.asyncio
+    async def test_missing_keys_excluded_from_stash(self) -> None:
+        """Keys not present in metadata are excluded from the stash dict."""
+        store_data: dict[str, object] = {}
+
+        mock_inner_solver = AsyncMock(return_value=MagicMock())
+        mock_create_with_prompts = MagicMock(return_value=mock_inner_solver)
+        mock_factory = MagicMock(return_value=mock_create_with_prompts)
+
+        solver = create_saber_solver(agent_name="firstparty", agent_factory=mock_factory)
+
+        state = MagicMock()
+        state.metadata = {
+            "max_steps": 200,
+            "repo_path": "/data/repos/task.tar.gz",
+            # No task_id, repo_tarball, repo_tarball_url
+        }
+        generate = MagicMock()
+
+        mock_store_obj = MagicMock()
+        mock_store_obj.set = MagicMock(side_effect=lambda k, v: store_data.__setitem__(k, v))
+        mock_store_fn = MagicMock(return_value=mock_store_obj)
+
+        with patch("inspect_ai.util.store", mock_store_fn):
+            await solver(state, generate)
+
+        stashed = store_data["firstparty_sample_metadata"]
+        assert stashed == {"repo_path": "/data/repos/task.tar.gz"}

@@ -98,7 +98,9 @@ def create_agent(
 
                     # Bridge specific metadata keys into env for pre_invoke_hook.
                     # Only repo-related keys are bridged — not large prompt strings.
-                    metadata = state.metadata or {}
+                    # AgentState has no .metadata, so we read from store()
+                    # (stashed by solver_factory from TaskState.metadata).
+                    metadata: dict[str, str] = store().get("firstparty_sample_metadata", {})
                     for key in _METADATA_KEYS_TO_BRIDGE:
                         if key in metadata and key not in env:
                             env[key] = str(metadata[key])
