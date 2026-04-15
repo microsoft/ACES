@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 
 _STORE_PORT_KEY = "firstparty_model_port"
 _MIN_TIMEOUT = 30
+_METADATA_KEYS_TO_BRIDGE = frozenset({"repo_tarball", "repo_path", "repo_tarball_url", "task_id"})
 
 
 def create_agent(
@@ -95,12 +96,18 @@ def create_agent(
                         bridge_api_key=bridge_api_key,
                     )
 
+                    # Bridge specific metadata keys into env for pre_invoke_hook.
+                    # Only repo-related keys are bridged — not large prompt strings.
+                    metadata = state.metadata or {}
+                    for key in _METADATA_KEYS_TO_BRIDGE:
+                        if key in metadata and key not in env:
+                            env[key] = str(metadata[key])
+
                     # Pre-invoke hook
                     if spec.pre_invoke_hook is not None:
                         env = await spec.pre_invoke_hook(sbox, env)
 
                     # Interpolate command with metadata + outer kwargs
-                    metadata = state.metadata or {}
                     cmd = interpolate_command(
                         spec.invoke_command,
                         **{k: str(v) for k, v in {**metadata, **outer_kwargs}.items()},

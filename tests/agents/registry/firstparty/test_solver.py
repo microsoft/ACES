@@ -461,3 +461,158 @@ class TestDeriveTimeout:
             result = _derive_timeout(900)
 
         assert result == 900
+
+
+# ---------------------------------------------------------------------------
+# Metadata → env bridging
+# ---------------------------------------------------------------------------
+
+
+class TestMetadataEnvBridging:
+    """Test that specific metadata keys are bridged into env for pre_invoke_hook."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_repo_keys_bridged_to_env(self) -> None:
+        """When state.metadata has repo_path, it appears in env passed to pre_invoke_hook."""
+        hook = AsyncMock(side_effect=lambda sbox, env: env)
+        spec = RuntimeSpec(
+            name="bridge-rt",
+            invoke_command=["echo"],
+            pre_invoke_hook=hook,
+        )
+        RuntimeRegistry.register(spec)
+
+        mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
+            _build_bridge_mocks()
+        )
+
+        solver = TestSolverExecution._create_solver_patched(
+            spec,
+            mock_bridge_ctx,
+            mock_sbox_env,
+            mock_store,
+            mock_as_solver,
+            mock_tcl,
+        )
+
+        state = TestSolverExecution._make_state(
+            metadata={"repo_path": "/data/repos/task.tar.gz", "task_id": "task_abc"}
+        )
+        await solver(state)
+
+        hook.assert_awaited_once()
+        hook_env = hook.call_args[0][1]
+        assert hook_env["repo_path"] == "/data/repos/task.tar.gz"
+        assert hook_env["task_id"] == "task_abc"
+
+    @pytest.mark.asyncio
+    async def test_metadata_does_not_overwrite_existing_env(self) -> None:
+        """If spec.build_env() already sets a key, metadata doesn't overwrite it."""
+        from saber.agents.registry.firstparty.runtime_spec import EnvSchema
+
+        hook = AsyncMock(side_effect=lambda sbox, env: env)
+        spec = RuntimeSpec(
+            name="nooverwrite-rt",
+            invoke_command=["echo"],
+            pre_invoke_hook=hook,
+            env_schema=EnvSchema(
+                defaults={"task_id": "from_env_schema"},
+            ),
+        )
+        RuntimeRegistry.register(spec)
+
+        mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
+            _build_bridge_mocks()
+        )
+
+        solver = TestSolverExecution._create_solver_patched(
+            spec,
+            mock_bridge_ctx,
+            mock_sbox_env,
+            mock_store,
+            mock_as_solver,
+            mock_tcl,
+        )
+
+        state = TestSolverExecution._make_state(
+            metadata={"task_id": "from_metadata"}
+        )
+        await solver(state)
+
+        hook.assert_awaited_once()
+        hook_env = hook.call_args[0][1]
+        assert hook_env["task_id"] == "from_env_schema"
+
+    @pytest.mark.asyncio
+    async def test_non_repo_metadata_not_bridged(self) -> None:
+        """Keys like instruction_prompt, title are NOT bridged into env."""
+        hook = AsyncMock(side_effect=lambda sbox, env: env)
+        spec = RuntimeSpec(
+            name="nopromo-rt",
+            invoke_command=["echo"],
+            pre_invoke_hook=hook,
+        )
+        RuntimeRegistry.register(spec)
+
+        mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
+            _build_bridge_mocks()
+        )
+
+        solver = TestSolverExecution._create_solver_patched(
+            spec,
+            mock_bridge_ctx,
+            mock_sbox_env,
+            mock_store,
+            mock_as_solver,
+            mock_tcl,
+        )
+
+        state = TestSolverExecution._make_state(
+            metadata={
+                "instruction_prompt": "long prompt text",
+                "title": "Some Task",
+                "description": "long description",
+                "repo_path": "/data/repos/task.tar.gz",
+            }
+        )
+        await solver(state)
+
+        hook.assert_awaited_once()
+        hook_env = hook.call_args[0][1]
+        assert "instruction_prompt" not in hook_env
+        assert "title" not in hook_env
+        assert "description" not in hook_env
+        assert hook_env["repo_path"] == "/data/repos/task.tar.gz"
+
+    @pytest.mark.asyncio
+    async def test_repo_tarball_bridged_to_env(self) -> None:
+        """repo_tarball metadata key is also bridged."""
+        hook = AsyncMock(side_effect=lambda sbox, env: env)
+        spec = RuntimeSpec(
+            name="tarball-rt",
+            invoke_command=["echo"],
+            pre_invoke_hook=hook,
+        )
+        RuntimeRegistry.register(spec)
+
+        mock_bridge_ctx, mock_sbox_env, mock_store, mock_as_solver, mock_tcl = (
+            _build_bridge_mocks()
+        )
+
+        solver = TestSolverExecution._create_solver_patched(
+            spec,
+            mock_bridge_ctx,
+            mock_sbox_env,
+            mock_store,
+            mock_as_solver,
+            mock_tcl,
+        )
+
+        state = TestSolverExecution._make_state(
+            metadata={"repo_tarball": "base64data=="}
+        )
+        await solver(state)
+
+        hook.assert_awaited_once()
+        hook_env = hook.call_args[0][1]
+        assert hook_env["repo_tarball"] == "base64data=="
