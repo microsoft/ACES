@@ -7,6 +7,7 @@ package is installed.
 
 from ..sandbox import SaberSandboxEnvironment  # noqa: F401
 from .integration.agent_model import agent  # noqa: F401 - registers @modelapi("agent")
+from .integration.copilot_model import copilot  # noqa: F401 - registers @modelapi("copilot")
 from .integration.tools import saber_tools  # noqa: F401
 
-__all__ = ["SaberSandboxEnvironment", "saber_tools", "agent"]
+__all__ = ["SaberSandboxEnvironment", "saber_tools", "agent", "copilot"]

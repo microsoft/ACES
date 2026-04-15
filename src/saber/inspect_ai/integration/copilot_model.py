@@ -24,6 +24,7 @@ from inspect_ai.model import (
     ModelUsage,
 )
 from inspect_ai.model._generate_config import GenerateConfig
+from inspect_ai.model._registry import modelapi
 from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 
 from saber.logging import get_logger
@@ -451,3 +452,20 @@ def _extract_assistant_data(response: object | None) -> object | None:
     if response is None:
         return None
     return getattr(response, "data", response)
+
+
+@modelapi(name="copilot")  # type: ignore[misc]
+def copilot() -> type[ModelAPI]:
+    """Register the Copilot model API provider.
+
+    Requires the ``github-copilot-sdk`` package. Raises a descriptive
+    error if the SDK is not installed.
+    """
+    try:
+        import copilot as _copilot  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "The 'copilot' model provider requires github-copilot-sdk. "
+            "Install with: pip install github-copilot-sdk"
+        ) from None
+    return CopilotModelAPI

@@ -753,3 +753,29 @@ class TestCopilotModelAPIClose:
         # Should not raise when client is None
         await api.aclose()
         assert CopilotModelAPI._client_refcount == 0
+
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+class TestCopilotRegistration:
+    """Tests for the @modelapi('copilot') registration."""
+
+    def test_modelapi_decorator_applied(self) -> None:
+        """Verify that the copilot factory function has the modelapi registration."""
+        from saber.inspect_ai.integration.copilot_model import copilot
+
+        # The function should exist and be callable
+        assert callable(copilot)
+
+    def test_copilot_returns_model_class(self) -> None:
+        """Verify the factory returns CopilotModelAPI when SDK is available."""
+        from saber.inspect_ai.integration.copilot_model import copilot
+
+        # Mock the copilot SDK import and call the decorated factory
+        # The @modelapi wrapper calls our factory then instantiates the class,
+        # so we need to pass model_name through.
+        with patch.dict("sys.modules", {"copilot": MagicMock()}):
+            with patch.object(CopilotModelAPI, "__init__", return_value=None):
+                result = copilot(model_name="gpt-4o")
+        assert isinstance(result, CopilotModelAPI)
