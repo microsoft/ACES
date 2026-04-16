@@ -161,6 +161,7 @@ HYENAS_RUNTIME = RuntimeSpec(
         "run",
         "--headless",
         "--no-copilot",
+        "--no-check",
         "--no-prove",
         "--repo",
         "/workspace",
