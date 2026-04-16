@@ -120,6 +120,7 @@ HYENAS_RUNTIME = RuntimeSpec(
         bridge_injected={
             "_BRIDGE_URL": "{bridge_url}",
         },
+        passthrough=["_HYENAS_EXTRA_CONFIG"],
         defaults={
             "HYENAS_HEADLESS": "true",
             "LOG_LEVEL": "info",

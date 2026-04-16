@@ -115,10 +115,11 @@ def create_agent(
                     if spec.pre_invoke_hook is not None:
                         env = await spec.pre_invoke_hook(sbox, env)
 
-                    # Interpolate command with metadata + outer kwargs
+                    # Interpolate command with env defaults + metadata + outer kwargs
+                    # (env provides baseline values; metadata and outer_kwargs override)
                     cmd = interpolate_command(
                         spec.invoke_command,
-                        **{k: str(v) for k, v in {**metadata, **outer_kwargs}.items()},
+                        **{k: str(v) for k, v in {**env, **metadata, **outer_kwargs}.items()},
                     )
 
                     # Execute
