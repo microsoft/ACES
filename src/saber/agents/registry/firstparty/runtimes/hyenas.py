@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _CONFIG_PATH = "/app/.hyenas-config/config.yaml"
+_TOKEN_PATH = "/tmp/.copilot_token"
 _DEFAULT_BRIDGE_PORT = 3000
 
 
@@ -44,9 +46,17 @@ async def hyenas_pre_invoke(
     bridge_port = _parse_bridge_port(env.get("_BRIDGE_URL", ""))
 
     extra_config_json = env.get("_HYENAS_EXTRA_CONFIG")
-    extra_config: dict[str, object] | None = (
-        json.loads(extra_config_json) if extra_config_json else None
-    )
+    extra_config: dict[str, object] | None = None
+    if extra_config_json:
+        try:
+            parsed = json.loads(extra_config_json)
+        except json.JSONDecodeError as exc:
+            msg = f"Invalid JSON in _HYENAS_EXTRA_CONFIG: {exc}"
+            raise ValueError(msg) from exc
+        if not isinstance(parsed, dict):
+            msg = f"_HYENAS_EXTRA_CONFIG must be a JSON object, got {type(parsed).__name__}"
+            raise TypeError(msg)
+        extra_config = parsed
 
     config_yaml = generate_hyenas_config(
         bridge_port=bridge_port,
@@ -64,6 +74,19 @@ async def hyenas_pre_invoke(
 
     if metadata:
         await inject_target_repo(sandbox, metadata)
+
+    # Inject GITHUB_TOKEN securely via file (not via env to avoid ps aux leakage).
+    # Pre-create with restricted perms to eliminate TOCTOU race (write_file uses
+    # tee which inherits umask 022 → world-readable without this).
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        msg = "GITHUB_TOKEN must be set for Hyenas Copilot SDK authentication"
+        raise ValueError(msg)
+    result = await sandbox.exec(["install", "-m", "600", "/dev/null", _TOKEN_PATH])
+    if not result.success:
+        msg = f"Failed to create token file: {result.stderr}"
+        raise RuntimeError(msg)
+    await sandbox.write_file(_TOKEN_PATH, token)
 
     return env
 
@@ -105,19 +128,14 @@ HYENAS_RUNTIME = RuntimeSpec(
     ),
     agents=[],
     invoke_command=[
-        "node",
-        "dist/src/cli.js",
-        "run",
-        "--headless",
-        "--no-copilot",
-        "--no-check",
-        "{prove_flag}",
-        "--repo",
-        "/workspace",
-        "--hyenas",
-        "/output/.hyenas",
-        "--config",
-        "/app/.hyenas-config/config.yaml",
+        "bash",
+        "-c",
+        "export GITHUB_TOKEN=$(cat /tmp/.copilot_token) && "
+        "rm -f /tmp/.copilot_token && "
+        "exec node dist/src/cli.js run "
+        "--headless --no-copilot --no-check {prove_flag} "
+        "--repo /workspace --hyenas /output/.hyenas "
+        "--config /app/.hyenas-config/config.yaml",
     ],
     default_model_aliases={
         "gpt-5.4": "copilot/gpt-5.4",

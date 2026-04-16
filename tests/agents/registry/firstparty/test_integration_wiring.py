@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import importlib
-from unittest.mock import AsyncMock, MagicMock
+import os
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import yaml
@@ -51,6 +52,7 @@ class TestSolverHookWiring:
     """Tests that solver properly dispatches pre/post invoke hooks."""
 
     @pytest.mark.asyncio
+    @patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"})
     async def test_pre_invoke_hook_called_by_solver_flow(self) -> None:
         """Verify pre_invoke_hook is dispatched in the expected order."""
         _ensure_hyenas_registered()
@@ -68,8 +70,9 @@ class TestSolverHookWiring:
 
         result_env = await spec.pre_invoke_hook(sandbox, env)
 
-        sandbox.write_file.assert_called_once()
-        config_path, config_content = sandbox.write_file.call_args[0]
+        # write_file called twice: config.yaml + token file
+        assert sandbox.write_file.call_count == 2
+        config_path, config_content = sandbox.write_file.call_args_list[0][0]
         assert config_path == "/app/.hyenas-config/config.yaml"
 
         parsed = yaml.safe_load(config_content)
