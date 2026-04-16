@@ -97,7 +97,26 @@ HYENAS_RUNTIME = RuntimeSpec(
         },
     ),
     agents=[
-        # Scan stage
+        # Stage-level defaults (required for --no-copilot validation).
+        # Hyenas' verifyCopilotFreeRouting() checks stage.default.models
+        # entries against configured endpoints; without these, hardcoded
+        # defaults (gpt-5.4, claude-opus-4.6) would fail validation.
+        AgentAlias(
+            name="scan_default",
+            model_alias="gpt-4o",
+            env_var="scan-stage.default.models",
+        ),
+        AgentAlias(
+            name="validate_default",
+            model_alias="gpt-4o",
+            env_var="validate-stage.default.models",
+        ),
+        AgentAlias(
+            name="prove_default",
+            model_alias="gpt-4o",
+            env_var="prove-stage.default.models",
+        ),
+        # Scan stage — per-agent overrides
         AgentAlias(
             name="function_auditor",
             model_alias="gpt-4o",
