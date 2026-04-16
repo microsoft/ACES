@@ -49,6 +49,23 @@ async def inject_target_repo(
         msg = f"tar extraction failed (exit {result.returncode}): {result.stderr}"
         raise RuntimeError(msg)
 
+    # Ensure the workspace is a git repository — Hyenas requires a git root.
+    # Source tarballs (e.g. GitHub archive downloads) lack a .git directory.
+    result = await sandbox.exec(
+        ["git", "rev-parse", "--git-dir"],
+        cwd=_WORKSPACE_DIR,
+    )
+    if result.returncode != 0:
+        for cmd in (
+            ["git", "init"],
+            ["git", "add", "-A"],
+            ["git", "commit", "-m", "initial", "--allow-empty"],
+        ):
+            result = await sandbox.exec(cmd, cwd=_WORKSPACE_DIR)
+            if result.returncode != 0:
+                msg = f"git init failed ({' '.join(cmd)}): {result.stderr}"
+                raise RuntimeError(msg)
+
 
 def _resolve_tar_bytes(metadata: dict[str, str]) -> bytes:
     """Resolve tarball bytes from metadata (tarball takes priority over path).

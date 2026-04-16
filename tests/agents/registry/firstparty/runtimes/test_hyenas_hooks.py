@@ -61,10 +61,10 @@ class TestInjectTargetRepo:
         mock_sandbox.write_file.assert_awaited_once_with(
             "/tmp/repo.tar.gz", raw
         )
-        # Should call tar to extract
-        mock_sandbox.exec.assert_awaited_once_with(
-            ["tar", "xzf", "/tmp/repo.tar.gz", "-C", "/workspace"]
-        )
+        # Should call tar to extract, then check if git repo
+        calls = mock_sandbox.exec.await_args_list
+        assert calls[0].args[0] == ["tar", "xzf", "/tmp/repo.tar.gz", "-C", "/workspace"]
+        assert calls[1].args[0] == ["git", "rev-parse", "--git-dir"]
 
     @pytest.mark.asyncio
     async def test_inject_from_path(
@@ -90,9 +90,9 @@ class TestInjectTargetRepo:
         mock_sandbox.write_file.assert_awaited_once_with(
             "/tmp/repo.tar.gz", raw
         )
-        mock_sandbox.exec.assert_awaited_once_with(
-            ["tar", "xzf", "/tmp/repo.tar.gz", "-C", "/workspace"]
-        )
+        calls = mock_sandbox.exec.await_args_list
+        assert calls[0].args[0] == ["tar", "xzf", "/tmp/repo.tar.gz", "-C", "/workspace"]
+        assert calls[1].args[0] == ["git", "rev-parse", "--git-dir"]
 
     @pytest.mark.asyncio
     async def test_inject_tarball_priority(
