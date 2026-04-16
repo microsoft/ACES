@@ -56,6 +56,11 @@ async def inject_target_repo(
         cwd=_WORKSPACE_DIR,
     )
     if result.returncode != 0:
+        # Mark /workspace as safe to avoid "dubious ownership" errors
+        # when the directory owner differs from the current uid.
+        await sandbox.exec(
+            ["git", "config", "--global", "--add", "safe.directory", _WORKSPACE_DIR],
+        )
         for cmd in (
             ["git", "init"],
             ["git", "add", "-A"],
