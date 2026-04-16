@@ -29,31 +29,26 @@ class TestHyenasRuntimeSpec:
         cmd = HYENAS_RUNTIME.invoke_command
         assert "--headless" in cmd
         assert "--no-copilot" in cmd
-        assert "--no-prove" in cmd
+        assert "{prove_flag}" in cmd
+        assert "--no-prove" not in cmd
         assert "--repo" in cmd
         assert "--config" in cmd
 
-    def test_agents_present(self) -> None:
+    def test_agents_empty(self) -> None:
         from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
 
-        names = [a.name for a in HYENAS_RUNTIME.agents]
-        assert "function_auditor" in names
-        assert "variant_auditor" in names
-        assert "file_enricher" in names
-        assert "debater_1" in names
-        assert "scope_resolver" in names
-
-    def test_all_agent_models_are_real(self) -> None:
-        """No synthetic 1p/ prefixes."""
-        from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
-
-        for agent in HYENAS_RUNTIME.agents:
-            assert not agent.model_alias.startswith("1p/")
+        assert HYENAS_RUNTIME.agents == []
 
     def test_env_defaults(self) -> None:
         from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
 
         assert HYENAS_RUNTIME.env_schema.defaults.get("HYENAS_HEADLESS") == "true"
+
+    def test_prove_flag_default(self) -> None:
+        """prove_flag defaults to --no-prove (prove disabled by default)."""
+        from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
+
+        assert HYENAS_RUNTIME.env_schema.defaults.get("prove_flag") == "--no-prove"
 
     def test_bridge_injected_url(self) -> None:
         from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
@@ -61,6 +56,15 @@ class TestHyenasRuntimeSpec:
         assert "_BRIDGE_URL" in HYENAS_RUNTIME.env_schema.bridge_injected
         # _BRIDGE_PORT should NOT be in bridge_injected (parsed from URL instead)
         assert "_BRIDGE_PORT" not in HYENAS_RUNTIME.env_schema.bridge_injected
+
+    def test_default_model_aliases_map_real_models(self) -> None:
+        from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
+
+        aliases = HYENAS_RUNTIME.default_model_aliases
+        assert aliases["gpt-5.4"] == "copilot/gpt-5.4"
+        assert aliases["claude-opus-4.6"] == "copilot/claude-opus-4.6"
+        assert aliases["claude-sonnet-4.6"] == "copilot/claude-sonnet-4.6"
+        assert aliases["gpt-4.1"] == "copilot/gpt-4.1"
 
     def test_hooks_are_set(self) -> None:
         from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
@@ -106,6 +110,9 @@ class TestHyenasPreInvokeHook:
         assert "default" in parsed
         # Port should be extracted from URL
         assert parsed["endpoints"][0]["url"] == "http://localhost:9100/v1"
+        # No stage overrides in new config format
+        for key in ("prepare-stage", "scan-stage", "validate-stage", "prove-stage"):
+            assert key not in parsed
 
     @pytest.mark.asyncio
     async def test_returns_env_unchanged(self) -> None:
@@ -199,6 +206,40 @@ class TestHyenasPreInvokeHook:
         yaml_content = sandbox.write_file.call_args[0][1]
         parsed = yaml.safe_load(yaml_content)
         assert parsed["endpoints"][0]["url"] == "http://localhost:9100/v1"
+
+    @pytest.mark.asyncio
+    async def test_pre_invoke_passes_extra_config(self) -> None:
+        """_HYENAS_EXTRA_CONFIG JSON string is deep-merged into config.yaml."""
+        import json
+
+        from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
+
+        sandbox = AsyncMock()
+        extra = {"prove-stage": {"models": ["gpt-5.4"]}}
+        env = {
+            "_BRIDGE_URL": "http://localhost:9100/v1",
+            "_HYENAS_EXTRA_CONFIG": json.dumps(extra),
+        }
+
+        await HYENAS_RUNTIME.pre_invoke_hook(sandbox, env)
+
+        yaml_content = sandbox.write_file.call_args[0][1]
+        parsed = yaml.safe_load(yaml_content)
+        assert parsed["prove-stage"] == {"models": ["gpt-5.4"]}
+
+    @pytest.mark.asyncio
+    async def test_pre_invoke_no_extra_config_key(self) -> None:
+        """Without _HYENAS_EXTRA_CONFIG, config has no stage overrides."""
+        from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
+
+        sandbox = AsyncMock()
+        env = {"_BRIDGE_URL": "http://localhost:9100/v1"}
+
+        await HYENAS_RUNTIME.pre_invoke_hook(sandbox, env)
+
+        yaml_content = sandbox.write_file.call_args[0][1]
+        parsed = yaml.safe_load(yaml_content)
+        assert "prove-stage" not in parsed
 
 
 class TestHyenasPostInvokeHook:

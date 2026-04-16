@@ -255,3 +255,17 @@ class TestInterpolateCommand:
 
     def test_empty_command(self) -> None:
         assert interpolate_command([]) == []
+
+    def test_filters_empty_strings_after_substitution(self) -> None:
+        """When a placeholder resolves to '', the resulting empty element is dropped."""
+        result = interpolate_command(["{flag}", "--keep"], flag="")
+        assert result == ["--keep"]
+
+    def test_preserves_non_empty_substitutions(self) -> None:
+        result = interpolate_command(["{flag}", "--keep"], flag="--verbose")
+        assert result == ["--verbose", "--keep"]
+
+    def test_filters_empty_standalone_but_keeps_partial(self) -> None:
+        """A partial substitution like 'prefix-{x}' with x='' is kept ('prefix-')."""
+        result = interpolate_command(["--opt={val}", "{gone}"], val="yes", gone="")
+        assert result == ["--opt=yes"]

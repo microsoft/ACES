@@ -138,4 +138,8 @@ def interpolate_command(command: list[str], **values: str) -> list[str]:
         key = match.group(1)
         return values.get(key, match.group(0))
 
-    return [_PLACEHOLDER_RE.sub(_replace, part) for part in command]
+    return [
+        resolved
+        for part in command
+        if (resolved := _PLACEHOLDER_RE.sub(_replace, part))
+    ]

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from saber.agents.registry.firstparty.runtime_spec import (
-    AgentAlias,
     EnvSchema,
     RuntimeSpec,
 )
@@ -43,9 +43,15 @@ async def hyenas_pre_invoke(
     """
     bridge_port = _parse_bridge_port(env.get("_BRIDGE_URL", ""))
 
+    extra_config_json = env.get("_HYENAS_EXTRA_CONFIG")
+    extra_config: dict[str, object] | None = (
+        json.loads(extra_config_json) if extra_config_json else None
+    )
+
     config_yaml = generate_hyenas_config(
-        agents=HYENAS_RUNTIME.agents,
         bridge_port=bridge_port,
+        endpoint_models=list(HYENAS_RUNTIME.default_model_aliases.keys()),
+        extra_config=extra_config,
     )
     await sandbox.write_file(_CONFIG_PATH, config_yaml)
 
@@ -94,67 +100,10 @@ HYENAS_RUNTIME = RuntimeSpec(
         defaults={
             "HYENAS_HEADLESS": "true",
             "LOG_LEVEL": "info",
+            "prove_flag": "--no-prove",
         },
     ),
-    agents=[
-        # Stage-level defaults (required for --no-copilot validation).
-        # Hyenas' verifyCopilotFreeRouting() checks stage.default.models
-        # entries against configured endpoints; without these, hardcoded
-        # defaults (gpt-5.4, claude-opus-4.6) would fail validation.
-        AgentAlias(
-            name="scan_default",
-            model_alias="gpt-4o",
-            env_var="scan-stage.default.models",
-        ),
-        AgentAlias(
-            name="validate_default",
-            model_alias="gpt-4o",
-            env_var="validate-stage.default.models",
-        ),
-        AgentAlias(
-            name="prove_default",
-            model_alias="gpt-4o",
-            env_var="prove-stage.default.models",
-        ),
-        # Scan stage — per-agent overrides
-        AgentAlias(
-            name="function_auditor",
-            model_alias="gpt-4o",
-            env_var="scan-stage.function-auditor.models",
-        ),
-        AgentAlias(
-            name="variant_auditor",
-            model_alias="claude-sonnet-4-20250514",
-            env_var="scan-stage.variant-auditor.models",
-        ),
-        AgentAlias(
-            name="file_enricher",
-            model_alias="gpt-4o",
-            env_var="scan-stage.file-enricher.models",
-        ),
-        # Validate stage — debater uses 3 models for consensus
-        AgentAlias(
-            name="debater_1",
-            model_alias="claude-sonnet-4-20250514",
-            env_var="validate-stage.debater.models",
-        ),
-        AgentAlias(
-            name="debater_2",
-            model_alias="gpt-4o",
-            env_var="validate-stage.debater.models",
-        ),
-        AgentAlias(
-            name="debater_3",
-            model_alias="gpt-4.1",
-            env_var="validate-stage.debater.models",
-        ),
-        # Prepare stage
-        AgentAlias(
-            name="scope_resolver",
-            model_alias="claude-sonnet-4-20250514",
-            env_var="prepare-stage.default.models",
-        ),
-    ],
+    agents=[],
     invoke_command=[
         "node",
         "dist/src/cli.js",
@@ -162,7 +111,7 @@ HYENAS_RUNTIME = RuntimeSpec(
         "--headless",
         "--no-copilot",
         "--no-check",
-        "--no-prove",
+        "{prove_flag}",
         "--repo",
         "/workspace",
         "--hyenas",
@@ -171,8 +120,9 @@ HYENAS_RUNTIME = RuntimeSpec(
         "/app/.hyenas-config/config.yaml",
     ],
     default_model_aliases={
-        "gpt-4o": "copilot/gpt-4o",
-        "claude-sonnet-4-20250514": "copilot/claude-sonnet-4-20250514",
+        "gpt-5.4": "copilot/gpt-5.4",
+        "claude-opus-4.6": "copilot/claude-opus-4.6",
+        "claude-sonnet-4.6": "copilot/claude-sonnet-4.6",
         "gpt-4.1": "copilot/gpt-4.1",
     },
     pre_invoke_hook=hyenas_pre_invoke,
