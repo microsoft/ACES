@@ -61,6 +61,12 @@ def create_agent(
         from inspect_ai.util import sandbox as sandbox_env
         from inspect_ai.util import store, tool_call_limit
 
+        # @agent's get_type_hints() resolves annotations against module globals.
+        # With `from __future__ import annotations`, all type hints are strings,
+        # so Agent/AgentState must be in module globals for resolution.
+        globals().setdefault("Agent", Agent)
+        globals().setdefault("AgentState", AgentState)
+
         if instruction_prompt or assistant_prompt:
             logger.debug(
                 "1P runtime '%s' manages its own prompts; "
@@ -71,8 +77,8 @@ def create_agent(
         model_aliases = spec.build_model_aliases()
 
         @agent
-        def _firstparty_agent() -> Agent:
-            async def execute(state: AgentState) -> AgentState:
+        def _firstparty_agent() -> "Agent":
+            async def execute(state: "AgentState") -> "AgentState":
                 port = store().get(_STORE_PORT_KEY, spec.port_base) + 1
                 store().set(_STORE_PORT_KEY, port)
 
