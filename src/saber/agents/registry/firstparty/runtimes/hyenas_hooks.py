@@ -61,6 +61,12 @@ async def inject_target_repo(
         await sandbox.exec(
             ["git", "config", "--global", "--add", "safe.directory", _WORKSPACE_DIR],
         )
+        await sandbox.exec(
+            ["git", "config", "--global", "user.email", "saber@local"],
+        )
+        await sandbox.exec(
+            ["git", "config", "--global", "user.name", "saber"],
+        )
         for cmd in (
             ["git", "init"],
             ["git", "add", "-A"],
