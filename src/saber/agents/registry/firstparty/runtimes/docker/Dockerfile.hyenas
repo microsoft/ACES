@@ -11,8 +11,19 @@ RUN mkdir -p /app /workspace /output
 
 WORKDIR /app
 
-COPY . /app/
+COPY package.json package-lock.json ./
+COPY scripts/ scripts/
 
-RUN npm ci --production 2>/dev/null || npm install --production
+# Install all deps (including devDependencies for tsc build)
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY src/ src/
+
+# Build TypeScript → dist/
+RUN npm run build
+
+# Remove devDependencies to slim down
+RUN npm prune --production
 
 CMD ["tail", "-f", "/dev/null"]

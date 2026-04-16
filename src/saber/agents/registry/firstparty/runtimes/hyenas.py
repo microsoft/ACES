@@ -150,7 +150,11 @@ HYENAS_RUNTIME = RuntimeSpec(
         "--config",
         "/app/.hyenas-config/config.yaml",
     ],
-    default_model_aliases={},
+    default_model_aliases={
+        "gpt-4o": "copilot/gpt-4o",
+        "claude-sonnet-4-20250514": "copilot/claude-sonnet-4-20250514",
+        "gpt-4.1": "copilot/gpt-4.1",
+    },
     pre_invoke_hook=hyenas_pre_invoke,
     post_invoke_hook=hyenas_post_invoke,
     timeout=3600,
