@@ -840,6 +840,133 @@ class TestCopilotModelAPIClose:
 
 
 # ---------------------------------------------------------------------------
+# CopilotModelAPI – CancelledError handling
+# ---------------------------------------------------------------------------
+class TestCopilotModelAPICancelledError:
+    """Tests for CancelledError handling in generate (time-limit cancellation)."""
+
+    def _make_api(self, monkeypatch: pytest.MonkeyPatch) -> CopilotModelAPI:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        return CopilotModelAPI(model_name="gpt-4o")
+
+    async def test_generate_handles_cancelled_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CancelledError during response wait returns empty ModelOutput."""
+        import asyncio
+
+        api = self._make_api(monkeypatch)
+        CopilotModelAPI._generate_semaphore = None
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-cancel-1"
+        mock_session.on = MagicMock(return_value=MagicMock())
+        mock_session.send = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+
+        CopilotModelAPI._client = mock_client
+
+        real_wait_for = asyncio.wait_for
+        call_count = 0
+
+        async def selective_wait_for(
+            fut: object, *, timeout: float | None = None
+        ) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:  # first_response wait
+                raise asyncio.CancelledError()
+            return await real_wait_for(fut, timeout=timeout)
+
+        monkeypatch.setattr(asyncio, "wait_for", selective_wait_for)
+
+        mock_session_event_type = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_session_event_type
+                ),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=[ChatMessageUser(content="Hi")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert isinstance(output, ModelOutput)
+        assert output.choices[0].message.content == ""
+        assert output.stop_reason == "unknown"
+
+    async def test_generate_cancelled_still_cleans_up_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """delete_session is called even when CancelledError occurs."""
+        import asyncio
+
+        api = self._make_api(monkeypatch)
+        CopilotModelAPI._generate_semaphore = None
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-cancel-2"
+        mock_session.on = MagicMock(return_value=MagicMock())
+        mock_session.send = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+
+        CopilotModelAPI._client = mock_client
+
+        real_wait_for = asyncio.wait_for
+        call_count = 0
+
+        async def selective_wait_for(
+            fut: object, *, timeout: float | None = None
+        ) -> object:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:  # first_response wait
+                raise asyncio.CancelledError()
+            return await real_wait_for(fut, timeout=timeout)
+
+        monkeypatch.setattr(asyncio, "wait_for", selective_wait_for)
+
+        mock_session_event_type = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_session_event_type
+                ),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            await api.generate(
+                input=[ChatMessageUser(content="Hi")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        mock_client.delete_session.assert_awaited_once_with("sess-cancel-2")
+
+
+# ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 class TestCopilotRegistration:

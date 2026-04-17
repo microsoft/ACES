@@ -487,6 +487,13 @@ class CopilotModelAPI(ModelAPI):
                     response_data = await asyncio.wait_for(
                         first_response, timeout=self._timeout
                     )
+                except asyncio.CancelledError:
+                    logger.warning(
+                        "Copilot generate cancelled (likely time-limit exceeded)"
+                    )
+                    response_data = None
+                    # Do NOT re-raise — return empty output so the eval can
+                    # proceed to scoring instead of leaving the event loop dead.
                 except asyncio.TimeoutError:
                     logger.warning(
                         "Copilot SDK response timed out after %ds",
@@ -520,7 +527,7 @@ class CopilotModelAPI(ModelAPI):
                 events = await session.get_messages()
                 usage = _extract_usage(events)
                 del events
-            except Exception:
+            except (asyncio.CancelledError, Exception):
                 logger.debug("Failed to retrieve usage from session", exc_info=True)
 
             result = _sdk_response_to_model_output(
@@ -542,11 +549,13 @@ class CopilotModelAPI(ModelAPI):
             return result
         finally:
             try:
+                # Use shield to prevent nested cancellation from creating
+                # orphaned timer handles in the event loop
                 await asyncio.wait_for(
-                    client.delete_session(session.session_id),
+                    asyncio.shield(client.delete_session(session.session_id)),
                     timeout=_SESSION_DELETE_TIMEOUT,
                 )
-            except Exception:
+            except (asyncio.CancelledError, Exception):
                 logger.debug(
                     "Failed to delete Copilot session %s",
                     session.session_id,

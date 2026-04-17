@@ -148,7 +148,7 @@ HYENAS_RUNTIME = RuntimeSpec(
     },
     pre_invoke_hook=hyenas_pre_invoke,
     post_invoke_hook=hyenas_post_invoke,
-    timeout=3600,
+    timeout=86400,  # 24h safety net; eval's --time-limit provides the real bound
     port_base=3000,
 )
 

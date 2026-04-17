@@ -79,7 +79,7 @@ class TestHyenasRuntimeSpec:
     def test_timeout(self) -> None:
         from saber.agents.registry.firstparty.runtimes.hyenas import HYENAS_RUNTIME
 
-        assert HYENAS_RUNTIME.timeout == 3600
+        assert HYENAS_RUNTIME.timeout == 86400
 
     def test_no_dead_env_vars(self) -> None:
         """HYENAS_STAGES and HYENAS_NO_COPILOT should NOT exist."""
