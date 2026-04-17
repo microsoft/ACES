@@ -782,3 +782,79 @@ class TestBuildMetadataPromotion:
         )
         metadata = _build_metadata(task, {})
         assert metadata["title"] == "Promo"  # original preserved
+
+
+# ── _build_metadata repo_tarball_url → repo_path resolution ─────────
+
+
+class TestBuildMetadataRepoTarballResolution:
+    """Tests for resolving repo_tarball_url to repo_path at config time."""
+
+    def test_repo_tarball_url_resolved_to_repo_path(self, tmp_path: Path) -> None:
+        """When initial_context has repo_tarball_url AND the cached file exists, metadata
+        should contain repo_path pointing to the cached file."""
+        cached = tmp_path / "data" / "repos" / "task_abc.tar.gz"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b"fake tarball")
+
+        task = TaskConfig(
+            task_id="task_abc",
+            title="Repo Task",
+            description="desc",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                repo_tarball_url="https://example.com/repo.tar.gz",
+            ),
+        )
+        metadata = _build_metadata(task, {}, domain_root=tmp_path)
+        assert metadata["repo_path"] == str(cached)
+
+    def test_repo_tarball_url_not_resolved_when_no_cached_file(self, tmp_path: Path) -> None:
+        """When cached file doesn't exist, no repo_path should be added."""
+        task = TaskConfig(
+            task_id="task_missing",
+            title="Repo Task",
+            description="desc",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                repo_tarball_url="https://example.com/repo.tar.gz",
+            ),
+        )
+        metadata = _build_metadata(task, {}, domain_root=tmp_path)
+        assert "repo_path" not in metadata
+        # repo_tarball_url should still be promoted from initial_context
+        assert metadata["repo_tarball_url"] == "https://example.com/repo.tar.gz"
+
+    def test_repo_path_not_overwritten_by_resolution(self, tmp_path: Path) -> None:
+        """If initial_context already has repo_path, the converter shouldn't overwrite it."""
+        cached = tmp_path / "data" / "repos" / "task_preexist.tar.gz"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b"fake tarball")
+
+        task = TaskConfig(
+            task_id="task_preexist",
+            title="Repo Task",
+            description="desc",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                repo_tarball_url="https://example.com/repo.tar.gz",
+                repo_path="/existing/path/repo.tar.gz",
+            ),
+        )
+        metadata = _build_metadata(task, {}, domain_root=tmp_path)
+        assert metadata["repo_path"] == "/existing/path/repo.tar.gz"
+
+    def test_repo_tarball_url_not_resolved_without_domain_root(self) -> None:
+        """Without domain_root, repo_tarball_url is just promoted as-is."""
+        task = TaskConfig(
+            task_id="task_no_root",
+            title="Repo Task",
+            description="desc",
+            prompts=_minimal_prompts(),
+            initial_context=InitialContext(
+                repo_tarball_url="https://example.com/repo.tar.gz",
+            ),
+        )
+        metadata = _build_metadata(task, {})
+        assert "repo_path" not in metadata
+        assert metadata["repo_tarball_url"] == "https://example.com/repo.tar.gz"

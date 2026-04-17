@@ -17,7 +17,11 @@ from saber.tools.registry import ResolvedTools, ToolRegistry
 logger = get_logger(__name__)
 
 # Re-export so existing imports (tests, etc.) continue to work.
-__all__ = ["TOOL_CALL_LIMIT_MESSAGE", "create_saber_solver"]
+__all__ = ["FIRSTPARTY_METADATA_KEYS", "TOOL_CALL_LIMIT_MESSAGE", "create_saber_solver"]
+
+# Metadata keys bridged to firstparty solver via store().
+# Matches _METADATA_KEYS_TO_BRIDGE in saber.agents.registry.firstparty.solver.
+FIRSTPARTY_METADATA_KEYS = frozenset({"repo_tarball", "repo_path", "repo_tarball_url", "task_id"})
 
 # Agent capabilities — gates which kwargs are forwarded to each agent.
 # Unknown agents fall back to the default AgentCapabilities() (supports_tools=True).
@@ -25,6 +29,7 @@ AGENT_CAPABILITIES: dict[str, AgentCapabilities] = {
     "react": AgentCapabilities(supports_tools=True),
     "copilot": AgentCapabilities(supports_tools=True),
     "claude_code": AgentCapabilities(supports_tools=True),
+    "firstparty": AgentCapabilities(supports_tools=False),
 }
 
 
@@ -60,6 +65,19 @@ def create_saber_solver(
             metadata = state.metadata or {}
             instruction = metadata.get("instruction_prompt") or ""
             assistant = metadata.get("assistant_prompt") or ""
+
+            # Stash metadata for firstparty solver — AgentState (used inside @agent)
+            # has no .metadata attribute, so we bridge via store().
+            from inspect_ai.util import store as get_store
+
+            get_store().set(
+                "firstparty_sample_metadata",
+                {
+                    k: str(v)
+                    for k, v in metadata.items()
+                    if k in FIRSTPARTY_METADATA_KEYS and v is not None
+                },
+            )
 
             # Build agent kwargs
             agent_kwargs: AgentPromptKwargs = {

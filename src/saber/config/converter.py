@@ -72,7 +72,7 @@ def _task_to_sample(
             ChatMessageUser(content=task.description),
         ],
         target=_extract_target(task),
-        metadata=_build_metadata(task, rendered_prompts),
+        metadata=_build_metadata(task, rendered_prompts, domain_root=domain_root),
         sandbox=_resolve_sandbox(task, domain_root),
         files=_resolve_files(task, domain_root),
         setup=task.setup,
@@ -159,7 +159,12 @@ def _resolve_files(task: TaskConfig, domain_root: Path) -> dict[str, str]:
     return {dest: str(domain_root / source) for dest, source in task.initial_files.items()}
 
 
-def _build_metadata(task: TaskConfig, rendered_prompts: dict[str, str]) -> dict[str, object]:
+def _build_metadata(
+    task: TaskConfig,
+    rendered_prompts: dict[str, str],
+    *,
+    domain_root: Path | None = None,
+) -> dict[str, object]:
     """Build the metadata dictionary carried through to inspect_ai scorers.
 
     Includes both prompt *paths* (for reference) and *rendered* prompt strings
@@ -169,6 +174,9 @@ def _build_metadata(task: TaskConfig, rendered_prompts: dict[str, str]) -> dict[
         task: The task configuration.
         rendered_prompts: Mapping of prompt name to rendered string
             (from ``PromptRenderer.render_all_prompts``).
+        domain_root: Root directory of the domain. When provided and
+            ``repo_tarball_url`` is present in initial_context, the
+            converter attempts to resolve it to a local ``repo_path``.
 
     Returns:
         A metadata dictionary with all task configuration fields.
@@ -201,5 +209,13 @@ def _build_metadata(task: TaskConfig, rendered_prompts: dict[str, str]) -> dict[
     for key, value in ctx_dump.items():
         if isinstance(value, str) and key not in common:
             common[key] = value
+
+    # If repo_tarball_url is present and a cached tarball exists, resolve to repo_path
+    if "repo_tarball_url" in common and "repo_path" not in common:
+        task_id = str(common.get("task_id", ""))
+        if task_id and domain_root is not None:
+            cached = domain_root / "data" / "repos" / f"{task_id}.tar.gz"
+            if cached.is_file():
+                common["repo_path"] = str(cached)
 
     return common
