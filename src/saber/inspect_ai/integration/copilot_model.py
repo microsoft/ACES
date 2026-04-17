@@ -297,7 +297,7 @@ class CopilotModelAPI(ModelAPI):
                 ``GITHUB_TOKEN`` env var, then ``gh`` CLI auth.
             config: Generation configuration.
             **model_args: Additional keyword arguments.  Recognised keys:
-                ``timeout`` (seconds, default ``"600"``).
+                ``timeout`` (seconds, default ``"300"``).
 
         Raises:
             RuntimeError: If no authentication source is available.
@@ -305,7 +305,7 @@ class CopilotModelAPI(ModelAPI):
         super().__init__(
             model_name, base_url, api_key, [], config or GenerateConfig()
         )
-        self._timeout = int(model_args.get("timeout", "600"))
+        self._timeout = int(model_args.get("timeout", "300"))
 
         token = api_key or os.environ.get("GITHUB_TOKEN")
         if not token:

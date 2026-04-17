@@ -340,7 +340,7 @@ class TestCopilotModelAPIInit:
     def test_init_with_github_token_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "test-token")
         api = CopilotModelAPI(model_name="gpt-4o")
-        assert api._timeout == 120
+        assert api._timeout == 300
         assert CopilotModelAPI._github_token == "test-token"
         assert CopilotModelAPI._client_refcount == 1
 
@@ -348,7 +348,7 @@ class TestCopilotModelAPIInit:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         api = CopilotModelAPI(model_name="gpt-4o", api_key="my-key")
         assert CopilotModelAPI._github_token == "my-key"
-        assert api._timeout == 120
+        assert api._timeout == 300
 
     def test_init_custom_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "test-token")
@@ -371,7 +371,7 @@ class TestCopilotModelAPIInit:
         with patch("shutil.which", return_value="/usr/bin/gh"):
             api = CopilotModelAPI(model_name="gpt-4o")
         assert CopilotModelAPI._github_token is None
-        assert api._timeout == 120
+        assert api._timeout == 300
 
     def test_init_increments_refcount(
         self, monkeypatch: pytest.MonkeyPatch
