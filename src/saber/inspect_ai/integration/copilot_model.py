@@ -3,16 +3,32 @@
 Pure conversion functions and CopilotModelAPI class for routing inference
 through GitHub's Copilot infrastructure via the Python Copilot SDK.
 SDK objects are accessed via ``getattr``/``hasattr`` to avoid hard imports.
+
+IMPORTANT: The SDK is used as a PURE INFERENCE ENGINE. Built-in tools
+(bash, file search, etc.) are disabled via ``available_tools=[]`` to
+prevent the SDK CLI from executing tools on the host machine.  The
+``send()`` + first-response pattern captures the model's first
+``AssistantMessageData`` and returns immediately — before the SDK's
+agent loop can execute any tools.
 """
 
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import json
 import os
 import shutil
+import sys
+import time
 from dataclasses import dataclass
 from typing import ClassVar
+
+# Enable faulthandler for debugging — prints thread tracebacks on SIGUSR1
+faulthandler.enable()
+if hasattr(faulthandler, "register"):
+    import signal
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 from inspect_ai.model import (
     ChatCompletionChoice,
@@ -30,6 +46,9 @@ from inspect_ai.tool import ToolCall, ToolChoice, ToolInfo
 from saber.logging import get_logger
 
 logger = get_logger(__name__)
+
+_SESSION_DELETE_TIMEOUT = 10  # seconds to wait for session cleanup
+_CLIENT_STOP_TIMEOUT = 15  # seconds to wait for SDK subprocess shutdown
 
 
 @dataclass(frozen=True)
@@ -259,6 +278,7 @@ class CopilotModelAPI(ModelAPI):
     _client_lock: ClassVar[asyncio.Lock | None] = None
     _client_refcount: ClassVar[int] = 0
     _github_token: ClassVar[str | None] = None
+    _generate_semaphore: ClassVar[asyncio.Semaphore | None] = None
 
     def __init__(
         self,
@@ -277,7 +297,7 @@ class CopilotModelAPI(ModelAPI):
                 ``GITHUB_TOKEN`` env var, then ``gh`` CLI auth.
             config: Generation configuration.
             **model_args: Additional keyword arguments.  Recognised keys:
-                ``timeout`` (seconds, default ``"120"``).
+                ``timeout`` (seconds, default ``"600"``).
 
         Raises:
             RuntimeError: If no authentication source is available.
@@ -285,7 +305,7 @@ class CopilotModelAPI(ModelAPI):
         super().__init__(
             model_name, base_url, api_key, [], config or GenerateConfig()
         )
-        self._timeout = int(model_args.get("timeout", "120"))
+        self._timeout = int(model_args.get("timeout", "600"))
 
         token = api_key or os.environ.get("GITHUB_TOKEN")
         if not token:
@@ -321,7 +341,8 @@ class CopilotModelAPI(ModelAPI):
                 else SubprocessConfig()
             )
             client = CopilotClient(subprocess_config)
-            cls._client = await client.__aenter__()
+            await client.start()
+            cls._client = client
             return cls._client
 
     async def generate(
@@ -331,60 +352,205 @@ class CopilotModelAPI(ModelAPI):
         tool_choice: ToolChoice,
         config: GenerateConfig,
     ) -> ModelOutput:
-        """Generate a response using the Copilot SDK.
+        """Generate a single-turn response using the Copilot SDK.
 
-        Creates a new session per call, sends the prompt, extracts
-        tool calls and usage, then cleans up the session.
+        Creates a new session per call with all built-in tools disabled
+        (``available_tools=[]``).  Uses ``send()`` + event listener to
+        capture the first ``AssistantMessageData`` and return immediately,
+        preventing the SDK's agent loop from executing tools on the host.
 
         Args:
             input: Conversation history as chat messages.
-            tools: Available tools for the model.
+            tools: Available tools for the model (passed as definitions
+                so the model can propose tool calls, but never executed).
             tool_choice: Tool selection strategy.
             config: Generation configuration.
 
         Returns:
             A ``ModelOutput`` with the assistant response and usage data.
         """
+        t_start = time.monotonic()
+        # Serialize session creation — the SDK subprocess can't handle
+        # many concurrent sessions.
+        if CopilotModelAPI._generate_semaphore is None:
+            CopilotModelAPI._generate_semaphore = asyncio.Semaphore(1)
+        await CopilotModelAPI._generate_semaphore.acquire()
+        t_sem = time.monotonic()
+        if t_sem - t_start > 0.1:
+            logger.info(
+                "Copilot generate: waited %.1fs for semaphore",
+                t_sem - t_start,
+            )
+        try:
+            return await self._generate_impl(input, tools, tool_choice, config, t_start)
+        finally:
+            CopilotModelAPI._generate_semaphore.release()
+
+    async def _generate_impl(
+        self,
+        input: list[ChatMessage],
+        tools: list[ToolInfo],
+        tool_choice: ToolChoice,
+        config: GenerateConfig,
+        t_start: float,
+    ) -> ModelOutput:
+        """Internal generate implementation (runs under semaphore)."""
         client = await self._get_or_create_client()
+        t_client = time.monotonic()
+        logger.info(
+            "Copilot generate: client ready (%.1fs)",
+            t_client - t_start,
+        )
 
-        from copilot.session import PermissionHandler  # type: ignore[import-untyped]
+        from copilot import PermissionHandler  # type: ignore[import-untyped]
+        from copilot.generated.session_events import (  # type: ignore[import-untyped]
+            SessionEventType,
+        )
 
+        # Register tools so the model can see definitions and propose
+        # tool_calls, but use _noop_tool_handler to prevent execution.
         sdk_tools = _convert_tools_for_sdk(tools) if tools else []
 
-        session = await client.create_session(
-            model=self.model_name,
-            on_permission_request=PermissionHandler.approve_all,
-            tools=sdk_tools,
+        try:
+            session = await asyncio.wait_for(
+                client.create_session(
+                    model=self.model_name,
+                    on_permission_request=PermissionHandler.approve_all,
+                    tools=sdk_tools,
+                    available_tools=[],  # Disable ALL built-in tools
+                ),
+                timeout=60,  # Session creation should be fast
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning("Copilot create_session failed: %s", exc)
+            return _empty_output(self.model_name)
+        t_session = time.monotonic()
+        logger.info(
+            "Copilot generate: session created (%.1fs), model=%s, tools=%d",
+            t_session - t_client,
+            self.model_name,
+            len(sdk_tools),
         )
 
         try:
             prompt = _messages_to_prompt(input)
+            logger.info(
+                "Copilot generate: prompt length=%d chars",
+                len(prompt),
+            )
 
+            # Use send() + event listener to capture the FIRST assistant
+            # message, then return immediately — before the SDK can execute
+            # any tools.  This makes the SDK a pure inference engine.
+            loop = asyncio.get_event_loop()
+            first_response: asyncio.Future[object | None] = loop.create_future()
+
+            def _on_event(event: object) -> None:
+                if first_response.done():
+                    return
+                event_type = getattr(event, "type", None)
+                data = getattr(event, "data", None)
+
+                # Debug: log events with content
+                if data is not None:
+                    c = getattr(data, "content", None)
+                    tr = getattr(data, "tool_requests", None)
+                    if c or tr:
+                        logger.debug(
+                            "Copilot event: type=%s, content_len=%d, tool_requests=%d",
+                            event_type,
+                            len(c) if c else 0,
+                            len(tr) if tr else 0,
+                        )
+
+                if event_type == SessionEventType.ASSISTANT_MESSAGE:
+                    if not first_response.done():
+                        first_response.set_result(data)
+                elif event_type == SessionEventType.SESSION_ERROR:
+                    msg = getattr(data, "message", None) or str(data)
+                    if not first_response.done():
+                        first_response.set_exception(RuntimeError(f"Copilot session error: {msg}"))
+                elif event_type == SessionEventType.SESSION_IDLE:
+                    if not first_response.done():
+                        first_response.set_result(None)
+
+            unsubscribe = session.on(_on_event)
             try:
-                response = await session.send_and_wait(
-                    prompt, timeout=self._timeout
+                t_send = time.monotonic()
+                await session.send(prompt)
+                logger.info(
+                    "Copilot generate: prompt sent (%.1fs), waiting for response...",
+                    t_send - t_session,
                 )
-            except TimeoutError:
-                logger.warning(
-                    "Copilot SDK send_and_wait timed out after %ds",
-                    self._timeout,
-                )
-                response = None
 
-            response_data = _extract_assistant_data(response)
+                try:
+                    response_data = await asyncio.wait_for(
+                        first_response, timeout=self._timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Copilot SDK response timed out after %ds",
+                        self._timeout,
+                    )
+                    response_data = None
+                except RuntimeError as exc:
+                    # SESSION_ERROR events set_exception with RuntimeError.
+                    logger.warning(
+                        "Copilot session error: %s — returning empty response",
+                        exc,
+                    )
+                    response_data = None
+            finally:
+                unsubscribe()
 
-            events = await session.get_messages()
-            usage = _extract_usage(events)
+            t_response = time.monotonic()
+            response_content = getattr(response_data, "content", None) if response_data else None
+            response_trs = getattr(response_data, "tool_requests", None) if response_data else None
+            logger.info(
+                "Copilot generate: response received (%.1fs), "
+                "content_len=%s, tool_requests=%s, data_type=%s",
+                t_response - t_send,
+                len(response_content) if response_content else 0,
+                len(response_trs) if response_trs else 0,
+                type(response_data).__name__ if response_data else "None",
+            )
 
-            return _sdk_response_to_model_output(
+            usage: ModelUsage | None = None
+            try:
+                events = await session.get_messages()
+                usage = _extract_usage(events)
+                del events
+            except Exception:
+                logger.debug("Failed to retrieve usage from session", exc_info=True)
+
+            result = _sdk_response_to_model_output(
                 response_data, self.model_name, usage
             )
+            t_done = time.monotonic()
+            logger.info(
+                "Copilot generate: total=%.1fs (client=%.1fs, session=%.1fs, "
+                "send=%.1fs, response=%.1fs, finalize=%.1fs), "
+                "usage=%s",
+                t_done - t_start,
+                t_client - t_start,
+                t_session - t_client,
+                t_send - t_session,
+                t_response - t_send,
+                t_done - t_response,
+                usage,
+            )
+            return result
         finally:
             try:
-                await client.delete_session(session.session_id)
+                await asyncio.wait_for(
+                    client.delete_session(session.session_id),
+                    timeout=_SESSION_DELETE_TIMEOUT,
+                )
             except Exception:
                 logger.debug(
-                    "Failed to delete Copilot session %s", session.session_id
+                    "Failed to delete Copilot session %s",
+                    session.session_id,
+                    exc_info=True,
                 )
 
     async def aclose(self) -> None:
@@ -395,9 +561,21 @@ class CopilotModelAPI(ModelAPI):
             and CopilotModelAPI._client is not None
         ):
             try:
-                await CopilotModelAPI._client.__aexit__(None, None, None)
+                await asyncio.wait_for(
+                    CopilotModelAPI._client.stop(),
+                    timeout=_CLIENT_STOP_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Copilot client stop timed out after %ds — force-killing",
+                    _CLIENT_STOP_TIMEOUT,
+                )
+                try:
+                    await CopilotModelAPI._client.force_stop()
+                except Exception:
+                    pass
             except Exception:
-                logger.debug("Error closing Copilot client", exc_info=True)
+                logger.warning("Error closing Copilot client", exc_info=True)
             finally:
                 CopilotModelAPI._client = None
                 CopilotModelAPI._client_refcount = 0
@@ -406,6 +584,39 @@ class CopilotModelAPI(ModelAPI):
 # ---------------------------------------------------------------------------
 # SDK helper functions
 # ---------------------------------------------------------------------------
+
+
+def _empty_output(model_name: str) -> ModelOutput:
+    """Return a minimal empty ModelOutput for error paths."""
+    return ModelOutput(
+        model=model_name,
+        choices=[
+            ChatCompletionChoice(
+                message=ChatMessageAssistant(content="", source="generate"),
+                stop_reason="unknown",
+            ),
+        ],
+    )
+
+
+async def _noop_tool_handler(invocation: object) -> object:
+    """Return an error result — tool execution is forbidden in pure-inference mode.
+
+    The SDK is used only for inference.  If the CLI somehow attempts to
+    execute a tool, we return a descriptive error rather than raising,
+    so the CLI can feed the error back to the model gracefully.
+    """
+    from copilot.tools import ToolResult  # type: ignore[import-untyped]
+
+    return ToolResult(
+        text_result_for_llm=(
+            "Tool execution is disabled in pure-inference mode. "
+            "Only the caller (e.g. Hyenas CLI) may execute tools."
+        ),
+        result_type="failure",
+        error="tool execution disabled",
+        tool_telemetry={},
+    )
 
 
 def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
@@ -421,37 +632,18 @@ def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
     """
     from copilot.tools import Tool as CopilotSdkTool  # type: ignore[import-untyped]
 
-    async def _noop_handler(invocation: object) -> object:
-        raise RuntimeError(
-            "Tool handler should not be called — "
-            "inspect_ai handles tool execution"
-        )
-
     sdk_tools: list[object] = []
     for tool_info in tools:
         tool_def = _tool_info_to_sdk_tool(tool_info)
         sdk_tool = CopilotSdkTool(
             name=tool_def.name,
             description=tool_def.description,
-            handler=_noop_handler,
+            handler=_noop_tool_handler,
             parameters=tool_def.parameters,
+            overrides_built_in_tool=True,
         )
         sdk_tools.append(sdk_tool)
     return sdk_tools
-
-
-def _extract_assistant_data(response: object | None) -> object | None:
-    """Extract ``AssistantMessageData`` from a ``SessionEvent``.
-
-    Args:
-        response: A ``SessionEvent`` or ``None``.
-
-    Returns:
-        The ``.data`` attribute of the event, or ``None``.
-    """
-    if response is None:
-        return None
-    return getattr(response, "data", response)
 
 
 @modelapi(name="copilot")  # type: ignore[misc]

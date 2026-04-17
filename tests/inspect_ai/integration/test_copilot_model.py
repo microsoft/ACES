@@ -694,6 +694,63 @@ class TestCopilotModelAPIGenerate:
         # Should succeed despite delete_session error
         assert output.choices[0].message.text == "OK"
 
+    async def test_generate_delete_session_timeout_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If delete_session hangs past timeout, generate should still return."""
+        import asyncio
+
+        api = self._make_api(monkeypatch)
+
+        async def _hang_forever(session_id: str) -> None:
+            await asyncio.sleep(999)
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "sess-6"
+        mock_session.send_and_wait = AsyncMock(
+            return_value=SimpleNamespace(
+                data=SimpleNamespace(content="OK", tool_requests=None)
+            )
+        )
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = _hang_forever
+
+        CopilotModelAPI._client = mock_client
+
+        # Use a very short timeout so the test doesn't actually wait
+        monkeypatch.setattr(
+            "saber.inspect_ai.integration.copilot_model._SESSION_DELETE_TIMEOUT",
+            0.05,
+        )
+
+        mock_permission_handler = MagicMock()
+        mock_permission_handler.approve_all = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.session": MagicMock(
+                    PermissionHandler=mock_permission_handler
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model import ChatMessageUser
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=[ChatMessageUser(content="Hi")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        # Should succeed despite session deletion timeout
+        assert output.choices[0].message.text == "OK"
+
 
 # ---------------------------------------------------------------------------
 # CopilotModelAPI.aclose
@@ -720,13 +777,13 @@ class TestCopilotModelAPIClose:
         assert CopilotModelAPI._client_refcount == 1
 
         mock_client = AsyncMock()
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.stop = AsyncMock()
         CopilotModelAPI._client = mock_client
 
         await api.aclose()
         assert CopilotModelAPI._client_refcount == 0
         assert CopilotModelAPI._client is None
-        mock_client.__aexit__.assert_awaited_once()
+        mock_client.stop.assert_awaited_once()
 
     async def test_aclose_client_exit_error_is_swallowed(
         self, monkeypatch: pytest.MonkeyPatch
@@ -735,7 +792,7 @@ class TestCopilotModelAPIClose:
         api = CopilotModelAPI(model_name="gpt-4o")
 
         mock_client = AsyncMock()
-        mock_client.__aexit__ = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_client.stop = AsyncMock(side_effect=RuntimeError("boom"))
         CopilotModelAPI._client = mock_client
 
         # Should not raise
@@ -752,6 +809,33 @@ class TestCopilotModelAPIClose:
 
         # Should not raise when client is None
         await api.aclose()
+        assert CopilotModelAPI._client_refcount == 0
+
+    async def test_aclose_stop_timeout_is_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If client.stop() hangs past timeout, aclose should still complete."""
+        import asyncio
+
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        api = CopilotModelAPI(model_name="gpt-4o")
+
+        async def _hang_forever() -> None:
+            await asyncio.sleep(999)
+
+        mock_client = AsyncMock()
+        mock_client.stop = _hang_forever
+        CopilotModelAPI._client = mock_client
+
+        # Patch the timeout to be very short so the test runs quickly
+        monkeypatch.setattr(
+            "saber.inspect_ai.integration.copilot_model._CLIENT_STOP_TIMEOUT",
+            0.05,
+        )
+
+        # Should not hang — the timeout should fire
+        await api.aclose()
+        assert CopilotModelAPI._client is None
         assert CopilotModelAPI._client_refcount == 0
 
 

@@ -17,6 +17,8 @@ logger = get_logger(__name__)
 
 _SANDBOX_TAR_PATH = "/tmp/repo.tar.gz"
 _WORKSPACE_DIR = "/workspace"
+_FINDINGS_DIR = "/output/.hyenas/findings"
+_FINDINGS_SCAN_DIR = "/output/.hyenas/scan"
 _FINDINGS_PATH = "/output/.hyenas/scan/findings.jsonl"
 
 
@@ -98,6 +100,75 @@ def _resolve_tar_bytes(metadata: dict[str, str]) -> bytes:
 
     msg = "metadata must contain 'repo_tarball' or 'repo_path'"
     raise ValueError(msg)
+
+
+async def consolidate_hyenas_findings(
+    sandbox: SandboxEnvironment,
+) -> int:
+    """Consolidate individual Hyenas finding JSON files into a single JSONL file.
+
+    Reads all ``*.json`` files from ``/output/.hyenas/findings/``, validates each
+    as a JSON object, and writes them as newline-delimited JSON to
+    ``/output/.hyenas/scan/findings.jsonl``.
+
+    Args:
+        sandbox: The sandbox environment to read from and write to.
+
+    Returns:
+        Number of findings consolidated.
+    """
+    result = await sandbox.exec(
+        ["find", _FINDINGS_DIR, "-name", "*.json", "-type", "f"]
+    )
+    if result.returncode != 0:
+        logger.warning(
+            "Could not list findings in %s (exit %d): %s",
+            _FINDINGS_DIR,
+            result.returncode,
+            result.stderr,
+        )
+        return 0
+
+    file_paths = [p for p in result.stdout.strip().splitlines() if p.strip()]
+    if not file_paths:
+        logger.warning("No JSON finding files found in %s", _FINDINGS_DIR)
+        return 0
+
+    valid_objects: list[str] = []
+    for path in file_paths:
+        try:
+            content = await sandbox.read_file(path.strip(), text=True)
+        except Exception:
+            logger.exception("Failed to read finding file %s", path)
+            continue
+        try:
+            obj = json.loads(content)
+        except json.JSONDecodeError:
+            logger.warning("Skipping invalid JSON in %s", path)
+            continue
+        if not isinstance(obj, dict):
+            logger.warning("Skipping non-object JSON in %s", path)
+            continue
+        # Re-serialize to ensure compact single-line JSON
+        valid_objects.append(json.dumps(obj))
+
+    if not valid_objects:
+        logger.warning("No valid JSON findings to consolidate")
+        return 0
+
+    mkdir_result = await sandbox.exec(["mkdir", "-p", _FINDINGS_SCAN_DIR])
+    if mkdir_result.returncode != 0:
+        logger.warning(
+            "Failed to create scan directory %s: %s",
+            _FINDINGS_SCAN_DIR,
+            mkdir_result.stderr,
+        )
+        return 0
+    jsonl_content = "\n".join(valid_objects) + "\n"
+    await sandbox.write_file(_FINDINGS_PATH, jsonl_content)
+
+    logger.info("Consolidated %d findings into %s", len(valid_objects), _FINDINGS_PATH)
+    return len(valid_objects)
 
 
 async def extract_hyenas_findings(

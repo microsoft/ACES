@@ -127,6 +127,7 @@ def create_agent(
 
                     if result.returncode != 0:
                         stderr = result.stderr or ""
+                        stdout = result.stdout or ""
                         diagnostics = parse_bridge_stderr(stderr)
                         if diagnostics:
                             logger.error("Bridge error:\n%s", diagnostics)
@@ -134,8 +135,14 @@ def create_agent(
                             "1P agent '%s' exited %d: %s",
                             spec.name,
                             result.returncode,
-                            stderr[:500],
+                            stderr[:2000],
                         )
+                        if stdout:
+                            logger.warning(
+                                "1P agent '%s' stdout:\n%s",
+                                spec.name,
+                                stdout[:2000],
+                            )
 
                     # Post-invoke hook
                     if spec.post_invoke_hook is not None:

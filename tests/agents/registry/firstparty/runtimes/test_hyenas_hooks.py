@@ -11,8 +11,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from saber.agents.registry.firstparty.runtimes.hyenas_models import HyenasFinding
-
 
 def _make_tar_gz_bytes(file_name: str = "hello.txt", content: bytes = b"hello") -> bytes:
     """Create a minimal .tar.gz archive in memory and return raw bytes."""
@@ -321,3 +319,241 @@ class TestExtractHyenasFindings:
         assert len(findings) == 2
         assert findings[0].file_path == "x.py"
         assert findings[1].file_path == "y.py"
+
+
+# ── consolidate_hyenas_findings ───────────────────────────────────────
+
+
+class TestConsolidateHyenasFindings:
+    """Tests for consolidate_hyenas_findings()."""
+
+    @pytest.mark.asyncio
+    async def test_consolidate_valid_findings(self, mock_sandbox: AsyncMock) -> None:
+        """Two individual JSON files are consolidated into a JSONL file."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        finding_a = json.dumps({"file_path": "a.py", "cwe_id": "CWE-79"})
+        finding_b = json.dumps({"file_path": "b.py", "cwe_id": "CWE-89"})
+
+        # find returns two file paths
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = "/output/.hyenas/findings/a.json\n/output/.hyenas/findings/b.json\n"
+        find_result.stderr = ""
+
+        # mkdir returns success
+        mkdir_result = MagicMock()
+        mkdir_result.returncode = 0
+        mkdir_result.stdout = ""
+        mkdir_result.stderr = ""
+
+        mock_sandbox.exec.side_effect = [find_result, mkdir_result]
+        mock_sandbox.read_file.side_effect = [finding_a, finding_b]
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 2
+        mock_sandbox.write_file.assert_awaited_once()
+        written_path = mock_sandbox.write_file.await_args[0][0]
+        written_content = mock_sandbox.write_file.await_args[0][1]
+        assert written_path == "/output/.hyenas/scan/findings.jsonl"
+        lines = written_content.strip().split("\n")
+        assert len(lines) == 2
+        assert json.loads(lines[0])["file_path"] == "a.py"
+        assert json.loads(lines[1])["file_path"] == "b.py"
+
+    @pytest.mark.asyncio
+    async def test_consolidate_empty_dir(self, mock_sandbox: AsyncMock) -> None:
+        """No JSON files in findings dir returns 0 and writes nothing."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = ""
+        find_result.stderr = ""
+        mock_sandbox.exec.return_value = find_result
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 0
+        mock_sandbox.write_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_consolidate_findings_dir_missing(self, mock_sandbox: AsyncMock) -> None:
+        """find command fails (directory missing) returns 0."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        find_result = MagicMock()
+        find_result.returncode = 1
+        find_result.stdout = ""
+        find_result.stderr = "No such file or directory"
+        mock_sandbox.exec.return_value = find_result
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 0
+        mock_sandbox.write_file.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_consolidate_invalid_json_skipped(self, mock_sandbox: AsyncMock) -> None:
+        """Invalid JSON files are skipped; only valid entries are written."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        valid_finding = json.dumps({"file_path": "ok.py", "cwe_id": "CWE-79"})
+        invalid_content = "NOT VALID JSON {{{"
+
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = "/output/.hyenas/findings/ok.json\n/output/.hyenas/findings/bad.json\n"
+        find_result.stderr = ""
+
+        mkdir_result = MagicMock()
+        mkdir_result.returncode = 0
+        mkdir_result.stdout = ""
+        mkdir_result.stderr = ""
+
+        mock_sandbox.exec.side_effect = [find_result, mkdir_result]
+        mock_sandbox.read_file.side_effect = [valid_finding, invalid_content]
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 1
+        written_content = mock_sandbox.write_file.await_args[0][1]
+        lines = written_content.strip().split("\n")
+        assert len(lines) == 1
+        assert json.loads(lines[0])["file_path"] == "ok.py"
+
+    @pytest.mark.asyncio
+    async def test_consolidate_creates_scan_dir(self, mock_sandbox: AsyncMock) -> None:
+        """mkdir -p is called to create the scan directory."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        finding = json.dumps({"file_path": "x.py"})
+
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = "/output/.hyenas/findings/x.json\n"
+        find_result.stderr = ""
+
+        mkdir_result = MagicMock()
+        mkdir_result.returncode = 0
+        mkdir_result.stdout = ""
+        mkdir_result.stderr = ""
+
+        mock_sandbox.exec.side_effect = [find_result, mkdir_result]
+        mock_sandbox.read_file.return_value = finding
+
+        await consolidate_hyenas_findings(mock_sandbox)
+
+        # Second exec call should be mkdir -p for the scan dir
+        calls = mock_sandbox.exec.await_args_list
+        assert calls[1].args[0] == ["mkdir", "-p", "/output/.hyenas/scan"]
+
+    @pytest.mark.asyncio
+    async def test_consolidate_read_file_exception(self, mock_sandbox: AsyncMock) -> None:
+        """read_file raising on one file still consolidates the rest."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        valid_finding = json.dumps({"file_path": "good.py", "cwe_id": "CWE-22"})
+
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = (
+            "/output/.hyenas/findings/good.json\n"
+            "/output/.hyenas/findings/gone.json\n"
+        )
+        find_result.stderr = ""
+
+        mkdir_result = MagicMock()
+        mkdir_result.returncode = 0
+        mkdir_result.stdout = ""
+        mkdir_result.stderr = ""
+
+        mock_sandbox.exec.side_effect = [find_result, mkdir_result]
+        mock_sandbox.read_file.side_effect = [
+            valid_finding,
+            FileNotFoundError("deleted between find and read"),
+        ]
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 1
+        written_content = mock_sandbox.write_file.await_args[0][1]
+        lines = written_content.strip().split("\n")
+        assert len(lines) == 1
+        assert json.loads(lines[0])["file_path"] == "good.py"
+
+    @pytest.mark.asyncio
+    async def test_consolidate_non_dict_json_skipped(self, mock_sandbox: AsyncMock) -> None:
+        """JSON that is not a dict (array, string, number) is skipped."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        valid_finding = json.dumps({"file_path": "ok.py"})
+        array_json = json.dumps([{"file_path": "sneaky.py"}])
+        string_json = json.dumps("just a string")
+
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = (
+            "/output/.hyenas/findings/ok.json\n"
+            "/output/.hyenas/findings/array.json\n"
+            "/output/.hyenas/findings/string.json\n"
+        )
+        find_result.stderr = ""
+
+        mkdir_result = MagicMock()
+        mkdir_result.returncode = 0
+        mkdir_result.stdout = ""
+        mkdir_result.stderr = ""
+
+        mock_sandbox.exec.side_effect = [find_result, mkdir_result]
+        mock_sandbox.read_file.side_effect = [valid_finding, array_json, string_json]
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 1
+        written_content = mock_sandbox.write_file.await_args[0][1]
+        lines = written_content.strip().split("\n")
+        assert len(lines) == 1
+        assert json.loads(lines[0])["file_path"] == "ok.py"
+
+    @pytest.mark.asyncio
+    async def test_consolidate_mkdir_failure(self, mock_sandbox: AsyncMock) -> None:
+        """mkdir -p failure returns 0 and does not write JSONL."""
+        from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+            consolidate_hyenas_findings,
+        )
+
+        finding = json.dumps({"file_path": "x.py"})
+
+        find_result = MagicMock()
+        find_result.returncode = 0
+        find_result.stdout = "/output/.hyenas/findings/x.json\n"
+        find_result.stderr = ""
+
+        mkdir_result = MagicMock()
+        mkdir_result.returncode = 1
+        mkdir_result.stdout = ""
+        mkdir_result.stderr = "Permission denied"
+
+        mock_sandbox.exec.side_effect = [find_result, mkdir_result]
+        mock_sandbox.read_file.return_value = finding
+
+        count = await consolidate_hyenas_findings(mock_sandbox)
+
+        assert count == 0
+        mock_sandbox.write_file.assert_not_awaited()

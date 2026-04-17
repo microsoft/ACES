@@ -15,6 +15,7 @@ from saber.agents.registry.firstparty.runtimes.hyenas_config import (
     generate_hyenas_config,
 )
 from saber.agents.registry.firstparty.runtimes.hyenas_hooks import (
+    consolidate_hyenas_findings,
     extract_hyenas_findings,
     inject_target_repo,
 )
@@ -104,6 +105,7 @@ async def hyenas_post_invoke(
     Returns:
         The env dict (findings logged, not returned via env).
     """
+    await consolidate_hyenas_findings(sandbox)
     findings = await extract_hyenas_findings(sandbox)
     if findings:
         logger.info("Extracted %d findings from Hyenas scan", len(findings))
