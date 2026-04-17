@@ -278,7 +278,6 @@ class CopilotModelAPI(ModelAPI):
     _client_lock: ClassVar[asyncio.Lock | None] = None
     _client_refcount: ClassVar[int] = 0
     _github_token: ClassVar[str | None] = None
-    _generate_semaphore: ClassVar[asyncio.Semaphore | None] = None
 
     def __init__(
         self,
@@ -370,21 +369,7 @@ class CopilotModelAPI(ModelAPI):
             A ``ModelOutput`` with the assistant response and usage data.
         """
         t_start = time.monotonic()
-        # Serialize session creation — the SDK subprocess can't handle
-        # many concurrent sessions.
-        if CopilotModelAPI._generate_semaphore is None:
-            CopilotModelAPI._generate_semaphore = asyncio.Semaphore(1)
-        await CopilotModelAPI._generate_semaphore.acquire()
-        t_sem = time.monotonic()
-        if t_sem - t_start > 0.1:
-            logger.info(
-                "Copilot generate: waited %.1fs for semaphore",
-                t_sem - t_start,
-            )
-        try:
-            return await self._generate_impl(input, tools, tool_choice, config, t_start)
-        finally:
-            CopilotModelAPI._generate_semaphore.release()
+        return await self._generate_impl(input, tools, tool_choice, config, t_start)
 
     async def _generate_impl(
         self,
@@ -394,7 +379,7 @@ class CopilotModelAPI(ModelAPI):
         config: GenerateConfig,
         t_start: float,
     ) -> ModelOutput:
-        """Internal generate implementation (runs under semaphore)."""
+        """Internal generate implementation."""
         client = await self._get_or_create_client()
         t_client = time.monotonic()
         logger.info(

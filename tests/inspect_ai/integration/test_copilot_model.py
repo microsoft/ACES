@@ -856,7 +856,6 @@ class TestCopilotModelAPICancelledError:
         import asyncio
 
         api = self._make_api(monkeypatch)
-        CopilotModelAPI._generate_semaphore = None
 
         mock_session = MagicMock()
         mock_session.session_id = "sess-cancel-1"
@@ -915,7 +914,6 @@ class TestCopilotModelAPICancelledError:
         import asyncio
 
         api = self._make_api(monkeypatch)
-        CopilotModelAPI._generate_semaphore = None
 
         mock_session = MagicMock()
         mock_session.session_id = "sess-cancel-2"
