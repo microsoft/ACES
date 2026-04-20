@@ -465,7 +465,8 @@ class CopilotModelAPI(ModelAPI):
         )
 
         # Register tools so the model can see definitions and propose
-        # tool_calls, but use _noop_tool_handler to prevent execution.
+        # tool_calls.  handler=None prevents the SDK from dispatching
+        # EXTERNAL_TOOL_REQUESTED events to our process.
         sdk_tools = _convert_tools_for_sdk(tools) if tools else []
 
         try:
@@ -473,6 +474,10 @@ class CopilotModelAPI(ModelAPI):
                 client.create_session(
                     model=self.model_name,
                     on_permission_request=PermissionHandler.approve_all,
+                    provider={
+                        "type": "copilot",
+                        "wire_api": "responses",
+                    },
                     tools=sdk_tools,
                     available_tools=[],  # Disable ALL built-in tools
                 ),
@@ -676,21 +681,19 @@ def _empty_output(model_name: str) -> ModelOutput:
 
 
 async def _noop_tool_handler(invocation: object) -> object:
-    """Return an error result — tool execution is forbidden in pure-inference mode.
+    """Return a benign success result — tool execution is handled externally.
 
-    The SDK is used only for inference.  If the CLI somehow attempts to
-    execute a tool, we return a descriptive error rather than raising,
-    so the CLI can feed the error back to the model gracefully.
+    The SDK is used only for inference.  If the SDK somehow dispatches a
+    tool execution event despite handler=None in the Tool definition, we
+    return a success result so the SDK does NOT feed an error back to the
+    model (which would cause retry loops and model confusion).
     """
     from copilot.tools import ToolResult  # type: ignore[import-untyped]
 
     return ToolResult(
-        text_result_for_llm=(
-            "Tool execution is disabled in pure-inference mode. "
-            "Only the caller (e.g. Hyenas CLI) may execute tools."
-        ),
-        result_type="failure",
-        error="tool execution disabled",
+        text_result_for_llm="OK",
+        result_type="success",
+        error=None,
         tool_telemetry={},
     )
 
@@ -711,10 +714,14 @@ def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
     sdk_tools: list[object] = []
     for tool_info in tools:
         tool_def = _tool_info_to_sdk_tool(tool_info)
+        # handler=None ensures the SDK's session._register_tools skips
+        # registration (it checks `if not tool.name or not tool.handler`),
+        # so _get_tool_handler returns None and EXTERNAL_TOOL_REQUESTED
+        # is ignored — no error is fed back to the model.
         sdk_tool = CopilotSdkTool(
             name=tool_def.name,
             description=tool_def.description,
-            handler=_noop_tool_handler,
+            handler=None,  # type: ignore[arg-type]
             parameters=tool_def.parameters,
             overrides_built_in_tool=True,
         )
