@@ -1238,7 +1238,8 @@ class TestMultiTurnSessionReuse:
     async def test_second_call_reuses_session(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Two generate() calls for the same conversation should reuse the session."""
+        """When turn 1 returns tool_calls the session is evicted and turn 2
+        creates a fresh session with the full text history."""
         api = self._make_api(monkeypatch)
 
         tool_requests_turn1 = [
@@ -1289,30 +1290,13 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
-            # Update response for turn 2
-            mock_session.send.reset_mock()
-            turn2_response = SimpleNamespace(
-                content="Found vulnerability in file1.py",
-                tool_requests=[],
+            # Update mock for turn 2 — new session created
+            # (session was evicted because turn 1 had tool_calls)
+            # Reuse the same event type so the patched SessionEventType matches
+            mock_session2 = self._make_session_with_event_type(
+                "sess-mt-2", "Found vulnerability in file1.py", mock_event_type
             )
-            captured_cb = None
-
-            def on2(callback: object) -> MagicMock:
-                nonlocal captured_cb
-                captured_cb = callback
-                return MagicMock()
-
-            mock_session.on = MagicMock(side_effect=on2)
-
-            async def send2(prompt: str) -> None:
-                event = SimpleNamespace(
-                    type=mock_event_type.ASSISTANT_MESSAGE,
-                    data=turn2_response,
-                )
-                if captured_cb is not None:
-                    captured_cb(event)
-
-            mock_session.send = AsyncMock(side_effect=send2)
+            mock_client.create_session = AsyncMock(return_value=mock_session2)
 
             # Turn 2
             output2 = await api.generate(
@@ -1322,12 +1306,14 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
-        # Session should have been created only ONCE
-        mock_client.create_session.assert_awaited_once()
+        # Session created TWICE (evicted after tool_calls)
+        assert mock_client.create_session.await_count == 1  # second call only
+        # delete_session called once for the evicted session
+        mock_client.delete_session.assert_awaited_once()
         # Both turns should produce valid output
         assert output1.choices[0].message.text == "Calling bash."
         assert output2.choices[0].message.text == "Found vulnerability in file1.py"
-        # Only one conversation should be cached
+        # No conversation should remain cached (turn 2 had no tool_calls so it IS cached)
         assert len(CopilotModelAPI._conversations) == 1
 
     async def test_different_conversations_get_different_sessions(
@@ -1814,7 +1800,8 @@ class TestConvertToolsForSdk:
     """Tests for _convert_tools_for_sdk tool handler registration."""
 
     def test_tools_have_no_handler(self) -> None:
-        """SDK tools should have handler=None so the session skips execution."""
+        """SDK tools should have _noop_tool_handler so the session responds to
+        EXTERNAL_TOOL_REQUESTED events and unblocks the CLI agent-loop."""
         from dataclasses import dataclass
 
         @dataclass
@@ -1837,7 +1824,7 @@ class TestConvertToolsForSdk:
             sdk_tools = _convert_tools_for_sdk(tools)
         assert len(sdk_tools) == 2
         for sdk_tool in sdk_tools:
-            assert sdk_tool.handler is None
+            assert sdk_tool.handler is _noop_tool_handler
 
     def test_tools_preserve_name_and_description(self) -> None:
         """SDK tools should have correct name and description."""

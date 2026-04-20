@@ -602,6 +602,12 @@ class CopilotModelAPI(ModelAPI):
         if sys_content:
             sys_config = {"mode": "replace", "content": sys_content}
 
+        # Whitelist ONLY the custom tools so the model receives their
+        # definitions in the API request.  available_tools=[] would tell
+        # the CLI to send *zero* tool definitions, forcing the model to
+        # fake tool calls as garbled text.
+        tool_names: list[str] = [t.name for t in sdk_tools]  # type: ignore[union-attr]
+
         try:
             session = await asyncio.wait_for(
                 client.create_session(  # type: ignore[union-attr]
@@ -609,7 +615,7 @@ class CopilotModelAPI(ModelAPI):
                     on_permission_request=PermissionHandler.approve_all,
                     system_message=sys_config,
                     tools=sdk_tools,
-                    available_tools=[],  # Disable ALL built-in tools
+                    available_tools=tool_names if tool_names else None,
                 ),
                 timeout=60,
             )
@@ -627,26 +633,73 @@ class CopilotModelAPI(ModelAPI):
             len(sdk_tools),
         )
 
-        # For the first turn, send only the user content (system is set via
-        # system_message config above).
-        prompt = _extract_first_user_content(input)
-        logger.info(
-            "Copilot generate [new]: first-turn prompt length=%d chars",
-            len(prompt),
+        # Determine the prompt to send.  On a true first turn the input
+        # only has system + user messages — send just the user content
+        # (system is set via system_message config).  When starting a
+        # fresh session for a continuation (e.g. after evicting a session
+        # that had tool_calls), serialize the full history so the model
+        # sees prior tool calls and results.
+        has_tool_history = any(
+            isinstance(m, (ChatMessageAssistant, ChatMessageTool))
+            and not (isinstance(m, ChatMessageAssistant) and m == input[0])
+            for m in input
         )
+        if has_tool_history:
+            # Full text serialization — skip system (already in system_message)
+            non_system = [m for m in input if m.role != "system"]
+            prompt = _messages_to_prompt(non_system)
+            logger.info(
+                "Copilot generate [new]: full-history prompt length=%d chars "
+                "(continuation via fresh session)",
+                len(prompt),
+            )
+        else:
+            prompt = _extract_first_user_content(input)
+            logger.info(
+                "Copilot generate [new]: first-turn prompt length=%d chars",
+                len(prompt),
+            )
 
         result = await self._send_and_collect(
             session, client, prompt, t_start, t_session, conv_key,
         )
 
-        # Cache conversation state — client stays out of pool
-        cls = type(self)
-        cls._conversations[conv_key] = _ConversationState(
-            session=session,
-            client=client,
-            messages_sent=len(input),
-            last_used=time.monotonic(),
+        # If the response contains tool_requests the SDK agent-loop is now
+        # processing noop handler results and the session is in a transient
+        # state.  Evict it so the next generate() for this conversation
+        # starts a fresh session with the full text history.
+        has_tool_calls = (
+            result.choices
+            and result.choices[0].message.tool_calls
         )
+        cls = type(self)
+        if has_tool_calls:
+            logger.info(
+                "Copilot generate [new]: response has tool_calls — "
+                "evicting session to avoid stale agent-loop state, conv=%s",
+                conv_key[:8],
+            )
+            # Return client to pool (session will be deleted)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        client.delete_session(  # type: ignore[union-attr]
+                            session.session_id  # type: ignore[union-attr]
+                        )
+                    ),
+                    timeout=_SESSION_DELETE_TIMEOUT,
+                )
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Failed to delete session after tool_calls")
+            await self._return_or_replace_client(client, failed=False)
+        else:
+            # Cache conversation state — client stays out of pool
+            cls._conversations[conv_key] = _ConversationState(
+                session=session,
+                client=client,
+                messages_sent=len(input),
+                last_used=time.monotonic(),
+            )
         return result
 
     async def _continue_conversation(
@@ -949,14 +1002,14 @@ def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
     sdk_tools: list[object] = []
     for tool_info in tools:
         tool_def = _tool_info_to_sdk_tool(tool_info)
-        # handler=None ensures the SDK's session._register_tools skips
-        # registration (it checks `if not tool.name or not tool.handler`),
-        # so _get_tool_handler returns None and EXTERNAL_TOOL_REQUESTED
-        # is ignored — no error is fed back to the model.
+        # Register _noop_tool_handler so the SDK responds to the CLI
+        # via handle_pending_tool_call RPC.  Without a handler the
+        # EXTERNAL_TOOL_REQUESTED event is silently dropped and the
+        # CLI agent-loop blocks indefinitely waiting for a response.
         sdk_tool = CopilotSdkTool(
             name=tool_def.name,
             description=tool_def.description,
-            handler=None,  # type: ignore[arg-type]
+            handler=_noop_tool_handler,
             parameters=tool_def.parameters,
             overrides_built_in_tool=True,
         )
