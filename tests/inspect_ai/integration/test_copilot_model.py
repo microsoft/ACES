@@ -1800,8 +1800,8 @@ class TestConvertToolsForSdk:
     """Tests for _convert_tools_for_sdk tool handler registration."""
 
     def test_tools_have_no_handler(self) -> None:
-        """SDK tools should have _noop_tool_handler so the session responds to
-        EXTERNAL_TOOL_REQUESTED events and unblocks the CLI agent-loop."""
+        """SDK tools should have handler=None so tool calls are captured via
+        EXTERNAL_TOOL_REQUESTED events instead of being executed by the SDK."""
         from dataclasses import dataclass
 
         @dataclass
@@ -1824,7 +1824,7 @@ class TestConvertToolsForSdk:
             sdk_tools = _convert_tools_for_sdk(tools)
         assert len(sdk_tools) == 2
         for sdk_tool in sdk_tools:
-            assert sdk_tool.handler is _noop_tool_handler
+            assert sdk_tool.handler is None
 
     def test_tools_preserve_name_and_description(self) -> None:
         """SDK tools should have correct name and description."""

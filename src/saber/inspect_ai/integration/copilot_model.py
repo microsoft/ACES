@@ -51,6 +51,10 @@ _SESSION_DELETE_TIMEOUT = 10  # seconds to wait for session cleanup
 _CLIENT_STOP_TIMEOUT = 15  # seconds to wait for SDK subprocess shutdown
 _POOL_ACQUIRE_TIMEOUT = 120  # seconds to wait for a client from pool
 
+# Sentinel used by _send_and_collect to signal that tool calls were captured
+# from EXTERNAL_TOOL_REQUESTED events (not from ASSISTANT_MESSAGE).
+_TOOL_CALLS_SENTINEL = object()
+
 
 @dataclass(frozen=True)
 class CopilotToolDef:
@@ -754,7 +758,17 @@ class CopilotModelAPI(ModelAPI):
         t_session: float,
         conv_key: str,
     ) -> ModelOutput:
-        """Send a prompt and wait for the first assistant response.
+        """Send a prompt and wait for the model response.
+
+        Handles two response patterns:
+
+        * **Text-only** (no tool calls): ``ASSISTANT_MESSAGE`` fires after the
+          agent loop completes → captured directly.
+        * **Tool calls**: ``EXTERNAL_TOOL_REQUESTED`` fires for each tool
+          call *before* execution.  Since ``handler=None``, the CLI blocks
+          waiting for a ``handle_pending_tool_call`` RPC that never comes.
+          We collect the tool-call events and, after a short debounce,
+          synthesise the ``ModelOutput`` ourselves.
 
         Shared by both ``_start_conversation`` and ``_continue_conversation``.
         """
@@ -765,7 +779,21 @@ class CopilotModelAPI(ModelAPI):
         loop = asyncio.get_running_loop()
         first_response: asyncio.Future[object | None] = loop.create_future()
 
+        # Collect EXTERNAL_TOOL_REQUESTED events (tool calls before execution)
+        pending_tool_calls: list[ToolCall] = []
+        _debounce_handle: asyncio.TimerHandle | None = None
+
+        def _resolve_with_tool_calls() -> None:
+            """Resolve the future with collected tool calls."""
+            if first_response.done():
+                return
+            # Synthesise a minimal response with tool_calls
+            first_response.set_result(
+                _TOOL_CALLS_SENTINEL  # Special marker — see below
+            )
+
         def _on_event(event: object) -> None:
+            nonlocal _debounce_handle
             if first_response.done():
                 return
             event_type = getattr(event, "type", None)
@@ -782,7 +810,37 @@ class CopilotModelAPI(ModelAPI):
                         len(tr) if tr else 0,
                     )
 
-            if event_type == SessionEventType.ASSISTANT_MESSAGE:
+            if event_type == SessionEventType.EXTERNAL_TOOL_REQUESTED:
+                # Capture tool call details from the event
+                tool_name = getattr(data, "tool_name", None) or ""
+                tool_call_id = getattr(data, "tool_call_id", None) or ""
+                arguments = getattr(data, "arguments", None)
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        arguments = {}
+                elif not isinstance(arguments, dict):
+                    arguments = arguments if arguments else {}
+                pending_tool_calls.append(
+                    ToolCall(
+                        id=tool_call_id,
+                        function=tool_name,
+                        arguments=arguments,
+                    )
+                )
+                logger.debug(
+                    "Copilot EXTERNAL_TOOL_REQUESTED: %s (id=%s)",
+                    tool_name,
+                    tool_call_id,
+                )
+                # Debounce: resolve 500ms after the last tool-call event
+                if _debounce_handle is not None:
+                    _debounce_handle.cancel()
+                _debounce_handle = loop.call_later(
+                    0.5, _resolve_with_tool_calls
+                )
+            elif event_type == SessionEventType.ASSISTANT_MESSAGE:
                 if not first_response.done():
                     first_response.set_result(data)
             elif event_type == SessionEventType.SESSION_ERROR:
@@ -824,9 +882,36 @@ class CopilotModelAPI(ModelAPI):
                 )
                 response_data = None
         finally:
+            if _debounce_handle is not None:
+                _debounce_handle.cancel()
             unsubscribe()
 
         t_response = time.monotonic()
+
+        # Handle tool-call sentinel: build ModelOutput from collected events
+        if response_data is _TOOL_CALLS_SENTINEL and pending_tool_calls:
+            logger.info(
+                "Copilot generate: captured %d tool_calls via "
+                "EXTERNAL_TOOL_REQUESTED (%.1fs), conv=%s",
+                len(pending_tool_calls),
+                t_response - t_send,
+                conv_key[:8],
+            )
+            return ModelOutput(
+                model=self.model_name,
+                choices=[
+                    ChatCompletionChoice(
+                        message=ChatMessageAssistant(
+                            content="",
+                            tool_calls=pending_tool_calls,
+                            source="generate",
+                        ),
+                        stop_reason="tool_calls",
+                    ),
+                ],
+                usage=None,
+            )
+
         response_content = (
             getattr(response_data, "content", None) if response_data else None
         )
@@ -1002,14 +1087,14 @@ def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
     sdk_tools: list[object] = []
     for tool_info in tools:
         tool_def = _tool_info_to_sdk_tool(tool_info)
-        # Register _noop_tool_handler so the SDK responds to the CLI
-        # via handle_pending_tool_call RPC.  Without a handler the
-        # EXTERNAL_TOOL_REQUESTED event is silently dropped and the
-        # CLI agent-loop blocks indefinitely waiting for a response.
+        # handler=None prevents the SDK from executing tools internally.
+        # Tool calls are captured via EXTERNAL_TOOL_REQUESTED events in
+        # _send_and_collect() and returned as structured ToolCall objects
+        # to the bridge/caller for external execution.
         sdk_tool = CopilotSdkTool(
             name=tool_def.name,
             description=tool_def.description,
-            handler=_noop_tool_handler,
+            handler=None,  # type: ignore[arg-type]
             parameters=tool_def.parameters,
             overrides_built_in_tool=True,
         )
