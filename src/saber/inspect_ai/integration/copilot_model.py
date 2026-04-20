@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
+import hashlib
 import json
 import os
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar
 
 # Enable faulthandler for debugging — prints thread tracebacks on SIGUSR1
@@ -62,6 +63,93 @@ class CopilotToolDef:
     name: str
     description: str
     parameters: dict[str, object]
+
+
+@dataclass
+class _ConversationState:
+    """Tracks an active multi-turn conversation with the Copilot SDK.
+
+    Holds a session and its owning client so that subsequent ``generate()``
+    calls for the same conversation can send only *delta* messages instead
+    of re-serialising the entire history.
+    """
+
+    session: object  # CopilotSession
+    client: object   # CopilotClient
+    messages_sent: int = 0
+    last_used: float = field(default_factory=time.monotonic)
+
+
+# ---------------------------------------------------------------------------
+# Conversation helpers
+# ---------------------------------------------------------------------------
+
+
+def _conversation_key(messages: list[ChatMessage]) -> str:
+    """Derive a stable key that is identical across all generate() calls
+    for the same conversation.
+
+    Searches for the first system and first user message by role (not by
+    position) so the key stays constant as the message list grows with
+    assistant/tool turns.
+
+    Returns:
+        16-char hex string (64 bits — collision-safe for ≤ thousands of
+        concurrent conversations).
+    """
+    sys_text = ""
+    user_text = ""
+    for msg in messages:
+        if msg.role == "system" and not sys_text:
+            sys_text = msg.text[:500]
+        elif msg.role == "user" and not user_text:
+            user_text = msg.text[:500]
+        if sys_text and user_text:
+            break
+    blob = f"system:{sys_text}|user:{user_text}"
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _format_tool_results(messages: list[ChatMessage]) -> str:
+    """Format delta messages for a multi-turn continuation.
+
+    Skips assistant messages (already in the SDK session history) and
+    formats tool results for the model to consume as a user turn.
+
+    Args:
+        messages: The *delta* messages (``input[prev_count:]``).
+
+    Returns:
+        Formatted string to ``send()`` to the SDK session.
+    """
+    parts: list[str] = []
+    for msg in messages:
+        if isinstance(msg, ChatMessageAssistant):
+            # The SDK already has this in its conversation history
+            continue
+        if isinstance(msg, ChatMessageTool):
+            func = msg.function or "unknown"
+            parts.append(f"[Tool Result: {func}]\n{msg.text}")
+        else:
+            # User or system message in the delta (rare but possible)
+            parts.append(f"[{msg.role}]\n{msg.text}")
+    return "\n\n".join(parts) if parts else ""
+
+
+def _extract_system_content(messages: list[ChatMessage]) -> str | None:
+    """Extract the system message content from the message list."""
+    for msg in messages:
+        if msg.role == "system":
+            return msg.text
+    return None
+
+
+def _extract_first_user_content(messages: list[ChatMessage]) -> str:
+    """Extract the first user message content from the message list."""
+    for msg in messages:
+        if msg.role == "user":
+            return msg.text
+    return ""
 
 
 def _messages_to_prompt(messages: list[ChatMessage]) -> str:
@@ -270,9 +358,10 @@ class CopilotModelAPI(ModelAPI):
     """Copilot model API for GitHub Copilot-licensed inference.
 
     Uses the Python Copilot SDK (github-copilot-sdk) to route inference
-    through GitHub's Copilot infrastructure. Creates a new session per
-    ``generate()`` call; maintains a pool of ``CopilotClient`` instances
-    (one subprocess each) for parallel inference.
+    through GitHub's Copilot infrastructure.  Maintains *persistent sessions*
+    across ``generate()`` calls for the same conversation so the SDK server
+    preserves multi-turn history.  A pool of ``CopilotClient`` instances
+    (one subprocess each) provides parallel inference capacity.
     """
 
     _pool: ClassVar[asyncio.Queue[object] | None] = None
@@ -282,6 +371,7 @@ class CopilotModelAPI(ModelAPI):
     _instance_count: ClassVar[int] = 0
     _github_token: ClassVar[str | None] = None
     _shutting_down: ClassVar[bool] = False
+    _conversations: ClassVar[dict[str, _ConversationState]] = {}
 
     def __init__(
         self,
@@ -374,17 +464,17 @@ class CopilotModelAPI(ModelAPI):
         tool_choice: ToolChoice,
         config: GenerateConfig,
     ) -> ModelOutput:
-        """Generate a single-turn response using the Copilot SDK.
+        """Generate a response, reusing SDK sessions for multi-turn conversations.
 
-        Creates a new session per call with all built-in tools disabled
-        (``available_tools=[]``).  Uses ``send()`` + event listener to
-        capture the first ``AssistantMessageData`` and return immediately,
-        preventing the SDK's agent loop from executing tools on the host.
+        On the first call for a conversation, creates a new session with the
+        system prompt set via ``system_message`` and sends the first user
+        message.  On subsequent calls (same conversation key), sends only the
+        *delta* messages (tool results) so the SDK server preserves full
+        multi-turn history.
 
         Args:
             input: Conversation history as chat messages.
-            tools: Available tools for the model (passed as definitions
-                so the model can propose tool calls, but never executed).
+            tools: Available tools for the model (definitions only).
             tool_choice: Tool selection strategy.
             config: Generation configuration.
 
@@ -394,6 +484,39 @@ class CopilotModelAPI(ModelAPI):
         t_start = time.monotonic()
         await self._init_pool()
 
+        conv_key = _conversation_key(input)
+        cls = type(self)
+        state = cls._conversations.get(conv_key)
+
+        if state:
+            # --- Continue existing conversation ---
+            try:
+                return await self._continue_conversation(
+                    state, input, tools, config, t_start,
+                )
+            except (BrokenPipeError, ConnectionResetError, EOFError) as exc:
+                logger.warning(
+                    "Copilot session died during continuation (%s) — "
+                    "evicting and starting fresh",
+                    type(exc).__name__,
+                )
+                await self._evict_conversation(conv_key, replace_client=True)
+                # Fall through to start a new conversation
+            except Exception as exc:
+                logger.warning(
+                    "Copilot continuation failed (%s: %s) — "
+                    "evicting and starting fresh",
+                    type(exc).__name__,
+                    exc,
+                )
+                await self._evict_conversation(conv_key, replace_client=False)
+                # Fall through to start a new conversation
+
+        # --- Start new conversation ---
+        # If pool is empty, evict the oldest cached conversation to free a client
+        if self._pool is not None and self._pool.empty() and cls._conversations:
+            await self._evict_oldest_conversation()
+
         try:
             client = await asyncio.wait_for(
                 self._pool.get(),  # type: ignore[union-attr]
@@ -402,17 +525,21 @@ class CopilotModelAPI(ModelAPI):
         except TimeoutError:
             return _empty_output(self.model_name)
 
-        client_failed = False
         try:
-            return await self._generate_impl(client, input, tools, tool_choice, config, t_start)
+            return await self._start_conversation(
+                conv_key, client, input, tools, config, t_start,
+            )
         except (BrokenPipeError, ConnectionResetError, EOFError) as exc:
-            # Narrow catch: only subprocess-death errors, not TimeoutError
-            # (TimeoutError inherits OSError but doesn't mean the subprocess died)
-            client_failed = True
-            logger.warning("Copilot client subprocess died (%s) — discarding and replacing", type(exc).__name__)
+            logger.warning(
+                "Copilot client subprocess died (%s) — discarding and replacing",
+                type(exc).__name__,
+            )
+            await self._return_or_replace_client(client, failed=True)
             return _empty_output(self.model_name)
-        finally:
-            await self._return_or_replace_client(client, client_failed)
+        except BaseException:
+            # Any other error (including CancelledError): return client to pool
+            await self._return_or_replace_client(client, failed=False)
+            raise
 
     @classmethod
     async def _return_or_replace_client(cls, client: object, failed: bool) -> None:
@@ -443,186 +570,289 @@ class CopilotModelAPI(ModelAPI):
                 len(cls._all_clients),
             )
 
-    async def _generate_impl(
+    async def _start_conversation(
         self,
+        conv_key: str,
         client: object,
         input: list[ChatMessage],
         tools: list[ToolInfo],
-        tool_choice: ToolChoice,
         config: GenerateConfig,
         t_start: float,
     ) -> ModelOutput:
-        """Internal generate implementation."""
+        """Create a new SDK session and send the first prompt.
+
+        The client is removed from the pool for the lifetime of the
+        conversation and cached in ``_conversations``.
+        """
         t_client = time.monotonic()
         logger.info(
-            "Copilot generate: client ready (%.1fs)",
+            "Copilot generate [new]: client ready (%.1fs), conv=%s",
             t_client - t_start,
+            conv_key[:8],
         )
 
         from copilot import PermissionHandler  # type: ignore[import-untyped]
-        from copilot.generated.session_events import (  # type: ignore[import-untyped]
-            SessionEventType,
-        )
 
-        # Register tools so the model can see definitions and propose
-        # tool_calls.  handler=None prevents the SDK from dispatching
-        # EXTERNAL_TOOL_REQUESTED events to our process.
         sdk_tools = _convert_tools_for_sdk(tools) if tools else []
+
+        # Use system_message="replace" so the SDK's system prompt is exactly
+        # the conversation's system content (no SDK guardrails mixed in).
+        sys_content = _extract_system_content(input)
+        sys_config: dict[str, object] | None = None
+        if sys_content:
+            sys_config = {"mode": "replace", "content": sys_content}
 
         try:
             session = await asyncio.wait_for(
-                client.create_session(
+                client.create_session(  # type: ignore[union-attr]
                     model=self.model_name,
                     on_permission_request=PermissionHandler.approve_all,
-                    provider={
-                        "type": "copilot",
-                        "wire_api": "responses",
-                    },
+                    system_message=sys_config,
                     tools=sdk_tools,
                     available_tools=[],  # Disable ALL built-in tools
                 ),
-                timeout=60,  # Session creation should be fast
+                timeout=60,
             )
-        except (TimeoutError, Exception) as exc:
+        except Exception as exc:
             logger.warning("Copilot create_session failed: %s", exc)
+            # Return client to pool since we couldn't create a session
+            await self._return_or_replace_client(client, failed=False)
             return _empty_output(self.model_name)
+
         t_session = time.monotonic()
         logger.info(
-            "Copilot generate: session created (%.1fs), model=%s, tools=%d",
+            "Copilot generate [new]: session created (%.1fs), model=%s, tools=%d",
             t_session - t_client,
             self.model_name,
             len(sdk_tools),
         )
 
+        # For the first turn, send only the user content (system is set via
+        # system_message config above).
+        prompt = _extract_first_user_content(input)
+        logger.info(
+            "Copilot generate [new]: first-turn prompt length=%d chars",
+            len(prompt),
+        )
+
+        result = await self._send_and_collect(
+            session, client, prompt, t_start, t_session, conv_key,
+        )
+
+        # Cache conversation state — client stays out of pool
+        cls = type(self)
+        cls._conversations[conv_key] = _ConversationState(
+            session=session,
+            client=client,
+            messages_sent=len(input),
+            last_used=time.monotonic(),
+        )
+        return result
+
+    async def _continue_conversation(
+        self,
+        state: _ConversationState,
+        input: list[ChatMessage],
+        tools: list[ToolInfo],
+        config: GenerateConfig,
+        t_start: float,
+    ) -> ModelOutput:
+        """Send delta messages to an existing SDK session."""
+        delta = input[state.messages_sent:]
+        if not delta:
+            logger.warning(
+                "Copilot generate [continue]: no new messages (sent=%d, total=%d)",
+                state.messages_sent,
+                len(input),
+            )
+            return _empty_output(self.model_name)
+
+        prompt = _format_tool_results(delta)
+        if not prompt:
+            logger.warning("Copilot generate [continue]: delta produced empty prompt")
+            return _empty_output(self.model_name)
+
+        logger.info(
+            "Copilot generate [continue]: delta=%d msgs, prompt=%d chars, "
+            "prev_sent=%d, total=%d",
+            len(delta),
+            len(prompt),
+            state.messages_sent,
+            len(input),
+        )
+
+        t_session = time.monotonic()
+        result = await self._send_and_collect(
+            state.session, state.client, prompt, t_start, t_session,
+            _conversation_key(input),
+        )
+
+        # Update state
+        state.messages_sent = len(input)
+        state.last_used = time.monotonic()
+        return result
+
+    async def _send_and_collect(
+        self,
+        session: object,
+        client: object,
+        prompt: str,
+        t_start: float,
+        t_session: float,
+        conv_key: str,
+    ) -> ModelOutput:
+        """Send a prompt and wait for the first assistant response.
+
+        Shared by both ``_start_conversation`` and ``_continue_conversation``.
+        """
+        from copilot.generated.session_events import (  # type: ignore[import-untyped]
+            SessionEventType,
+        )
+
+        loop = asyncio.get_running_loop()
+        first_response: asyncio.Future[object | None] = loop.create_future()
+
+        def _on_event(event: object) -> None:
+            if first_response.done():
+                return
+            event_type = getattr(event, "type", None)
+            data = getattr(event, "data", None)
+
+            if data is not None:
+                c = getattr(data, "content", None)
+                tr = getattr(data, "tool_requests", None)
+                if c or tr:
+                    logger.debug(
+                        "Copilot event: type=%s, content_len=%d, tool_requests=%d",
+                        event_type,
+                        len(c) if c else 0,
+                        len(tr) if tr else 0,
+                    )
+
+            if event_type == SessionEventType.ASSISTANT_MESSAGE:
+                if not first_response.done():
+                    first_response.set_result(data)
+            elif event_type == SessionEventType.SESSION_ERROR:
+                msg = getattr(data, "message", None) or str(data)
+                if not first_response.done():
+                    first_response.set_exception(
+                        RuntimeError(f"Copilot session error: {msg}")
+                    )
+            elif event_type == SessionEventType.SESSION_IDLE:
+                if not first_response.done():
+                    first_response.set_result(None)
+
+        unsubscribe = session.on(_on_event)  # type: ignore[union-attr]
         try:
-            prompt = _messages_to_prompt(input)
+            t_send = time.monotonic()
+            await session.send(prompt)  # type: ignore[union-attr]
             logger.info(
-                "Copilot generate: prompt length=%d chars",
-                len(prompt),
-            )
-
-            # Use send() + event listener to capture the FIRST assistant
-            # message, then return immediately — before the SDK can execute
-            # any tools.  This makes the SDK a pure inference engine.
-            loop = asyncio.get_event_loop()
-            first_response: asyncio.Future[object | None] = loop.create_future()
-
-            def _on_event(event: object) -> None:
-                if first_response.done():
-                    return
-                event_type = getattr(event, "type", None)
-                data = getattr(event, "data", None)
-
-                # Debug: log events with content
-                if data is not None:
-                    c = getattr(data, "content", None)
-                    tr = getattr(data, "tool_requests", None)
-                    if c or tr:
-                        logger.debug(
-                            "Copilot event: type=%s, content_len=%d, tool_requests=%d",
-                            event_type,
-                            len(c) if c else 0,
-                            len(tr) if tr else 0,
-                        )
-
-                if event_type == SessionEventType.ASSISTANT_MESSAGE:
-                    if not first_response.done():
-                        first_response.set_result(data)
-                elif event_type == SessionEventType.SESSION_ERROR:
-                    msg = getattr(data, "message", None) or str(data)
-                    if not first_response.done():
-                        first_response.set_exception(RuntimeError(f"Copilot session error: {msg}"))
-                elif event_type == SessionEventType.SESSION_IDLE:
-                    if not first_response.done():
-                        first_response.set_result(None)
-
-            unsubscribe = session.on(_on_event)
-            try:
-                t_send = time.monotonic()
-                await session.send(prompt)
-                logger.info(
-                    "Copilot generate: prompt sent (%.1fs), waiting for response...",
-                    t_send - t_session,
-                )
-
-                try:
-                    response_data = await asyncio.wait_for(
-                        first_response, timeout=self._timeout
-                    )
-                except asyncio.CancelledError:
-                    logger.warning(
-                        "Copilot generate cancelled (likely time-limit exceeded)"
-                    )
-                    response_data = None
-                    # Do NOT re-raise — return empty output so the eval can
-                    # proceed to scoring instead of leaving the event loop dead.
-                except TimeoutError:
-                    logger.warning(
-                        "Copilot SDK response timed out after %ds",
-                        self._timeout,
-                    )
-                    response_data = None
-                except RuntimeError as exc:
-                    # SESSION_ERROR events set_exception with RuntimeError.
-                    logger.warning(
-                        "Copilot session error: %s — returning empty response",
-                        exc,
-                    )
-                    response_data = None
-            finally:
-                unsubscribe()
-
-            t_response = time.monotonic()
-            response_content = getattr(response_data, "content", None) if response_data else None
-            response_trs = getattr(response_data, "tool_requests", None) if response_data else None
-            logger.info(
-                "Copilot generate: response received (%.1fs), "
-                "content_len=%s, tool_requests=%s, data_type=%s",
-                t_response - t_send,
-                len(response_content) if response_content else 0,
-                len(response_trs) if response_trs else 0,
-                type(response_data).__name__ if response_data else "None",
-            )
-
-            usage: ModelUsage | None = None
-            try:
-                events = await session.get_messages()
-                usage = _extract_usage(events)
-                del events
-            except (asyncio.CancelledError, Exception):
-                logger.debug("Failed to retrieve usage from session", exc_info=True)
-
-            result = _sdk_response_to_model_output(
-                response_data, self.model_name, usage
-            )
-            t_done = time.monotonic()
-            logger.info(
-                "Copilot generate: total=%.1fs (client=%.1fs, session=%.1fs, "
-                "send=%.1fs, response=%.1fs, finalize=%.1fs), "
-                "usage=%s",
-                t_done - t_start,
-                t_client - t_start,
-                t_session - t_client,
+                "Copilot generate: prompt sent (%.1fs), waiting for response...",
                 t_send - t_session,
-                t_response - t_send,
-                t_done - t_response,
-                usage,
             )
-            return result
-        finally:
+
             try:
-                # Use shield to prevent nested cancellation from creating
-                # orphaned timer handles in the event loop
-                await asyncio.wait_for(
-                    asyncio.shield(client.delete_session(session.session_id)),
-                    timeout=_SESSION_DELETE_TIMEOUT,
+                response_data = await asyncio.wait_for(
+                    first_response, timeout=self._timeout
                 )
-            except (asyncio.CancelledError, Exception):
-                logger.debug(
-                    "Failed to delete Copilot session %s",
-                    session.session_id,
-                    exc_info=True,
+            except asyncio.CancelledError:
+                logger.warning(
+                    "Copilot generate cancelled (likely time-limit exceeded)"
                 )
+                response_data = None
+            except TimeoutError:
+                logger.warning(
+                    "Copilot SDK response timed out after %ds", self._timeout
+                )
+                response_data = None
+            except RuntimeError as exc:
+                logger.warning(
+                    "Copilot session error: %s — returning empty response", exc
+                )
+                response_data = None
+        finally:
+            unsubscribe()
+
+        t_response = time.monotonic()
+        response_content = (
+            getattr(response_data, "content", None) if response_data else None
+        )
+        response_trs = (
+            getattr(response_data, "tool_requests", None) if response_data else None
+        )
+        logger.info(
+            "Copilot generate: response received (%.1fs), "
+            "content_len=%s, tool_requests=%s, data_type=%s",
+            t_response - t_send,
+            len(response_content) if response_content else 0,
+            len(response_trs) if response_trs else 0,
+            type(response_data).__name__ if response_data else "None",
+        )
+
+        usage: ModelUsage | None = None
+        try:
+            events = await session.get_messages()  # type: ignore[union-attr]
+            usage = _extract_usage(events)
+            del events
+        except (asyncio.CancelledError, Exception):
+            logger.debug("Failed to retrieve usage from session", exc_info=True)
+
+        result = _sdk_response_to_model_output(
+            response_data, self.model_name, usage
+        )
+        t_done = time.monotonic()
+        logger.info(
+            "Copilot generate: total=%.1fs (session=%.1fs, send=%.1fs, "
+            "response=%.1fs, finalize=%.1fs), conv=%s, usage=%s",
+            t_done - t_start,
+            t_session - t_start,
+            t_send - t_session,
+            t_response - t_send,
+            t_done - t_response,
+            conv_key[:8],
+            usage,
+        )
+        return result
+
+    @classmethod
+    async def _evict_conversation(
+        cls, conv_key: str, *, replace_client: bool
+    ) -> None:
+        """Remove a cached conversation, cleaning up session and client."""
+        state = cls._conversations.pop(conv_key, None)
+        if not state:
+            return
+
+        # Try to delete the session
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(
+                    state.client.delete_session(  # type: ignore[union-attr]
+                        state.session.session_id  # type: ignore[union-attr]
+                    )
+                ),
+                timeout=_SESSION_DELETE_TIMEOUT,
+            )
+        except (asyncio.CancelledError, Exception):
+            logger.debug("Failed to delete conversation session %s", conv_key[:8])
+
+        # Return or replace the client
+        await cls._return_or_replace_client(state.client, failed=replace_client)
+
+    @classmethod
+    async def _evict_oldest_conversation(cls) -> None:
+        """Evict the least-recently-used conversation to free a client."""
+        if not cls._conversations:
+            return
+        oldest_key = min(
+            cls._conversations,
+            key=lambda k: cls._conversations[k].last_used,
+        )
+        logger.info(
+            "Copilot pool: evicting oldest conversation %s to free client",
+            oldest_key[:8],
+        )
+        await cls._evict_conversation(oldest_key, replace_client=False)
 
     async def aclose(self) -> None:
         """Shut down the pool when the last instance closes."""
@@ -631,6 +861,10 @@ class CopilotModelAPI(ModelAPI):
             return
 
         CopilotModelAPI._shutting_down = True
+
+        # Clean up all cached conversations (returns clients to pool)
+        for conv_key in list(CopilotModelAPI._conversations):
+            await self._evict_conversation(conv_key, replace_client=False)
 
         # Drain any clients in the queue
         if CopilotModelAPI._pool is not None:
@@ -658,6 +892,7 @@ class CopilotModelAPI(ModelAPI):
         # Reset state
         CopilotModelAPI._pool = None
         CopilotModelAPI._all_clients = []
+        CopilotModelAPI._conversations = {}
         CopilotModelAPI._instance_count = 0
         CopilotModelAPI._shutting_down = False
 
