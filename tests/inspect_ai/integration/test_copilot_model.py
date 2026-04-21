@@ -32,8 +32,8 @@ from saber.inspect_ai.integration.copilot_model import (
     _extract_system_content,
     _extract_usage,
     _format_tool_results,
+    _make_tool_handler,
     _messages_to_prompt,
-    _noop_tool_handler,
     _sdk_response_to_model_output,
     _tool_info_to_sdk_tool,
 )
@@ -1238,20 +1238,39 @@ class TestMultiTurnSessionReuse:
     async def test_second_call_reuses_session(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When turn 1 returns tool_calls the session is evicted and turn 2
-        creates a fresh session with the full text history."""
+        """When turn 1 returns tool_calls the session is cached with pending
+        futures.  Turn 2 resolves those futures and gets the next response
+        without creating a new session."""
+        import asyncio
+
         api = self._make_api(monkeypatch)
 
-        tool_requests_turn1 = [
-            SimpleNamespace(
-                tool_call_id="tc_1",
-                name="bash",
-                arguments={"cmd": "ls"},
-            )
-        ]
-        mock_session, mock_event_type = self._make_session_with_response(
-            "sess-mt-1", "Calling bash.", tool_requests=tool_requests_turn1
-        )
+        # Turn 1: session fires EXTERNAL_TOOL_REQUESTED
+        mock_event_type = MagicMock()
+        turn1_callback = None
+
+        def on_turn1(callback: object) -> MagicMock:
+            nonlocal turn1_callback
+            turn1_callback = callback
+            return MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-mt-1"
+        mock_session.on = MagicMock(side_effect=on_turn1)
+
+        async def send_turn1(prompt: str) -> None:
+            if turn1_callback is not None:
+                turn1_callback(SimpleNamespace(
+                    type=mock_event_type.EXTERNAL_TOOL_REQUESTED,
+                    data=SimpleNamespace(
+                        tool_name="bash",
+                        tool_call_id="tc_1",
+                        arguments={"cmd": "ls"},
+                    ),
+                ))
+
+        mock_session.send = AsyncMock(side_effect=send_turn1)
+        mock_session.get_messages = AsyncMock(return_value=[])
 
         mock_client = AsyncMock()
         mock_client.create_session = AsyncMock(return_value=mock_session)
@@ -1262,9 +1281,53 @@ class TestMultiTurnSessionReuse:
             ChatMessageSystem(content="You are a security scanner."),
             ChatMessageUser(content="Scan /workspace"),
         ]
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(PermissionHandler=MagicMock()),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            # Turn 1 — tool_calls returned, session cached
+            output1 = await api.generate(
+                input=turn1_msgs,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output1.stop_reason == "tool_calls"
+        assert len(CopilotModelAPI._conversations) == 1
+        conv_key = list(CopilotModelAPI._conversations.keys())[0]
+        state = CopilotModelAPI._conversations[conv_key]
+        assert "tc_1" in state.pending_futures
+
+        # Reconfigure mock session for Turn 2:
+        # When subscribed, fire ASSISTANT_MESSAGE after a tick
+        def on_turn2(callback: object) -> MagicMock:
+            async def fire_response() -> None:
+                await asyncio.sleep(0)
+                callback(SimpleNamespace(  # type: ignore[operator]
+                    type=mock_event_type.ASSISTANT_MESSAGE,
+                    data=SimpleNamespace(
+                        content="Found vulnerability in file1.py",
+                        tool_requests=[],
+                    ),
+                ))
+            asyncio.ensure_future(fire_response())
+            return MagicMock()
+
+        mock_session.on = MagicMock(side_effect=on_turn2)
+
         turn2_msgs = turn1_msgs + [
             ChatMessageAssistant(
-                content="Calling bash.",
+                content="",
                 tool_calls=[ToolCall(id="tc_1", function="bash", arguments={"cmd": "ls"})],
             ),
             ChatMessageTool(content="file1.py\nfile2.py", tool_call_id="tc_1", function="bash"),
@@ -1280,25 +1343,7 @@ class TestMultiTurnSessionReuse:
                 "copilot.tools": MagicMock(),
             },
         ):
-            from inspect_ai.model._generate_config import GenerateConfig
-
-            # Turn 1
-            output1 = await api.generate(
-                input=turn1_msgs,
-                tools=[],
-                tool_choice="auto",
-                config=GenerateConfig(),
-            )
-
-            # Update mock for turn 2 — new session created
-            # (session was evicted because turn 1 had tool_calls)
-            # Reuse the same event type so the patched SessionEventType matches
-            mock_session2 = self._make_session_with_event_type(
-                "sess-mt-2", "Found vulnerability in file1.py", mock_event_type
-            )
-            mock_client.create_session = AsyncMock(return_value=mock_session2)
-
-            # Turn 2
+            # Turn 2 — futures resolved, text response returned
             output2 = await api.generate(
                 input=turn2_msgs,
                 tools=[],
@@ -1306,14 +1351,12 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
-        # Session created TWICE (evicted after tool_calls)
-        assert mock_client.create_session.await_count == 1  # second call only
-        # delete_session called once for the evicted session
-        mock_client.delete_session.assert_awaited_once()
-        # Both turns should produce valid output
-        assert output1.choices[0].message.text == "Calling bash."
         assert output2.choices[0].message.text == "Found vulnerability in file1.py"
-        # No conversation should remain cached (turn 2 had no tool_calls so it IS cached)
+        # Session created only ONCE (turn 1) — no eviction
+        assert mock_client.create_session.await_count == 1
+        # delete_session never called
+        mock_client.delete_session.assert_not_awaited()
+        # Conversation still cached
         assert len(CopilotModelAPI._conversations) == 1
 
     async def test_different_conversations_get_different_sessions(
@@ -1376,11 +1419,11 @@ class TestMultiTurnSessionReuse:
         assert output_b.choices[0].message.text == "Response B"
         assert len(CopilotModelAPI._conversations) == 2
 
-    async def test_continuation_with_tool_calls_evicts_session(
+    async def test_continuation_with_tool_calls_keeps_session(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When a continuation (turn 2+) returns tool_calls, the session
-        should be evicted — same as _start_conversation behaviour."""
+        should be kept alive with pending_futures populated."""
         api = self._make_api(monkeypatch)
 
         # Turn 1: text-only → session cached
@@ -1421,7 +1464,8 @@ class TestMultiTurnSessionReuse:
         # Session should be cached (text-only response)
         assert len(CopilotModelAPI._conversations) == 1
 
-        # Turn 2: continuation returns tool_calls → session must be evicted
+        # Turn 2: continuation returns tool_calls (via ASSISTANT_MESSAGE)
+        # Session should be KEPT with pending_futures populated
         turn2_msgs = turn1_msgs + [
             ChatMessageUser(content="Now run a deeper scan"),
         ]
@@ -1476,13 +1520,16 @@ class TestMultiTurnSessionReuse:
             )
 
         assert output2.stop_reason == "tool_calls"
-        # Session should be evicted after tool_calls in continuation
-        assert len(CopilotModelAPI._conversations) == 0
-        # delete_session called for the evicted session
-        mock_client.delete_session.assert_awaited_once()
-        # Client returned to pool
+        # Session should be KEPT (not evicted) with pending_futures
+        assert len(CopilotModelAPI._conversations) == 1
+        conv_key = list(CopilotModelAPI._conversations.keys())[0]
+        state = CopilotModelAPI._conversations[conv_key]
+        assert "tc_deep" in state.pending_futures
+        # delete_session NOT called
+        mock_client.delete_session.assert_not_awaited()
+        # Client NOT returned to pool (still held by conversation)
         assert CopilotModelAPI._pool is not None
-        assert CopilotModelAPI._pool.qsize() == 1
+        assert CopilotModelAPI._pool.qsize() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1842,65 +1889,106 @@ class TestCopilotRegistration:
 
 
 # ---------------------------------------------------------------------------
-# _noop_tool_handler
+# _make_tool_handler
 # ---------------------------------------------------------------------------
-class TestNoopToolHandler:
-    """Tests for _noop_tool_handler returning success (not failure)."""
+class TestMakeToolHandler:
+    """Tests for _make_tool_handler factory function."""
 
-    async def test_returns_success_result_type(self) -> None:
-        """_noop_tool_handler must return result_type='success' to avoid retry loops."""
+    async def test_handler_creates_future_in_dict(self) -> None:
+        """Handler should create and store a future keyed by tool_call_id."""
+        import asyncio
+
+        pending_futures: dict[str, asyncio.Future[str]] = {}
         mock_tool_result_cls = MagicMock()
-        modules = {
-            "copilot": MagicMock(),
-            "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls),
-        }
-        with patch.dict("sys.modules", modules):
-            invocation = SimpleNamespace(
-                session_id="s1",
-                tool_call_id="tc_1",
-                tool_name="run_command",
-                arguments={"cmd": "ls"},
-            )
-            await _noop_tool_handler(invocation)
-        mock_tool_result_cls.assert_called_once()
+
+        with patch.dict(
+            "sys.modules",
+            {"copilot": MagicMock(), "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls)},
+        ):
+            handler = _make_tool_handler(pending_futures)
+            invocation = SimpleNamespace(tool_call_id="tc_123")
+
+            # Run handler in background (it awaits the future)
+            task = asyncio.create_task(handler(invocation))
+            await asyncio.sleep(0)  # Let handler start
+
+            assert "tc_123" in pending_futures
+            assert not pending_futures["tc_123"].done()
+
+            # Resolve and clean up
+            pending_futures["tc_123"].set_result("tool output")
+            await task
+
+    async def test_handler_returns_tool_result_on_resolve(self) -> None:
+        """Resolving the future should return ToolResult with success."""
+        import asyncio
+
+        pending_futures: dict[str, asyncio.Future[str]] = {}
+        mock_tool_result_cls = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {"copilot": MagicMock(), "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls)},
+        ):
+            handler = _make_tool_handler(pending_futures)
+            invocation = SimpleNamespace(tool_call_id="tc_456")
+
+            task = asyncio.create_task(handler(invocation))
+            await asyncio.sleep(0)
+
+            pending_futures["tc_456"].set_result("file contents here")
+            await task
+
         call_kwargs = mock_tool_result_cls.call_args[1]
+        assert call_kwargs["text_result_for_llm"] == "file contents here"
         assert call_kwargs["result_type"] == "success"
-
-    async def test_returns_no_error(self) -> None:
-        """_noop_tool_handler must not set an error string."""
-        mock_tool_result_cls = MagicMock()
-        modules = {
-            "copilot": MagicMock(),
-            "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls),
-        }
-        with patch.dict("sys.modules", modules):
-            invocation = SimpleNamespace(
-                session_id="s1",
-                tool_call_id="tc_1",
-                tool_name="run_command",
-                arguments={},
-            )
-            await _noop_tool_handler(invocation)
-        call_kwargs = mock_tool_result_cls.call_args[1]
         assert call_kwargs["error"] is None
 
-    async def test_returns_benign_text(self) -> None:
-        """_noop_tool_handler should return a benign text result for the LLM."""
+    async def test_handler_returns_failure_on_exception(self) -> None:
+        """Setting exception on future should return failure ToolResult."""
+        import asyncio
+
+        pending_futures: dict[str, asyncio.Future[str]] = {}
         mock_tool_result_cls = MagicMock()
-        modules = {
-            "copilot": MagicMock(),
-            "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls),
-        }
-        with patch.dict("sys.modules", modules):
-            invocation = SimpleNamespace(
-                session_id="s1",
-                tool_call_id="tc_1",
-                tool_name="run_command",
-                arguments={},
-            )
-            await _noop_tool_handler(invocation)
+
+        with patch.dict(
+            "sys.modules",
+            {"copilot": MagicMock(), "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls)},
+        ):
+            handler = _make_tool_handler(pending_futures)
+            invocation = SimpleNamespace(tool_call_id="tc_err")
+
+            task = asyncio.create_task(handler(invocation))
+            await asyncio.sleep(0)
+
+            pending_futures["tc_err"].set_exception(RuntimeError("tool crashed"))
+            await task
+
         call_kwargs = mock_tool_result_cls.call_args[1]
-        assert call_kwargs["text_result_for_llm"] == "OK"
+        assert call_kwargs["result_type"] == "failure"
+        assert call_kwargs["text_result_for_llm"] == ""
+        assert "tool crashed" in call_kwargs["error"]
+
+    async def test_handler_empty_tool_call_id(self) -> None:
+        """Handler with missing tool_call_id should use empty string."""
+        import asyncio
+
+        pending_futures: dict[str, asyncio.Future[str]] = {}
+        mock_tool_result_cls = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {"copilot": MagicMock(), "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls)},
+        ):
+            handler = _make_tool_handler(pending_futures)
+            invocation = SimpleNamespace()  # No tool_call_id attr
+
+            task = asyncio.create_task(handler(invocation))
+            await asyncio.sleep(0)
+
+            assert "" in pending_futures
+            pending_futures[""].set_result("ok")
+            await task
 
 
 # ---------------------------------------------------------------------------
@@ -1909,9 +1997,9 @@ class TestNoopToolHandler:
 class TestConvertToolsForSdk:
     """Tests for _convert_tools_for_sdk tool handler registration."""
 
-    def test_tools_have_no_handler(self) -> None:
-        """SDK tools should have handler=None so tool calls are captured via
-        EXTERNAL_TOOL_REQUESTED events instead of being executed by the SDK."""
+    def test_tools_have_callable_handler(self) -> None:
+        """SDK tools should have a callable handler (Future-based) so the SDK
+        session stays alive while awaiting external tool execution."""
         from dataclasses import dataclass
 
         @dataclass
@@ -1931,10 +2019,35 @@ class TestConvertToolsForSdk:
             ToolInfo(name="read_file", description="Read a file"),
         ]
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            sdk_tools = _convert_tools_for_sdk(tools)
+            sdk_tools = _convert_tools_for_sdk(tools, {})
         assert len(sdk_tools) == 2
         for sdk_tool in sdk_tools:
-            assert sdk_tool.handler is None
+            assert callable(sdk_tool.handler)
+
+    def test_tools_share_pending_futures_dict(self) -> None:
+        """All tools should share the same pending_futures dict via handler."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeTool:
+            name: str
+            description: str
+            handler: object
+            parameters: object = None
+            overrides_built_in_tool: bool = False
+            skip_permission: bool = False
+
+        mock_tools_module = MagicMock()
+        mock_tools_module.Tool = FakeTool
+
+        tools = [
+            ToolInfo(name="tool_a", description="A"),
+            ToolInfo(name="tool_b", description="B"),
+        ]
+        with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
+            sdk_tools = _convert_tools_for_sdk(tools, {})
+        # All tools should have the same handler (same closure)
+        assert sdk_tools[0].handler is sdk_tools[1].handler
 
     def test_tools_preserve_name_and_description(self) -> None:
         """SDK tools should have correct name and description."""
@@ -1956,7 +2069,7 @@ class TestConvertToolsForSdk:
             ToolInfo(name="run_command", description="Execute a shell command"),
         ]
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            sdk_tools = _convert_tools_for_sdk(tools)
+            sdk_tools = _convert_tools_for_sdk(tools, {})
         assert sdk_tools[0].name == "run_command"
         assert sdk_tools[0].description == "Execute a shell command"
 
@@ -1978,7 +2091,7 @@ class TestConvertToolsForSdk:
 
         tools = [ToolInfo(name="bash", description="Run bash")]
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            sdk_tools = _convert_tools_for_sdk(tools)
+            sdk_tools = _convert_tools_for_sdk(tools, {})
         assert sdk_tools[0].overrides_built_in_tool is True
 
     def test_empty_tools_returns_empty(self) -> None:
@@ -1998,4 +2111,499 @@ class TestConvertToolsForSdk:
         mock_tools_module.Tool = FakeTool
 
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            assert _convert_tools_for_sdk([]) == []
+            assert _convert_tools_for_sdk([], {}) == []
+
+
+# ---------------------------------------------------------------------------
+# Future-based tool call handling (full round-trip tests)
+# ---------------------------------------------------------------------------
+class TestFutureBasedToolCalls:
+    """Tests for the Future-based tool call handling — no session eviction."""
+
+    def _make_api(self, monkeypatch: pytest.MonkeyPatch) -> CopilotModelAPI:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        return CopilotModelAPI(model_name="gpt-4o")
+
+    def _prepopulate_pool(self, mock_client: object) -> None:
+        import asyncio
+
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        pool.put_nowait(mock_client)
+        CopilotModelAPI._pool = pool
+        CopilotModelAPI._all_clients = [mock_client]
+
+    async def test_start_conversation_caches_on_tool_calls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When tool_calls are in the response, session is cached with
+        pending_futures — NOT evicted."""
+        api = self._make_api(monkeypatch)
+        mock_event_type = MagicMock()
+
+        turn1_callback = None
+
+        def on_turn1(callback: object) -> MagicMock:
+            nonlocal turn1_callback
+            turn1_callback = callback
+            return MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-cache-tc"
+        mock_session.on = MagicMock(side_effect=on_turn1)
+
+        async def send_side_effect(prompt: str) -> None:
+            if turn1_callback is not None:
+                turn1_callback(SimpleNamespace(
+                    type=mock_event_type.EXTERNAL_TOOL_REQUESTED,
+                    data=SimpleNamespace(
+                        tool_name="read_file",
+                        tool_call_id="tc_rf1",
+                        arguments={"path": "/etc/passwd"},
+                    ),
+                ))
+
+        mock_session.send = AsyncMock(side_effect=send_side_effect)
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+        self._prepopulate_pool(mock_client)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(PermissionHandler=MagicMock()),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=[
+                    ChatMessageSystem(content="System"),
+                    ChatMessageUser(content="Read file"),
+                ],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.stop_reason == "tool_calls"
+        tc = output.choices[0].message.tool_calls[0]
+        assert tc.function == "read_file"
+        assert tc.id == "tc_rf1"
+
+        # Session CACHED (not evicted)
+        assert len(CopilotModelAPI._conversations) == 1
+        conv_key = list(CopilotModelAPI._conversations.keys())[0]
+        state = CopilotModelAPI._conversations[conv_key]
+        assert "tc_rf1" in state.pending_futures
+
+        # delete_session NOT called
+        mock_client.delete_session.assert_not_awaited()
+        # Client NOT returned to pool (held by conversation)
+        assert CopilotModelAPI._pool is not None
+        assert CopilotModelAPI._pool.qsize() == 0
+
+    async def test_resolve_and_collect_returns_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_resolve_and_collect should resolve futures and return the
+        next ASSISTANT_MESSAGE response."""
+        import asyncio
+
+        from saber.inspect_ai.integration.copilot_model import (
+            _ConversationState,
+        )
+
+        api = self._make_api(monkeypatch)
+        mock_event_type = MagicMock()
+
+        # Create a conversation state with a pending future
+        loop = asyncio.get_running_loop()
+        pending_futures: dict[str, asyncio.Future[str]] = {
+            "tc_1": loop.create_future(),
+        }
+
+        # Mock session that fires ASSISTANT_MESSAGE when subscribed
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-resolve"
+
+        def on_side_effect(callback: object) -> MagicMock:
+            async def fire_response() -> None:
+                await asyncio.sleep(0)
+                callback(SimpleNamespace(  # type: ignore[operator]
+                    type=mock_event_type.ASSISTANT_MESSAGE,
+                    data=SimpleNamespace(
+                        content="File contains sensitive data.",
+                        tool_requests=[],
+                    ),
+                ))
+            asyncio.ensure_future(fire_response())
+            return MagicMock()
+
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        state = _ConversationState(
+            session=mock_session,
+            client=MagicMock(),
+            messages_sent=2,
+            pending_futures=pending_futures,
+        )
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+            },
+        ):
+            import time
+            result = await api._resolve_and_collect(
+                state,
+                {"tc_1": "root:x:0:0:root:/root:/bin/bash"},
+                t_start=time.monotonic(),
+                t_session=time.monotonic(),
+                conv_key="test1234",
+            )
+
+        assert result.choices[0].message.text == "File contains sensitive data."
+        assert result.stop_reason == "stop"
+        # Future should have been popped from pending_futures
+        assert "tc_1" not in pending_futures
+
+    async def test_resolve_timeout_returns_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Timeout during _resolve_and_collect returns empty output."""
+        import asyncio
+
+        from saber.inspect_ai.integration.copilot_model import (
+            _ConversationState,
+        )
+
+        api = self._make_api(monkeypatch)
+        api._timeout = 0.05  # Very short timeout
+        mock_event_type = MagicMock()
+
+        loop = asyncio.get_running_loop()
+        pending_futures: dict[str, asyncio.Future[str]] = {
+            "tc_timeout": loop.create_future(),
+        }
+
+        # Mock session that does NOT fire any events (causes timeout)
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-timeout"
+        mock_session.on = MagicMock(return_value=MagicMock())
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        state = _ConversationState(
+            session=mock_session,
+            client=MagicMock(),
+            messages_sent=2,
+            pending_futures=pending_futures,
+        )
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+            },
+        ):
+            import time
+            result = await api._resolve_and_collect(
+                state,
+                {"tc_timeout": "some result"},
+                t_start=time.monotonic(),
+                t_session=time.monotonic(),
+                conv_key="timeoutkey",
+            )
+
+        assert result.stop_reason == "unknown"
+        assert result.choices[0].message.content == ""
+
+    async def test_continue_without_pending_futures_falls_back_to_send(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If no pending_futures, _continue_conversation sends via session.send."""
+        import asyncio
+
+        from saber.inspect_ai.integration.copilot_model import (
+            _ConversationState,
+        )
+
+        api = self._make_api(monkeypatch)
+        mock_event_type = MagicMock()
+
+        # Session fires ASSISTANT_MESSAGE on send
+        captured_callback = None
+
+        def on_side_effect(callback: object) -> MagicMock:
+            nonlocal captured_callback
+            captured_callback = callback
+            return MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-fb"
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+
+        async def send_side_effect(prompt: str) -> None:
+            if captured_callback is not None:
+                captured_callback(SimpleNamespace(
+                    type=mock_event_type.ASSISTANT_MESSAGE,
+                    data=SimpleNamespace(
+                        content="Fallback response.",
+                        tool_requests=[],
+                    ),
+                ))
+
+        mock_session.send = AsyncMock(side_effect=send_side_effect)
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        # No pending_futures → should use session.send fallback
+        state = _ConversationState(
+            session=mock_session,
+            client=MagicMock(),
+            messages_sent=2,
+            pending_futures={},
+        )
+        conv_key = _conversation_key([
+            ChatMessageSystem(content="Sys"),
+            ChatMessageUser(content="User"),
+        ])
+        CopilotModelAPI._conversations[conv_key] = state
+
+        # Pre-populate pool dummy (not used since conversation found)
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        CopilotModelAPI._pool = pool
+
+        msgs = [
+            ChatMessageSystem(content="Sys"),
+            ChatMessageUser(content="User"),
+            ChatMessageAssistant(
+                content="Calling tool.",
+                tool_calls=[ToolCall(id="tc_fb", function="bash", arguments={})],
+            ),
+            ChatMessageTool(content="output", tool_call_id="tc_fb", function="bash"),
+        ]
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(PermissionHandler=MagicMock()),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output = await api.generate(
+                input=msgs,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.choices[0].message.text == "Fallback response."
+        # session.send was used (fallback path)
+        mock_session.send.assert_awaited_once()
+
+    async def test_multiple_tool_calls_all_resolved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple pending futures should all be resolved."""
+        import asyncio
+
+        from saber.inspect_ai.integration.copilot_model import (
+            _ConversationState,
+        )
+
+        api = self._make_api(monkeypatch)
+        mock_event_type = MagicMock()
+
+        loop = asyncio.get_running_loop()
+        pending_futures: dict[str, asyncio.Future[str]] = {
+            "tc_a": loop.create_future(),
+            "tc_b": loop.create_future(),
+        }
+
+        def on_side_effect(callback: object) -> MagicMock:
+            async def fire_response() -> None:
+                await asyncio.sleep(0)
+                callback(SimpleNamespace(  # type: ignore[operator]
+                    type=mock_event_type.ASSISTANT_MESSAGE,
+                    data=SimpleNamespace(
+                        content="Both tools completed.",
+                        tool_requests=[],
+                    ),
+                ))
+            asyncio.ensure_future(fire_response())
+            return MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-multi"
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        state = _ConversationState(
+            session=mock_session,
+            client=MagicMock(),
+            messages_sent=2,
+            pending_futures=pending_futures,
+        )
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+            },
+        ):
+            import time
+            result = await api._resolve_and_collect(
+                state,
+                {"tc_a": "result_a", "tc_b": "result_b"},
+                t_start=time.monotonic(),
+                t_session=time.monotonic(),
+                conv_key="multikey1",
+            )
+
+        assert result.choices[0].message.text == "Both tools completed."
+        # All futures should be popped
+        assert "tc_a" not in pending_futures
+        assert "tc_b" not in pending_futures
+
+
+class TestEvictionCancelsFutures:
+    """Test that _evict_conversation cancels pending Futures."""
+
+    @pytest.mark.asyncio
+    async def test_evict_cancels_pending_futures(self) -> None:
+        """Pending futures must be cancelled when conversation is evicted."""
+        import asyncio
+
+        from saber.inspect_ai.integration.copilot_model import (
+            CopilotModelAPI,
+            _ConversationState,
+        )
+
+        loop = asyncio.get_running_loop()
+        fut_a: asyncio.Future[str] = loop.create_future()
+        fut_b: asyncio.Future[str] = loop.create_future()
+
+        mock_client = MagicMock()
+        mock_client.delete_session = AsyncMock(return_value=None)
+
+        state = _ConversationState(
+            session=MagicMock(session_id="sess_1"),
+            client=mock_client,
+            messages_sent=2,
+            pending_futures={"tc_1": fut_a, "tc_2": fut_b},
+        )
+
+        # Manually inject into conversations dict
+        CopilotModelAPI._conversations["test_evict_key"] = state
+        CopilotModelAPI._pool = asyncio.Queue()
+        CopilotModelAPI._shutting_down = False
+
+        try:
+            await CopilotModelAPI._evict_conversation(
+                "test_evict_key", replace_client=False
+            )
+            # Futures should be cancelled
+            assert fut_a.cancelled()
+            assert fut_b.cancelled()
+            assert len(state.pending_futures) == 0
+        finally:
+            # Cleanup: drain pool and reset
+            while not CopilotModelAPI._pool.empty():
+                CopilotModelAPI._pool.get_nowait()
+            CopilotModelAPI._conversations.pop("test_evict_key", None)
+            CopilotModelAPI._pool = None
+
+
+class TestPartialToolResults:
+    """Test that unresolved Futures get fallback results."""
+
+    @pytest.mark.asyncio
+    async def test_orphaned_futures_get_fallback_result(self) -> None:
+        """When inspect_ai sends partial tool results, orphaned futures get fallback."""
+        import asyncio
+
+        from saber.inspect_ai.integration.copilot_model import (
+            CopilotModelAPI,
+            _ConversationState,
+        )
+
+        mock_event_type = MagicMock()
+        loop = asyncio.get_running_loop()
+
+        # Two futures but we'll only resolve one
+        fut_a: asyncio.Future[str] = loop.create_future()
+        fut_b: asyncio.Future[str] = loop.create_future()
+
+        def on_side_effect(callback: object) -> MagicMock:
+            async def fire_response() -> None:
+                await asyncio.sleep(0)
+                callback(SimpleNamespace(  # type: ignore[operator]
+                    type=mock_event_type.ASSISTANT_MESSAGE,
+                    data=SimpleNamespace(
+                        content="Partial results handled.",
+                        tool_requests=[],
+                    ),
+                ))
+            asyncio.ensure_future(fire_response())
+            return MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-partial"
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        state = _ConversationState(
+            session=mock_session,
+            client=MagicMock(),
+            messages_sent=2,
+            pending_futures={"tc_a": fut_a, "tc_b": fut_b},
+        )
+
+        api = CopilotModelAPI.__new__(CopilotModelAPI)
+        api.model_name = "copilot/test"
+        api._timeout = 5
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+            },
+        ):
+            import time
+            # Only send result for tc_a, tc_b is orphaned
+            result = await api._resolve_and_collect(
+                state,
+                {"tc_a": "result for a"},
+                t_start=time.monotonic(),
+                t_session=time.monotonic(),
+                conv_key="partialkey",
+            )
+
+        assert result.choices[0].message.text == "Partial results handled."
+        # fut_a was resolved with the provided result
+        assert fut_a.result() == "result for a"
+        # fut_b was resolved with fallback
+        assert fut_b.result() == "Tool result not available"
+        # All futures cleared
+        assert len(state.pending_futures) == 0
