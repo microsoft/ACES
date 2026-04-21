@@ -83,8 +83,6 @@ class _ConversationState:
     client: object   # CopilotClient
     messages_sent: int = 0
     last_used: float = field(default_factory=time.monotonic)
-    pending_futures: dict[str, asyncio.Future[str]] = field(default_factory=dict)
-    # Maps tool_call_id → Future that resolves with tool result text
 
 
 # ---------------------------------------------------------------------------
@@ -600,8 +598,7 @@ class CopilotModelAPI(ModelAPI):
 
         from copilot import PermissionHandler  # type: ignore[import-untyped]
 
-        pending_futures: dict[str, asyncio.Future[str]] = {}
-        sdk_tools = _convert_tools_for_sdk(tools, pending_futures) if tools else []
+        sdk_tools = _convert_tools_for_sdk(tools) if tools else []
 
         # Use system_message="replace" so the SDK's system prompt is exactly
         # the conversation's system content (no SDK guardrails mixed in).
@@ -671,38 +668,42 @@ class CopilotModelAPI(ModelAPI):
             session, client, prompt, t_start, t_session, conv_key,
         )
 
-        # If the response contains tool_calls, the SDK handler is now
-        # awaiting the Future we created.  Cache the session so that the
-        # next generate() call can resolve those Futures and continue
-        # the conversation in-place (no re-send of full history).
+        # If the response contains tool_requests the SDK agent-loop is now
+        # processing noop handler results and the session is in a transient
+        # state.  Evict it so the next generate() for this conversation
+        # starts a fresh session with the full text history.
         has_tool_calls = (
             result.choices
             and result.choices[0].message.tool_calls
         )
         cls = type(self)
         if has_tool_calls:
-            # Ensure pending_futures has entries for all tool_call_ids.
-            # The handler should have populated them, but create any
-            # missing ones (race condition safety / testing fallback).
-            loop = asyncio.get_running_loop()
-            for tc in result.choices[0].message.tool_calls:
-                if tc.id not in pending_futures:
-                    pending_futures[tc.id] = loop.create_future()
             logger.info(
-                "Copilot generate [new]: response has %d tool_calls — "
-                "caching session with pending futures, conv=%s",
-                len(result.choices[0].message.tool_calls),
+                "Copilot generate [new]: response has tool_calls — "
+                "evicting session to avoid stale agent-loop state, conv=%s",
                 conv_key[:8],
             )
-
-        # Cache conversation state — client stays out of pool
-        cls._conversations[conv_key] = _ConversationState(
-            session=session,
-            client=client,
-            messages_sent=len(input),
-            last_used=time.monotonic(),
-            pending_futures=pending_futures,
-        )
+            # Return client to pool (session will be deleted)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        client.delete_session(  # type: ignore[union-attr]
+                            session.session_id  # type: ignore[union-attr]
+                        )
+                    ),
+                    timeout=_SESSION_DELETE_TIMEOUT,
+                )
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Failed to delete session after tool_calls")
+            await self._return_or_replace_client(client, failed=False)
+        else:
+            # Cache conversation state — client stays out of pool
+            cls._conversations[conv_key] = _ConversationState(
+                session=session,
+                client=client,
+                messages_sent=len(input),
+                last_used=time.monotonic(),
+            )
         return result
 
     async def _continue_conversation(
@@ -713,14 +714,7 @@ class CopilotModelAPI(ModelAPI):
         config: GenerateConfig,
         t_start: float,
     ) -> ModelOutput:
-        """Send delta messages to an existing SDK session.
-
-        When the delta contains tool results and the conversation has
-        pending Futures (from a previous tool-call turn), resolves those
-        Futures so the SDK feeds the results to the model via its
-        internal ``handle_pending_tool_call`` RPC.  Otherwise falls back
-        to sending tool results as formatted text via ``session.send()``.
-        """
+        """Send delta messages to an existing SDK session."""
         delta = input[state.messages_sent:]
         if not delta:
             logger.warning(
@@ -730,79 +724,57 @@ class CopilotModelAPI(ModelAPI):
             )
             return _empty_output(self.model_name)
 
-        conv_key = _conversation_key(input)
+        prompt = _format_tool_results(delta)
+        if not prompt:
+            logger.warning("Copilot generate [continue]: delta produced empty prompt")
+            return _empty_output(self.model_name)
+
+        logger.info(
+            "Copilot generate [continue]: delta=%d msgs, prompt=%d chars, "
+            "prev_sent=%d, total=%d",
+            len(delta),
+            len(prompt),
+            state.messages_sent,
+            len(input),
+        )
+
         t_session = time.monotonic()
+        conv_key = _conversation_key(input)
+        result = await self._send_and_collect(
+            state.session, state.client, prompt, t_start, t_session,
+            conv_key,
+        )
 
-        # Check if delta has tool results AND we have pending futures
-        tool_result_messages = [
-            m for m in delta if isinstance(m, ChatMessageTool)
-        ]
-
-        if tool_result_messages and state.pending_futures:
-            # Resolve futures path — SDK handles feeding results to model
-            tool_results: dict[str, str] = {}
-            for m in tool_result_messages:
-                tc_id: str = getattr(m, "tool_call_id", None) or ""
-                if tc_id:
-                    tool_results[tc_id] = m.text or ""
-
-            logger.info(
-                "Copilot generate [continue]: resolving %d futures, "
-                "prev_sent=%d, total=%d, conv=%s",
-                len(tool_results),
-                state.messages_sent,
-                len(input),
-                conv_key[:8],
-            )
-
-            result = await self._resolve_and_collect(
-                state, tool_results, t_start, t_session, conv_key,
-            )
-        else:
-            # Fallback: send tool results as formatted text
-            prompt = _format_tool_results(delta)
-            if not prompt:
-                logger.warning(
-                    "Copilot generate [continue]: delta produced empty prompt"
-                )
-                return _empty_output(self.model_name)
-
-            logger.info(
-                "Copilot generate [continue]: delta=%d msgs, prompt=%d chars, "
-                "prev_sent=%d, total=%d",
-                len(delta),
-                len(prompt),
-                state.messages_sent,
-                len(input),
-            )
-
-            result = await self._send_and_collect(
-                state.session, state.client, prompt, t_start, t_session,
-                conv_key,
-            )
-
-        # If the response contains tool_calls, ensure pending_futures
-        # are populated for the new tool calls (handler may have already
-        # created them; fill in any missing).
+        # If the response contains tool_calls, evict the session (same
+        # as _start_conversation) so the next generate() starts fresh.
         has_tool_calls = (
             result.choices
             and result.choices[0].message.tool_calls
         )
+        cls = type(self)
         if has_tool_calls:
-            loop = asyncio.get_running_loop()
-            for tc in result.choices[0].message.tool_calls:
-                if tc.id not in state.pending_futures:
-                    state.pending_futures[tc.id] = loop.create_future()
             logger.info(
-                "Copilot generate [continue]: response has %d tool_calls — "
-                "keeping session with pending futures, conv=%s",
-                len(result.choices[0].message.tool_calls),
+                "Copilot generate [continue]: response has tool_calls — "
+                "evicting session, conv=%s",
                 conv_key[:8],
             )
-
-        # Update state for next continuation
-        state.messages_sent = len(input)
-        state.last_used = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        state.client.delete_session(  # type: ignore[union-attr]
+                            state.session.session_id  # type: ignore[union-attr]
+                        )
+                    ),
+                    timeout=_SESSION_DELETE_TIMEOUT,
+                )
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Failed to delete session after tool_calls")
+            cls._conversations.pop(conv_key, None)
+            await self._return_or_replace_client(state.client, failed=False)
+        else:
+            # Update state for next continuation
+            state.messages_sent = len(input)
+            state.last_used = time.monotonic()
         return result
 
     async def _send_and_collect(
@@ -821,10 +793,10 @@ class CopilotModelAPI(ModelAPI):
         * **Text-only** (no tool calls): ``ASSISTANT_MESSAGE`` fires after the
           agent loop completes → captured directly.
         * **Tool calls**: ``EXTERNAL_TOOL_REQUESTED`` fires for each tool
-          call *before* execution.  The Future-based handler blocks the
-          SDK from proceeding until we resolve the Future later via
-          ``_resolve_and_collect``.  We collect the tool-call events and,
-          after a short debounce, synthesise the ``ModelOutput`` ourselves.
+          call *before* execution.  Since ``handler=None``, the CLI blocks
+          waiting for a ``handle_pending_tool_call`` RPC that never comes.
+          We collect the tool-call events and, after a short debounce,
+          synthesise the ``ModelOutput`` ourselves.
 
         Shared by both ``_start_conversation`` and ``_continue_conversation``.
         """
@@ -1008,214 +980,6 @@ class CopilotModelAPI(ModelAPI):
         )
         return result
 
-    async def _resolve_and_collect(
-        self,
-        state: _ConversationState,
-        tool_results: dict[str, str],
-        t_start: float,
-        t_session: float,
-        conv_key: str,
-    ) -> ModelOutput:
-        """Resolve pending Futures and wait for the model response.
-
-        Like ``_send_and_collect`` but resolves tool-result Futures instead
-        of calling ``session.send()``.  The SDK handler receives the results,
-        calls ``handle_pending_tool_call``, and the conversation continues
-        in-place without re-sending the full history.
-
-        Args:
-            state: The conversation state holding session and pending_futures.
-            tool_results: Mapping of ``tool_call_id`` → result text.
-            t_start: Timestamp from the start of the generate() call.
-            t_session: Timestamp from the start of session interaction.
-            conv_key: Conversation key for logging.
-
-        Returns:
-            A ``ModelOutput`` with the assistant response.
-        """
-        from copilot.generated.session_events import (  # type: ignore[import-untyped]
-            SessionEventType,
-        )
-
-        loop = asyncio.get_running_loop()
-        first_response: asyncio.Future[object | None] = loop.create_future()
-
-        pending_tool_calls: list[ToolCall] = []
-        _debounce_handle: asyncio.TimerHandle | None = None
-
-        def _resolve_with_tool_calls() -> None:
-            if first_response.done():
-                return
-            first_response.set_result(_TOOL_CALLS_SENTINEL)
-
-        def _on_event(event: object) -> None:
-            nonlocal _debounce_handle
-            if first_response.done():
-                return
-            event_type = getattr(event, "type", None)
-            data = getattr(event, "data", None)
-
-            if event_type == SessionEventType.EXTERNAL_TOOL_REQUESTED:
-                tool_name = getattr(data, "tool_name", None) or ""
-                tool_call_id = getattr(data, "tool_call_id", None) or ""
-                arguments = getattr(data, "arguments", None)
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except (json.JSONDecodeError, TypeError):
-                        arguments = {}
-                elif not isinstance(arguments, dict):
-                    arguments = arguments if arguments else {}
-                pending_tool_calls.append(
-                    ToolCall(
-                        id=tool_call_id,
-                        function=tool_name,
-                        arguments=arguments,
-                    )
-                )
-                if _debounce_handle is not None:
-                    _debounce_handle.cancel()
-                _debounce_handle = loop.call_later(
-                    _TOOL_CALL_DEBOUNCE, _resolve_with_tool_calls
-                )
-            elif event_type == SessionEventType.ASSISTANT_MESSAGE:
-                if not first_response.done():
-                    first_response.set_result(data)
-            elif event_type == SessionEventType.SESSION_ERROR:
-                msg = getattr(data, "message", None) or str(data)
-                if not first_response.done():
-                    first_response.set_exception(
-                        RuntimeError(f"Copilot session error: {msg}")
-                    )
-            elif event_type == SessionEventType.SESSION_IDLE:
-                if not first_response.done():
-                    first_response.set_result(None)
-
-        unsubscribe = state.session.on(_on_event)  # type: ignore[union-attr]
-        try:
-            t_resolve = time.monotonic()
-            # Resolve pending Futures — SDK handlers return and trigger
-            # handle_pending_tool_call, continuing the conversation.
-            resolved = 0
-            for tool_call_id, result_text in tool_results.items():
-                future = state.pending_futures.pop(tool_call_id, None)
-                if future is not None and not future.done():
-                    future.set_result(result_text)
-                    resolved += 1
-
-            # Any remaining unresolved Futures (partial tool results from
-            # inspect_ai) must be given error results so the SDK handler
-            # coroutines don't hang forever.  The CLI requires a response
-            # for ALL pending tool calls before it continues.
-            orphaned = 0
-            for _tc_id, future in list(state.pending_futures.items()):
-                if not future.done():
-                    future.set_result("Tool result not available")
-                    orphaned += 1
-            state.pending_futures.clear()
-            if orphaned:
-                logger.warning(
-                    "Copilot resolve: %d orphaned futures given fallback "
-                    "result (partial tool results), conv=%s",
-                    orphaned,
-                    conv_key[:8],
-                )
-
-            logger.info(
-                "Copilot resolve: %d/%d futures resolved (%.1fs), "
-                "waiting for response, conv=%s",
-                resolved,
-                resolved + orphaned,
-                t_resolve - t_session,
-                conv_key[:8],
-            )
-
-            try:
-                response_data = await asyncio.wait_for(
-                    first_response, timeout=self._timeout
-                )
-            except asyncio.CancelledError:
-                logger.warning(
-                    "Copilot resolve cancelled (likely time-limit exceeded)"
-                )
-                response_data = None
-            except TimeoutError:
-                logger.warning(
-                    "Copilot resolve timed out after %ds", self._timeout
-                )
-                response_data = None
-            except RuntimeError as exc:
-                logger.warning(
-                    "Copilot resolve error: %s — returning empty response", exc
-                )
-                response_data = None
-        finally:
-            if _debounce_handle is not None:
-                _debounce_handle.cancel()
-            unsubscribe()
-
-        t_response = time.monotonic()
-
-        # Handle tool-call sentinel: build ModelOutput from collected events
-        if response_data is _TOOL_CALLS_SENTINEL and pending_tool_calls:
-            logger.info(
-                "Copilot resolve: captured %d tool_calls via "
-                "EXTERNAL_TOOL_REQUESTED (%.1fs), conv=%s",
-                len(pending_tool_calls),
-                t_response - t_resolve,
-                conv_key[:8],
-            )
-            return ModelOutput(
-                model=self.model_name,
-                choices=[
-                    ChatCompletionChoice(
-                        message=ChatMessageAssistant(
-                            content="",
-                            tool_calls=pending_tool_calls,
-                            source="generate",
-                        ),
-                        stop_reason="tool_calls",
-                    ),
-                ],
-                usage=None,
-            )
-
-        response_content = (
-            getattr(response_data, "content", None) if response_data else None
-        )
-        logger.info(
-            "Copilot resolve: response received (%.1fs), "
-            "content_len=%s, data_type=%s, conv=%s",
-            t_response - t_resolve,
-            len(response_content) if response_content else 0,
-            type(response_data).__name__ if response_data else "None",
-            conv_key[:8],
-        )
-
-        usage: ModelUsage | None = None
-        try:
-            events = await state.session.get_messages()  # type: ignore[union-attr]
-            usage = _extract_usage(events)
-            del events
-        except (asyncio.CancelledError, Exception):
-            logger.debug("Failed to retrieve usage from session", exc_info=True)
-
-        result = _sdk_response_to_model_output(
-            response_data, self.model_name, usage
-        )
-        t_done = time.monotonic()
-        logger.info(
-            "Copilot resolve: total=%.1fs (resolve=%.1fs, response=%.1fs, "
-            "finalize=%.1fs), conv=%s, usage=%s",
-            t_done - t_start,
-            t_resolve - t_session,
-            t_response - t_resolve,
-            t_done - t_response,
-            conv_key[:8],
-            usage,
-        )
-        return result
-
     @classmethod
     async def _evict_conversation(
         cls, conv_key: str, *, replace_client: bool
@@ -1224,13 +988,6 @@ class CopilotModelAPI(ModelAPI):
         state = cls._conversations.pop(conv_key, None)
         if not state:
             return
-
-        # Cancel any pending tool-call Futures so their handler coroutines
-        # don't hang forever inside the SDK's _execute_tool_and_respond.
-        for fut in state.pending_futures.values():
-            if not fut.done():
-                fut.cancel()
-        state.pending_futures.clear()
 
         # Try to delete the session
         try:
@@ -1324,82 +1081,48 @@ def _empty_output(model_name: str) -> ModelOutput:
     )
 
 
-def _make_tool_handler(
-    pending_futures: dict[str, asyncio.Future[str]],
-) -> object:
-    """Create a tool handler that awaits a Future for external tool execution.
+async def _noop_tool_handler(invocation: object) -> object:
+    """Return a benign success result — tool execution is handled externally.
 
-    The returned async handler is attached to each SDK ``Tool``.  When the
-    SDK dispatches a tool-call event, the handler:
-
-    1. Creates an ``asyncio.Future`` keyed by ``tool_call_id``.
-    2. Stores it in *pending_futures* (shared with ``_ConversationState``).
-    3. Awaits the Future.
-    4. Returns a ``ToolResult`` to the SDK, which feeds it back to the
-       model via ``handle_pending_tool_call``.
-
-    Args:
-        pending_futures: Mutable dict shared with the conversation state.
-            Keys are tool-call IDs; values are Futures resolved later by
-            ``_resolve_and_collect``.
-
-    Returns:
-        An async callable suitable for ``copilot.tools.Tool(handler=...)``.
+    The SDK is used only for inference.  If the SDK somehow dispatches a
+    tool execution event despite handler=None in the Tool definition, we
+    return a success result so the SDK does NOT feed an error back to the
+    model (which would cause retry loops and model confusion).
     """
+    from copilot.tools import ToolResult  # type: ignore[import-untyped]
 
-    async def handler(invocation: object) -> object:
-        from copilot.tools import ToolResult  # type: ignore[import-untyped]
-
-        tool_call_id: str = getattr(invocation, "tool_call_id", "") or ""
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str] = loop.create_future()
-        pending_futures[tool_call_id] = future
-        try:
-            result_text = await future
-            return ToolResult(
-                text_result_for_llm=result_text,
-                result_type="success",
-                error=None,
-                tool_telemetry={},
-            )
-        except Exception as exc:
-            return ToolResult(
-                text_result_for_llm="",
-                result_type="failure",
-                error=str(exc),
-                tool_telemetry={},
-            )
-
-    return handler
+    return ToolResult(
+        text_result_for_llm="OK",
+        result_type="success",
+        error=None,
+        tool_telemetry={},
+    )
 
 
-def _convert_tools_for_sdk(
-    tools: list[ToolInfo],
-    pending_futures: dict[str, asyncio.Future[str]],
-) -> list[object]:
+def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
     """Convert inspect_ai ToolInfo list to Copilot SDK Tool objects.
 
-    Each tool is given a Future-based handler that blocks until the
-    corresponding Future is resolved with the tool result.  This keeps
-    the SDK session alive across tool-call turns.
+    Requires the Copilot SDK to be installed.
 
     Args:
         tools: inspect_ai tool specifications.
-        pending_futures: Shared dict for Future-based tool handlers.
 
     Returns:
         List of SDK ``Tool`` objects.
     """
     from copilot.tools import Tool as CopilotSdkTool  # type: ignore[import-untyped]
 
-    tool_handler = _make_tool_handler(pending_futures)
     sdk_tools: list[object] = []
     for tool_info in tools:
         tool_def = _tool_info_to_sdk_tool(tool_info)
+        # handler=None prevents the SDK from executing tools internally.
+        # Tool calls are captured via EXTERNAL_TOOL_REQUESTED events in
+        # _send_and_collect() and returned as structured ToolCall objects
+        # to the bridge/caller for external execution.
         sdk_tool = CopilotSdkTool(
             name=tool_def.name,
             description=tool_def.description,
-            handler=tool_handler,
+            handler=None,  # type: ignore[arg-type]
             parameters=tool_def.parameters,
             overrides_built_in_tool=True,
         )
