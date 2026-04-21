@@ -50,6 +50,7 @@ logger = get_logger(__name__)
 _SESSION_DELETE_TIMEOUT = 10  # seconds to wait for session cleanup
 _CLIENT_STOP_TIMEOUT = 15  # seconds to wait for SDK subprocess shutdown
 _POOL_ACQUIRE_TIMEOUT = 120  # seconds to wait for a client from pool
+_TOOL_CALL_DEBOUNCE = 0.5  # seconds to wait after last EXTERNAL_TOOL_REQUESTED event
 
 # Sentinel used by _send_and_collect to signal that tool calls were captured
 # from EXTERNAL_TOOL_REQUESTED events (not from ASSISTANT_MESSAGE).
@@ -645,7 +646,6 @@ class CopilotModelAPI(ModelAPI):
         # sees prior tool calls and results.
         has_tool_history = any(
             isinstance(m, (ChatMessageAssistant, ChatMessageTool))
-            and not (isinstance(m, ChatMessageAssistant) and m == input[0])
             for m in input
         )
         if has_tool_history:
@@ -739,14 +739,42 @@ class CopilotModelAPI(ModelAPI):
         )
 
         t_session = time.monotonic()
+        conv_key = _conversation_key(input)
         result = await self._send_and_collect(
             state.session, state.client, prompt, t_start, t_session,
-            _conversation_key(input),
+            conv_key,
         )
 
-        # Update state
-        state.messages_sent = len(input)
-        state.last_used = time.monotonic()
+        # If the response contains tool_calls, evict the session (same
+        # as _start_conversation) so the next generate() starts fresh.
+        has_tool_calls = (
+            result.choices
+            and result.choices[0].message.tool_calls
+        )
+        cls = type(self)
+        if has_tool_calls:
+            logger.info(
+                "Copilot generate [continue]: response has tool_calls — "
+                "evicting session, conv=%s",
+                conv_key[:8],
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(
+                        state.client.delete_session(  # type: ignore[union-attr]
+                            state.session.session_id  # type: ignore[union-attr]
+                        )
+                    ),
+                    timeout=_SESSION_DELETE_TIMEOUT,
+                )
+            except (asyncio.CancelledError, Exception):
+                logger.debug("Failed to delete session after tool_calls")
+            cls._conversations.pop(conv_key, None)
+            await self._return_or_replace_client(state.client, failed=False)
+        else:
+            # Update state for next continuation
+            state.messages_sent = len(input)
+            state.last_used = time.monotonic()
         return result
 
     async def _send_and_collect(
@@ -838,7 +866,7 @@ class CopilotModelAPI(ModelAPI):
                 if _debounce_handle is not None:
                     _debounce_handle.cancel()
                 _debounce_handle = loop.call_later(
-                    0.5, _resolve_with_tool_calls
+                    _TOOL_CALL_DEBOUNCE, _resolve_with_tool_calls
                 )
             elif event_type == SessionEventType.ASSISTANT_MESSAGE:
                 if not first_response.done():

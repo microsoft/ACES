@@ -1372,7 +1372,117 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
+        assert output_a.choices[0].message.text == "Response A"
+        assert output_b.choices[0].message.text == "Response B"
         assert len(CopilotModelAPI._conversations) == 2
+
+    async def test_continuation_with_tool_calls_evicts_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When a continuation (turn 2+) returns tool_calls, the session
+        should be evicted — same as _start_conversation behaviour."""
+        api = self._make_api(monkeypatch)
+
+        # Turn 1: text-only → session cached
+        mock_session1, mock_event_type = self._make_session_with_response(
+            "sess-ct-1", "Scanning..."
+        )
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session1)
+        mock_client.delete_session = AsyncMock()
+        self._prepopulate_pool(mock_client)
+
+        turn1_msgs = [
+            ChatMessageSystem(content="You are a scanner."),
+            ChatMessageUser(content="Scan /workspace"),
+        ]
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(PermissionHandler=MagicMock()),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            from inspect_ai.model._generate_config import GenerateConfig
+
+            output1 = await api.generate(
+                input=turn1_msgs,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+            assert output1.choices[0].message.text == "Scanning..."
+
+        # Session should be cached (text-only response)
+        assert len(CopilotModelAPI._conversations) == 1
+
+        # Turn 2: continuation returns tool_calls → session must be evicted
+        turn2_msgs = turn1_msgs + [
+            ChatMessageUser(content="Now run a deeper scan"),
+        ]
+
+        # Reconfigure session1 to return tool_calls on next send
+        tool_requests_turn2 = [
+            SimpleNamespace(
+                tool_call_id="tc_deep",
+                name="bash",
+                arguments={"cmd": "find / -name '*.py'"},
+            )
+        ]
+        captured_callback_2 = None
+
+        def on_side_effect_2(callback: object) -> MagicMock:
+            nonlocal captured_callback_2
+            captured_callback_2 = callback
+            return MagicMock()
+
+        mock_session1.on = MagicMock(side_effect=on_side_effect_2)
+
+        response_data_2 = SimpleNamespace(
+            content="Running deep scan.",
+            tool_requests=tool_requests_turn2,
+        )
+
+        async def send_side_effect_2(prompt: str) -> None:
+            event = SimpleNamespace(
+                type=mock_event_type.ASSISTANT_MESSAGE,
+                data=response_data_2,
+            )
+            if captured_callback_2 is not None:
+                captured_callback_2(event)
+
+        mock_session1.send = AsyncMock(side_effect=send_side_effect_2)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(PermissionHandler=MagicMock()),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            output2 = await api.generate(
+                input=turn2_msgs,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output2.stop_reason == "tool_calls"
+        # Session should be evicted after tool_calls in continuation
+        assert len(CopilotModelAPI._conversations) == 0
+        # delete_session called for the evicted session
+        mock_client.delete_session.assert_awaited_once()
+        # Client returned to pool
+        assert CopilotModelAPI._pool is not None
+        assert CopilotModelAPI._pool.qsize() == 1
 
 
 # ---------------------------------------------------------------------------
