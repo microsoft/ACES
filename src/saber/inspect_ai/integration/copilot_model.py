@@ -1039,6 +1039,34 @@ class CopilotModelAPI(ModelAPI):
                 except asyncio.QueueEmpty:
                     break
 
+        # Delete ALL sessions on ALL clients before stopping them.
+        # client.stop() only disconnects sessions — it does NOT delete
+        # them from the copilot backend.  Undeleted sessions persist
+        # and show up as ghost conversations in VS Code.
+        for client in CopilotModelAPI._all_clients:
+            try:
+                sessions_lock = getattr(client, "_sessions_lock", None)
+                sessions = getattr(client, "_sessions", {})
+                if sessions_lock is not None:
+                    import threading
+                    if isinstance(sessions_lock, threading.Lock):
+                        with sessions_lock:
+                            session_ids = list(sessions.keys())
+                    else:
+                        session_ids = list(sessions.keys())
+                else:
+                    session_ids = list(sessions.keys())
+                for sid in session_ids:
+                    try:
+                        await asyncio.wait_for(
+                            client.delete_session(sid),  # type: ignore[union-attr]
+                            timeout=_SESSION_DELETE_TIMEOUT,
+                        )
+                    except Exception:
+                        logger.debug("Failed to delete session %s during shutdown", sid)
+            except Exception:
+                logger.debug("Failed to enumerate sessions on client", exc_info=True)
+
         # Stop all tracked clients
         for client in CopilotModelAPI._all_clients:
             try:
