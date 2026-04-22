@@ -51,6 +51,8 @@ _SESSION_DELETE_TIMEOUT = 10  # seconds to wait for session cleanup
 _CLIENT_STOP_TIMEOUT = 15  # seconds to wait for SDK subprocess shutdown
 _POOL_ACQUIRE_TIMEOUT = 120  # seconds to wait for a client from pool
 _TOOL_CALL_DEBOUNCE = 0.5  # seconds to wait after last EXTERNAL_TOOL_REQUESTED event
+_DEFAULT_TIMEOUT = 120  # seconds to wait for SDK response (p99 is ~152s)
+_DEFAULT_POOL_SIZE = 16  # SDK subprocess pool — higher = more parallelism
 
 # Sentinel used by _send_and_collect to signal that tool calls were captured
 # from EXTERNAL_TOOL_REQUESTED events (not from ASSISTANT_MESSAGE).
@@ -371,7 +373,7 @@ class CopilotModelAPI(ModelAPI):
 
     _pool: ClassVar[asyncio.Queue[object] | None] = None
     _pool_lock: ClassVar[asyncio.Lock] = asyncio.Lock()  # Eager init — no race
-    _pool_size: ClassVar[int] = 8
+    _pool_size: ClassVar[int] = _DEFAULT_POOL_SIZE
     _all_clients: ClassVar[list[object]] = []
     _instance_count: ClassVar[int] = 0
     _github_token: ClassVar[str | None] = None
@@ -404,8 +406,8 @@ class CopilotModelAPI(ModelAPI):
         super().__init__(
             model_name, base_url, api_key, [], config or GenerateConfig()
         )
-        self._timeout = int(model_args.get("timeout", "300"))
-        self._pool_size_local = int(model_args.get("pool_size", "8"))
+        self._timeout = int(model_args.get("timeout", str(_DEFAULT_TIMEOUT)))
+        self._pool_size_local = int(model_args.get("pool_size", str(_DEFAULT_POOL_SIZE)))
         CopilotModelAPI._pool_size = self._pool_size_local
 
         token = api_key or os.environ.get("GITHUB_TOKEN")
@@ -640,10 +642,9 @@ class CopilotModelAPI(ModelAPI):
 
         # Determine the prompt to send.  On a true first turn the input
         # only has system + user messages — send just the user content
-        # (system is set via system_message config).  When starting a
-        # fresh session for a continuation (e.g. after evicting a session
-        # that had tool_calls), serialize the full history so the model
-        # sees prior tool calls and results.
+        # (system is set via system_message config).  When a session died
+        # and had to be recreated (error paths in generate()), we have
+        # prior history that must be serialized as text.
         has_tool_history = any(
             isinstance(m, (ChatMessageAssistant, ChatMessageTool))
             for m in input
@@ -668,10 +669,10 @@ class CopilotModelAPI(ModelAPI):
             session, client, prompt, t_start, t_session, conv_key,
         )
 
-        # If the response contains tool_requests the SDK agent-loop is now
-        # processing noop handler results and the session is in a transient
-        # state.  Evict it so the next generate() for this conversation
-        # starts a fresh session with the full text history.
+        # If the response has tool_calls, the CLI is now blocked waiting
+        # for handle_pending_tool_call (handler=None).  We cannot reuse
+        # this session — session.send() on a blocked CLI hangs.  Evict
+        # and let the next generate() create a fresh session.
         has_tool_calls = (
             result.choices
             and result.choices[0].message.tool_calls
@@ -680,10 +681,9 @@ class CopilotModelAPI(ModelAPI):
         if has_tool_calls:
             logger.info(
                 "Copilot generate [new]: response has tool_calls — "
-                "evicting session to avoid stale agent-loop state, conv=%s",
+                "evicting session (CLI blocked), conv=%s",
                 conv_key[:8],
             )
-            # Return client to pool (session will be deleted)
             try:
                 await asyncio.wait_for(
                     asyncio.shield(
@@ -697,7 +697,7 @@ class CopilotModelAPI(ModelAPI):
                 logger.debug("Failed to delete session after tool_calls")
             await self._return_or_replace_client(client, failed=False)
         else:
-            # Cache conversation state — client stays out of pool
+            # Text-only response — cache for session reuse
             cls._conversations[conv_key] = _ConversationState(
                 session=session,
                 client=client,
@@ -745,8 +745,8 @@ class CopilotModelAPI(ModelAPI):
             conv_key,
         )
 
-        # If the response contains tool_calls, evict the session (same
-        # as _start_conversation) so the next generate() starts fresh.
+        # Evict on tool_calls (same as _start_conversation) — the CLI
+        # blocks on pending tool calls and can't process new send()s.
         has_tool_calls = (
             result.choices
             and result.choices[0].message.tool_calls
@@ -772,7 +772,6 @@ class CopilotModelAPI(ModelAPI):
             cls._conversations.pop(conv_key, None)
             await self._return_or_replace_client(state.client, failed=False)
         else:
-            # Update state for next continuation
             state.messages_sent = len(input)
             state.last_used = time.monotonic()
         return result

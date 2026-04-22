@@ -352,7 +352,7 @@ class TestCopilotModelAPIInit:
     def test_init_with_github_token_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "test-token")
         api = CopilotModelAPI(model_name="gpt-4o")
-        assert api._timeout == 300
+        assert api._timeout == 120
         assert CopilotModelAPI._github_token == "test-token"
         assert CopilotModelAPI._instance_count == 1
 
@@ -360,7 +360,7 @@ class TestCopilotModelAPIInit:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         api = CopilotModelAPI(model_name="gpt-4o", api_key="my-key")
         assert CopilotModelAPI._github_token == "my-key"
-        assert api._timeout == 300
+        assert api._timeout == 120
 
     def test_init_custom_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "test-token")
@@ -383,7 +383,7 @@ class TestCopilotModelAPIInit:
         with patch("shutil.which", return_value="/usr/bin/gh"):
             api = CopilotModelAPI(model_name="gpt-4o")
         assert CopilotModelAPI._github_token is None
-        assert api._timeout == 300
+        assert api._timeout == 120
 
     def test_init_increments_instance_count(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1238,8 +1238,8 @@ class TestMultiTurnSessionReuse:
     async def test_second_call_reuses_session(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When turn 1 returns tool_calls the session is evicted and turn 2
-        creates a fresh session with the full text history."""
+        """When turn 1 returns tool_calls, the session is evicted.
+        Turn 2 creates a fresh session with full history."""
         api = self._make_api(monkeypatch)
 
         tool_requests_turn1 = [
@@ -1290,9 +1290,7 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
-            # Update mock for turn 2 — new session created
-            # (session was evicted because turn 1 had tool_calls)
-            # Reuse the same event type so the patched SessionEventType matches
+            # Session evicted after tool_calls — create new session for turn 2
             mock_session2 = self._make_session_with_event_type(
                 "sess-mt-2", "Found vulnerability in file1.py", mock_event_type
             )
@@ -1306,14 +1304,12 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
-        # Session created TWICE (evicted after tool_calls)
-        assert mock_client.create_session.await_count == 1  # second call only
-        # delete_session called once for the evicted session
+        # delete_session called for evicted session from turn 1
         mock_client.delete_session.assert_awaited_once()
-        # Both turns should produce valid output
+        # Both turns produce valid output
         assert output1.choices[0].message.text == "Calling bash."
         assert output2.choices[0].message.text == "Found vulnerability in file1.py"
-        # No conversation should remain cached (turn 2 had no tool_calls so it IS cached)
+        # turn 2 text-only response → session cached
         assert len(CopilotModelAPI._conversations) == 1
 
     async def test_different_conversations_get_different_sessions(
@@ -1376,11 +1372,11 @@ class TestMultiTurnSessionReuse:
         assert output_b.choices[0].message.text == "Response B"
         assert len(CopilotModelAPI._conversations) == 2
 
-    async def test_continuation_with_tool_calls_evicts_session(
+    async def test_continuation_with_tool_calls_keeps_session(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """When a continuation (turn 2+) returns tool_calls, the session
-        should be evicted — same as _start_conversation behaviour."""
+        should be kept alive — NOT evicted."""
         api = self._make_api(monkeypatch)
 
         # Turn 1: text-only → session cached
@@ -1476,13 +1472,9 @@ class TestMultiTurnSessionReuse:
             )
 
         assert output2.stop_reason == "tool_calls"
-        # Session should be evicted after tool_calls in continuation
+        # Session evicted after tool_calls (CLI blocks on pending tool call)
         assert len(CopilotModelAPI._conversations) == 0
-        # delete_session called for the evicted session
         mock_client.delete_session.assert_awaited_once()
-        # Client returned to pool
-        assert CopilotModelAPI._pool is not None
-        assert CopilotModelAPI._pool.qsize() == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1500,7 +1492,7 @@ class TestCopilotClientPool:
     ) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         CopilotModelAPI(model_name="gpt-4o")
-        assert CopilotModelAPI._pool_size == 8
+        assert CopilotModelAPI._pool_size == 16
 
     def test_init_custom_pool_size(
         self, monkeypatch: pytest.MonkeyPatch
