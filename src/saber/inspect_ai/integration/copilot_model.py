@@ -52,7 +52,7 @@ _CLIENT_STOP_TIMEOUT = 15  # seconds to wait for SDK subprocess shutdown
 _POOL_ACQUIRE_TIMEOUT = 120  # seconds to wait for a client from pool
 _TOOL_CALL_DEBOUNCE = 0.5  # seconds to wait after last EXTERNAL_TOOL_REQUESTED event
 _DEFAULT_TIMEOUT = 120  # seconds to wait for SDK response (p99 is ~152s)
-_DEFAULT_POOL_SIZE = 16  # SDK subprocess pool — higher = more parallelism
+_DEFAULT_POOL_SIZE = 10  # SDK subprocess pool — 16 caused broken pipes
 
 # Sentinel used by _send_and_collect to signal that tool calls were captured
 # from EXTERNAL_TOOL_REQUESTED events (not from ASSISTANT_MESSAGE).

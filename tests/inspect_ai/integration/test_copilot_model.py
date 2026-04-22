@@ -1492,7 +1492,7 @@ class TestCopilotClientPool:
     ) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         CopilotModelAPI(model_name="gpt-4o")
-        assert CopilotModelAPI._pool_size == 16
+        assert CopilotModelAPI._pool_size == 10
 
     def test_init_custom_pool_size(
         self, monkeypatch: pytest.MonkeyPatch
