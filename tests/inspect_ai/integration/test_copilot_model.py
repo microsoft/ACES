@@ -8,6 +8,7 @@ Tests the pure conversion functions and the CopilotModelAPI class:
 - CopilotModelAPI: ModelAPI subclass with singleton client management
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ from inspect_ai.model import (
     ModelOutput,
     ModelUsage,
 )
+from inspect_ai.model._generate_config import GenerateConfig
 from inspect_ai.tool import ToolCall, ToolInfo
 from inspect_ai.tool._tool_params import ToolParams
 
@@ -27,11 +29,13 @@ from saber.inspect_ai.integration.copilot_model import (
     CopilotModelAPI,
     CopilotToolDef,
     _conversation_key,
+    _ConversationState,
     _convert_tools_for_sdk,
     _extract_first_user_content,
     _extract_system_content,
     _extract_usage,
     _format_tool_results,
+    _make_blocking_handler,
     _messages_to_prompt,
     _noop_tool_handler,
     _sdk_response_to_model_output,
@@ -1238,8 +1242,8 @@ class TestMultiTurnSessionReuse:
     async def test_second_call_reuses_session(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When turn 1 returns tool_calls, the session is evicted.
-        Turn 2 creates a fresh session with full history."""
+        """When turn 1 returns tool_calls, the session is kept alive
+        (blocking handlers). Turn 2 continues in the same session."""
         api = self._make_api(monkeypatch)
 
         tool_requests_turn1 = [
@@ -1262,13 +1266,6 @@ class TestMultiTurnSessionReuse:
             ChatMessageSystem(content="You are a security scanner."),
             ChatMessageUser(content="Scan /workspace"),
         ]
-        turn2_msgs = turn1_msgs + [
-            ChatMessageAssistant(
-                content="Calling bash.",
-                tool_calls=[ToolCall(id="tc_1", function="bash", arguments={"cmd": "ls"})],
-            ),
-            ChatMessageTool(content="file1.py\nfile2.py", tool_call_id="tc_1", function="bash"),
-        ]
 
         with patch.dict(
             "sys.modules",
@@ -1280,8 +1277,6 @@ class TestMultiTurnSessionReuse:
                 "copilot.tools": MagicMock(),
             },
         ):
-            from inspect_ai.model._generate_config import GenerateConfig
-
             # Turn 1
             output1 = await api.generate(
                 input=turn1_msgs,
@@ -1290,26 +1285,11 @@ class TestMultiTurnSessionReuse:
                 config=GenerateConfig(),
             )
 
-            # Session evicted after tool_calls — create new session for turn 2
-            mock_session2 = self._make_session_with_event_type(
-                "sess-mt-2", "Found vulnerability in file1.py", mock_event_type
-            )
-            mock_client.create_session = AsyncMock(return_value=mock_session2)
-
-            # Turn 2
-            output2 = await api.generate(
-                input=turn2_msgs,
-                tools=[],
-                tool_choice="auto",
-                config=GenerateConfig(),
-            )
-
-        # delete_session called for evicted session from turn 1
-        mock_client.delete_session.assert_awaited_once()
-        # Both turns produce valid output
+        # Session NOT evicted — kept alive for blocking handler pattern
+        mock_client.delete_session.assert_not_awaited()
         assert output1.choices[0].message.text == "Calling bash."
-        assert output2.choices[0].message.text == "Found vulnerability in file1.py"
-        # turn 2 text-only response → session cached
+        assert output1.stop_reason == "tool_calls"
+        # Session cached (not evicted)
         assert len(CopilotModelAPI._conversations) == 1
 
     async def test_different_conversations_get_different_sessions(
@@ -1472,9 +1452,9 @@ class TestMultiTurnSessionReuse:
             )
 
         assert output2.stop_reason == "tool_calls"
-        # Session evicted after tool_calls (CLI blocks on pending tool call)
-        assert len(CopilotModelAPI._conversations) == 0
-        mock_client.delete_session.assert_awaited_once()
+        # Session kept alive — blocking handlers hold futures
+        assert len(CopilotModelAPI._conversations) == 1
+        mock_client.delete_session.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1901,9 +1881,9 @@ class TestNoopToolHandler:
 class TestConvertToolsForSdk:
     """Tests for _convert_tools_for_sdk tool handler registration."""
 
-    def test_tools_have_no_handler(self) -> None:
-        """SDK tools should have handler=None so tool calls are captured via
-        EXTERNAL_TOOL_REQUESTED events instead of being executed by the SDK."""
+    def test_tools_have_blocking_handler(self) -> None:
+        """SDK tools should have a blocking async handler (not None) so the SDK
+        waits for tool results instead of blocking the CLI forever."""
         from dataclasses import dataclass
 
         @dataclass
@@ -1922,11 +1902,39 @@ class TestConvertToolsForSdk:
             ToolInfo(name="run_command", description="Run a command"),
             ToolInfo(name="read_file", description="Read a file"),
         ]
+        pending: dict[str, asyncio.Future[object]] = {}
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            sdk_tools = _convert_tools_for_sdk(tools)
+            sdk_tools = _convert_tools_for_sdk(tools, pending)
         assert len(sdk_tools) == 2
         for sdk_tool in sdk_tools:
-            assert sdk_tool.handler is None
+            assert sdk_tool.handler is not None
+            assert callable(sdk_tool.handler)
+
+    def test_all_tools_share_same_handler(self) -> None:
+        """All SDK tools should share the same handler closure."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeTool:
+            name: str
+            description: str
+            handler: object
+            parameters: object = None
+            overrides_built_in_tool: bool = False
+            skip_permission: bool = False
+
+        mock_tools_module = MagicMock()
+        mock_tools_module.Tool = FakeTool
+
+        tools = [
+            ToolInfo(name="run_command", description="Run a command"),
+            ToolInfo(name="read_file", description="Read a file"),
+        ]
+        pending: dict[str, asyncio.Future[object]] = {}
+        with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
+            sdk_tools = _convert_tools_for_sdk(tools, pending)
+        # All tools share the same handler instance
+        assert sdk_tools[0].handler is sdk_tools[1].handler
 
     def test_tools_preserve_name_and_description(self) -> None:
         """SDK tools should have correct name and description."""
@@ -1947,8 +1955,9 @@ class TestConvertToolsForSdk:
         tools = [
             ToolInfo(name="run_command", description="Execute a shell command"),
         ]
+        pending: dict[str, asyncio.Future[object]] = {}
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            sdk_tools = _convert_tools_for_sdk(tools)
+            sdk_tools = _convert_tools_for_sdk(tools, pending)
         assert sdk_tools[0].name == "run_command"
         assert sdk_tools[0].description == "Execute a shell command"
 
@@ -1969,8 +1978,9 @@ class TestConvertToolsForSdk:
         mock_tools_module.Tool = FakeTool
 
         tools = [ToolInfo(name="bash", description="Run bash")]
+        pending: dict[str, asyncio.Future[object]] = {}
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            sdk_tools = _convert_tools_for_sdk(tools)
+            sdk_tools = _convert_tools_for_sdk(tools, pending)
         assert sdk_tools[0].overrides_built_in_tool is True
 
     def test_empty_tools_returns_empty(self) -> None:
@@ -1989,5 +1999,505 @@ class TestConvertToolsForSdk:
         mock_tools_module = MagicMock()
         mock_tools_module.Tool = FakeTool
 
+        pending: dict[str, asyncio.Future[object]] = {}
         with patch.dict("sys.modules", {"copilot": MagicMock(), "copilot.tools": mock_tools_module}):
-            assert _convert_tools_for_sdk([]) == []
+            assert _convert_tools_for_sdk([], pending) == []
+
+
+# ---------------------------------------------------------------------------
+# _make_blocking_handler
+# ---------------------------------------------------------------------------
+class TestMakeBlockingHandler:
+    """Tests for _make_blocking_handler — creates async handlers that block
+    until a future is resolved with the tool result."""
+
+    async def test_creates_future_in_dict(self) -> None:
+        """Handler should create a future keyed by tool_call_id."""
+        pending: dict[str, asyncio.Future[object]] = {}
+        handler = _make_blocking_handler(pending)
+        invocation = SimpleNamespace(tool_call_id="tc_1")
+
+        task = asyncio.create_task(handler(invocation))
+        await asyncio.sleep(0)  # Let the task start
+
+        assert "tc_1" in pending
+        assert not pending["tc_1"].done()
+
+        # Clean up — resolve future so task completes
+        pending["tc_1"].set_result(SimpleNamespace(text_result_for_llm="ok"))
+        await task
+
+    async def test_returns_when_future_resolved(self) -> None:
+        """Handler should return the exact result set on the future."""
+        pending: dict[str, asyncio.Future[object]] = {}
+        handler = _make_blocking_handler(pending)
+        invocation = SimpleNamespace(tool_call_id="tc_2")
+        expected_result = SimpleNamespace(text_result_for_llm="done")
+
+        task = asyncio.create_task(handler(invocation))
+        await asyncio.sleep(0)
+
+        pending["tc_2"].set_result(expected_result)
+        result = await task
+
+        assert result is expected_result
+
+    async def test_returns_failure_on_cancellation(self) -> None:
+        """Cancelled future should return a ToolResult with failure."""
+        mock_tool_result_cls = MagicMock()
+        pending: dict[str, asyncio.Future[object]] = {}
+        handler = _make_blocking_handler(pending)
+        invocation = SimpleNamespace(tool_call_id="tc_3")
+
+        with patch.dict(
+            "sys.modules",
+            {"copilot": MagicMock(), "copilot.tools": MagicMock(ToolResult=mock_tool_result_cls)},
+        ):
+            task = asyncio.create_task(handler(invocation))
+            await asyncio.sleep(0)
+
+            pending["tc_3"].cancel()
+            await task
+
+        mock_tool_result_cls.assert_called_once()
+        call_kwargs = mock_tool_result_cls.call_args[1]
+        assert call_kwargs["result_type"] == "failure"
+        assert call_kwargs["error"] == "cancelled"
+
+    async def test_empty_tool_call_id(self) -> None:
+        """Handler should handle missing/empty tool_call_id gracefully."""
+        pending: dict[str, asyncio.Future[object]] = {}
+        handler = _make_blocking_handler(pending)
+        invocation = SimpleNamespace(tool_call_id=None)
+
+        task = asyncio.create_task(handler(invocation))
+        await asyncio.sleep(0)
+
+        assert "" in pending
+        pending[""].set_result(SimpleNamespace(text_result_for_llm="ok"))
+        await task
+
+    async def test_multiple_tool_calls_create_separate_futures(self) -> None:
+        """Each tool call should get its own future in the dict."""
+        pending: dict[str, asyncio.Future[object]] = {}
+        handler = _make_blocking_handler(pending)
+
+        inv1 = SimpleNamespace(tool_call_id="tc_a")
+        inv2 = SimpleNamespace(tool_call_id="tc_b")
+
+        task1 = asyncio.create_task(handler(inv1))
+        task2 = asyncio.create_task(handler(inv2))
+        await asyncio.sleep(0)
+
+        assert "tc_a" in pending
+        assert "tc_b" in pending
+        assert pending["tc_a"] is not pending["tc_b"]
+
+        pending["tc_a"].set_result(SimpleNamespace(text_result_for_llm="r1"))
+        pending["tc_b"].set_result(SimpleNamespace(text_result_for_llm="r2"))
+        r1 = await task1
+        r2 = await task2
+        assert getattr(r1, "text_result_for_llm", None) == "r1"
+        assert getattr(r2, "text_result_for_llm", None) == "r2"
+
+
+# ---------------------------------------------------------------------------
+# Session not evicted on tool_calls (blocking handler pattern)
+# ---------------------------------------------------------------------------
+class TestSessionNotEvictedOnToolCalls:
+    """Verify that after tool calls, the session is retained — not deleted."""
+
+    def _make_api(self, monkeypatch: pytest.MonkeyPatch) -> CopilotModelAPI:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        return CopilotModelAPI(model_name="gpt-4o")
+
+    def _prepopulate_pool(self, mock_client: object) -> None:
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        pool.put_nowait(mock_client)
+        CopilotModelAPI._pool = pool
+        CopilotModelAPI._all_clients = [mock_client]
+
+    def _make_session_with_response(
+        self,
+        session_id: str,
+        content: str,
+        mock_event_type: MagicMock,
+        tool_requests: list[object] | None = None,
+    ) -> MagicMock:
+        mock_session = MagicMock()
+        mock_session.session_id = session_id
+
+        captured_callback = None
+
+        def on_side_effect(callback: object) -> MagicMock:
+            nonlocal captured_callback
+            captured_callback = callback
+            return MagicMock()
+
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+
+        response_data = SimpleNamespace(
+            content=content,
+            tool_requests=tool_requests or [],
+        )
+
+        async def send_side_effect(prompt: str) -> None:
+            event = SimpleNamespace(
+                type=mock_event_type.ASSISTANT_MESSAGE,
+                data=response_data,
+            )
+            if captured_callback is not None:
+                captured_callback(event)
+
+        mock_session.send = AsyncMock(side_effect=send_side_effect)
+        mock_session.get_messages = AsyncMock(return_value=[])
+        return mock_session
+
+    async def test_start_conversation_keeps_session_on_tool_calls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After _start_conversation returns tool_calls, the session should
+        be cached in _conversations — NOT deleted."""
+        api = self._make_api(monkeypatch)
+
+        mock_event_type = MagicMock()
+        tool_requests = [
+            SimpleNamespace(tool_call_id="tc_1", name="bash", arguments={"cmd": "ls"})
+        ]
+        mock_session = self._make_session_with_response(
+            "sess-keep-1", "Calling tool.", mock_event_type, tool_requests
+        )
+
+        mock_client = AsyncMock()
+        mock_client.create_session = AsyncMock(return_value=mock_session)
+        mock_client.delete_session = AsyncMock()
+        self._prepopulate_pool(mock_client)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(PermissionHandler=MagicMock()),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            output = await api.generate(
+                input=[ChatMessageUser(content="Scan")],
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.stop_reason == "tool_calls"
+        # Session NOT evicted
+        mock_client.delete_session.assert_not_awaited()
+        # Session cached
+        assert len(CopilotModelAPI._conversations) == 1
+        # Client NOT returned to pool (held by conversation)
+        assert CopilotModelAPI._pool is not None
+        assert CopilotModelAPI._pool.qsize() == 0
+
+    async def test_evict_cancels_pending_futures(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When a conversation is evicted, pending futures should be cancelled."""
+        self._make_api(monkeypatch)
+
+        loop = asyncio.get_running_loop()
+        fut1: asyncio.Future[object] = loop.create_future()
+        fut2: asyncio.Future[object] = loop.create_future()
+
+        mock_client = AsyncMock()
+        mock_client.delete_session = AsyncMock()
+
+        state = _ConversationState(
+            session=MagicMock(session_id="sess-evict"),
+            client=mock_client,
+            messages_sent=2,
+            pending_tool_futures={"tc_1": fut1, "tc_2": fut2},
+        )
+
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        CopilotModelAPI._pool = pool
+        CopilotModelAPI._all_clients = [mock_client]
+        CopilotModelAPI._conversations["key123"] = state
+
+        await CopilotModelAPI._evict_conversation("key123", replace_client=False)
+
+        assert fut1.cancelled()
+        assert fut2.cancelled()
+        assert len(CopilotModelAPI._conversations) == 0
+
+
+# ---------------------------------------------------------------------------
+# Resume after tools — _resume_after_tools
+# ---------------------------------------------------------------------------
+class TestResumeAfterTools:
+    """Tests for the resume flow: resolving pending tool futures and
+    collecting the model's next response."""
+
+    def _make_api(self, monkeypatch: pytest.MonkeyPatch) -> CopilotModelAPI:
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        return CopilotModelAPI(model_name="gpt-4o")
+
+    async def test_resume_resolves_futures_and_gets_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When generate() is called with tool results and pending futures exist,
+        futures should be resolved and the model's next response captured."""
+        api = self._make_api(monkeypatch)
+
+        mock_event_type = MagicMock()
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-resume"
+
+        captured_cb = None
+
+        def on_side_effect(cb: object) -> MagicMock:
+            nonlocal captured_cb
+            captured_cb = cb
+
+            async def fire_event() -> None:
+                await asyncio.sleep(0.05)
+                if captured_cb is not None:
+                    captured_cb(SimpleNamespace(
+                        type=mock_event_type.ASSISTANT_MESSAGE,
+                        data=SimpleNamespace(content="Found vuln!", tool_requests=[]),
+                    ))
+
+            asyncio.ensure_future(fire_event())
+            return MagicMock()
+
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+        mock_session.send = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[object] = loop.create_future()
+        pending_futures: dict[str, asyncio.Future[object]] = {"tc_1": fut}
+
+        conv_key = _conversation_key([
+            ChatMessageSystem(content="System"),
+            ChatMessageUser(content="Scan"),
+        ])
+        CopilotModelAPI._conversations[conv_key] = _ConversationState(
+            session=mock_session,
+            client=mock_client,
+            messages_sent=2,
+            pending_tool_futures=pending_futures,
+        )
+
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        CopilotModelAPI._pool = pool
+        CopilotModelAPI._all_clients = []
+
+        messages = [
+            ChatMessageSystem(content="System"),
+            ChatMessageUser(content="Scan"),
+            ChatMessageAssistant(
+                content="Calling tool.",
+                tool_calls=[ToolCall(id="tc_1", function="bash", arguments={"cmd": "ls"})],
+            ),
+            ChatMessageTool(content="file1.py", tool_call_id="tc_1", function="bash"),
+        ]
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            output = await api.generate(
+                input=messages,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.choices[0].message.text == "Found vuln!"
+        assert output.stop_reason == "stop"
+        # session.send() should NOT be called (resume path)
+        mock_session.send.assert_not_awaited()
+        # Future was resolved
+        assert fut.done()
+
+    async def test_unmatched_futures_resolved_with_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Futures with no matching tool result should be resolved with failure."""
+        api = self._make_api(monkeypatch)
+
+        mock_event_type = MagicMock()
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-unmatched"
+
+        captured_cb = None
+
+        def on_side_effect(cb: object) -> MagicMock:
+            nonlocal captured_cb
+            captured_cb = cb
+
+            async def fire_event() -> None:
+                await asyncio.sleep(0.05)
+                if captured_cb is not None:
+                    captured_cb(SimpleNamespace(
+                        type=mock_event_type.ASSISTANT_MESSAGE,
+                        data=SimpleNamespace(content="Done.", tool_requests=[]),
+                    ))
+
+            asyncio.ensure_future(fire_event())
+            return MagicMock()
+
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+        mock_session.send = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+
+        loop = asyncio.get_running_loop()
+        fut_matched: asyncio.Future[object] = loop.create_future()
+        fut_unmatched: asyncio.Future[object] = loop.create_future()
+        pending_futures: dict[str, asyncio.Future[object]] = {
+            "tc_1": fut_matched,
+            "tc_orphan": fut_unmatched,
+        }
+
+        conv_key = _conversation_key([
+            ChatMessageSystem(content="Sys"),
+            ChatMessageUser(content="Go"),
+        ])
+        CopilotModelAPI._conversations[conv_key] = _ConversationState(
+            session=mock_session,
+            client=mock_client,
+            messages_sent=2,
+            pending_tool_futures=pending_futures,
+        )
+
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        CopilotModelAPI._pool = pool
+        CopilotModelAPI._all_clients = []
+
+        messages = [
+            ChatMessageSystem(content="Sys"),
+            ChatMessageUser(content="Go"),
+            ChatMessageAssistant(
+                content="",
+                tool_calls=[ToolCall(id="tc_1", function="bash", arguments={})],
+            ),
+            ChatMessageTool(content="result", tool_call_id="tc_1", function="bash"),
+        ]
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            output = await api.generate(
+                input=messages,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        assert output.choices[0].message.text == "Done."
+        # Both futures resolved
+        assert fut_matched.done()
+        assert fut_unmatched.done()
+        # Unmatched was NOT cancelled — it was set_result with failure
+        assert not fut_unmatched.cancelled()
+
+    async def test_resume_does_not_call_session_send(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The resume path should NOT call session.send() — it only resolves
+        futures and waits for the SDK to continue."""
+        api = self._make_api(monkeypatch)
+
+        mock_event_type = MagicMock()
+        mock_session = MagicMock()
+        mock_session.session_id = "sess-no-send"
+
+        captured_cb = None
+
+        def on_side_effect(cb: object) -> MagicMock:
+            nonlocal captured_cb
+            captured_cb = cb
+
+            async def fire_event() -> None:
+                await asyncio.sleep(0.05)
+                if captured_cb is not None:
+                    captured_cb(SimpleNamespace(
+                        type=mock_event_type.ASSISTANT_MESSAGE,
+                        data=SimpleNamespace(content="OK", tool_requests=[]),
+                    ))
+
+            asyncio.ensure_future(fire_event())
+            return MagicMock()
+
+        mock_session.on = MagicMock(side_effect=on_side_effect)
+        mock_session.send = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        mock_client = AsyncMock()
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[object] = loop.create_future()
+        pending_futures: dict[str, asyncio.Future[object]] = {"tc_1": fut}
+
+        conv_key = _conversation_key([
+            ChatMessageSystem(content="S"),
+            ChatMessageUser(content="U"),
+        ])
+        CopilotModelAPI._conversations[conv_key] = _ConversationState(
+            session=mock_session,
+            client=mock_client,
+            messages_sent=2,
+            pending_tool_futures=pending_futures,
+        )
+
+        pool: asyncio.Queue[object] = asyncio.Queue(maxsize=4)
+        CopilotModelAPI._pool = pool
+        CopilotModelAPI._all_clients = []
+
+        messages = [
+            ChatMessageSystem(content="S"),
+            ChatMessageUser(content="U"),
+            ChatMessageAssistant(
+                content="",
+                tool_calls=[ToolCall(id="tc_1", function="t", arguments={})],
+            ),
+            ChatMessageTool(content="r", tool_call_id="tc_1", function="t"),
+        ]
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "copilot": MagicMock(),
+                "copilot.generated.session_events": MagicMock(
+                    SessionEventType=mock_event_type
+                ),
+                "copilot.tools": MagicMock(),
+            },
+        ):
+            await api.generate(
+                input=messages,
+                tools=[],
+                tool_choice="auto",
+                config=GenerateConfig(),
+            )
+
+        # CRITICAL: send() must NOT be called in resume path
+        mock_session.send.assert_not_awaited()
