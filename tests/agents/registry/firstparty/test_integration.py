@@ -218,11 +218,11 @@ class TestHooksOrdering:
     async def test_hooks_fire_in_correct_order(self) -> None:
         call_order: list[str] = []
 
-        async def pre_hook(sbox: object, env: dict[str, str]) -> dict[str, str]:
+        async def pre_hook(sbox: object, env: dict[str, str], outer_kwargs: dict[str, str]) -> dict[str, str]:
             call_order.append("pre_invoke_hook")
             return {**env, "PRE": "1"}
 
-        async def post_hook(sbox: object, env: dict[str, str]) -> None:
+        async def post_hook(sbox: object, env: dict[str, str], outer_kwargs: dict[str, str]) -> None:
             call_order.append("post_invoke_hook")
 
         spec = _make_spec(

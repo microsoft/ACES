@@ -1,17 +1,21 @@
 """Runtime specification models for first-party agent runtimes."""
 
+from __future__ import annotations
+
 import os
 import re
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Annotated
+from enum import StrEnum
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, SkipValidation
+from pydantic import BaseModel, ConfigDict, SkipValidation, model_validator
 
 if TYPE_CHECKING:
     from inspect_ai.util import SandboxEnvironment
 
     InvokeHook = Callable[
-        ["SandboxEnvironment", dict[str, str]], Awaitable[dict[str, str]]
+        ["SandboxEnvironment", dict[str, str], dict[str, str]],
+        Awaitable[dict[str, str]],
     ]
 
 # At runtime Pydantic cannot resolve the SandboxEnvironment forward reference,
@@ -34,6 +38,25 @@ class EnvSchema(BaseModel):
     required: dict[str, str] = {}
     defaults: dict[str, str] = {}
     passthrough: list[str] = []
+
+
+class AnalysisMode(StrEnum):
+    """Whether the agent runtime is attached (bridge) or detached (transcript)."""
+
+    ATTACHED = "attached"
+    DETACHED = "detached"
+
+
+TranscriptFormat = Literal["copilot_v3"]
+
+
+class TranscriptConfig(BaseModel):
+    """Configuration for locating and parsing an agent transcript."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    format: TranscriptFormat
 
 
 class AgentAlias(BaseModel):
@@ -63,12 +86,25 @@ class RuntimeSpec(BaseModel):
     post_invoke_hook: _HookField = None
     timeout: int = 1800
     port_base: int = 3000
+    analysis_mode: AnalysisMode = AnalysisMode.ATTACHED
+    transcript_config: TranscriptConfig | None = None
+
+    @model_validator(mode="after")
+    def _validate_detached_has_transcript(self) -> RuntimeSpec:
+        if self.analysis_mode == AnalysisMode.DETACHED and self.transcript_config is None:
+            msg = "transcript_config is required when analysis_mode is DETACHED"
+            raise ValueError(msg)
+        return self
 
     def build_model_aliases(self) -> dict[str, str] | None:
         """Return default_model_aliases if non-empty, else None."""
         return self.default_model_aliases if self.default_model_aliases else None
 
-    def build_env(self, bridge_url: str, bridge_api_key: str) -> dict[str, str]:
+    def build_env(
+        self,
+        bridge_url: str | None = None,
+        bridge_api_key: str | None = None,
+    ) -> dict[str, str]:
         """Build the merged environment dict for runtime invocation.
 
         Merge order (later wins): defaults → required → passthrough → agent aliases → bridge_injected.
@@ -81,8 +117,15 @@ class RuntimeSpec(BaseModel):
             Merged environment dictionary.
 
         Raises:
-            ValueError: If a required env var is not set in os.environ.
+            ValueError: If a required env var is not set in os.environ,
+                or if bridge params are missing in attached mode.
         """
+        if (
+            self.analysis_mode == AnalysisMode.ATTACHED
+            and (bridge_url is None or bridge_api_key is None)
+        ):
+            msg = "bridge_url and bridge_api_key are required in attached mode"
+            raise ValueError(msg)
         env: dict[str, str] = {}
 
         # 1. defaults
@@ -110,13 +153,15 @@ class RuntimeSpec(BaseModel):
             env[agent.env_var] = agent.model_alias
 
         # 5. bridge_injected (interpolate placeholders) — single-pass to prevent double-substitution
-        bridge_values = {"bridge_url": bridge_url, "bridge_api_key": bridge_api_key}
-        for key, template in self.env_schema.bridge_injected.items():
+        #    Skipped entirely in detached mode when no bridge params are provided.
+        if bridge_url is not None and bridge_api_key is not None:
+            bridge_values = {"bridge_url": bridge_url, "bridge_api_key": bridge_api_key}
+            for key, template in self.env_schema.bridge_injected.items():
 
-            def _replace_bridge(match: re.Match[str]) -> str:
-                return bridge_values.get(match.group(1), match.group(0))
+                def _replace_bridge(match: re.Match[str]) -> str:
+                    return bridge_values.get(match.group(1), match.group(0))
 
-            env[key] = _PLACEHOLDER_RE.sub(_replace_bridge, template)
+                env[key] = _PLACEHOLDER_RE.sub(_replace_bridge, template)
 
         return env
 

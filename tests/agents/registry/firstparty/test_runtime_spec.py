@@ -10,11 +10,12 @@ from pydantic import ValidationError
 
 from saber.agents.registry.firstparty.runtime_spec import (
     AgentAlias,
+    AnalysisMode,
     EnvSchema,
     RuntimeSpec,
+    TranscriptConfig,
     interpolate_command,
 )
-
 
 # ── EnvSchema ──────────────────────────────────────────────────────────
 
@@ -221,7 +222,7 @@ class TestBuildEnv:
 
 class TestRuntimeSpecHooks:
     def test_hook_field_stores_callable(self) -> None:
-        async def my_hook(sandbox, env):  # type: ignore[no-untyped-def]
+        async def my_hook(sandbox, env, outer_kwargs):  # type: ignore[no-untyped-def]
             return env
 
         spec = RuntimeSpec(name="a", invoke_command=["cmd"], pre_invoke_hook=my_hook)
@@ -269,3 +270,118 @@ class TestInterpolateCommand:
         """A partial substitution like 'prefix-{x}' with x='' is kept ('prefix-')."""
         result = interpolate_command(["--opt={val}", "{gone}"], val="yes", gone="")
         assert result == ["--opt=yes"]
+
+
+# ── AnalysisMode ───────────────────────────────────────────────────────
+
+
+class TestAnalysisMode:
+    def test_values(self) -> None:
+        assert AnalysisMode.ATTACHED == "attached"
+        assert AnalysisMode.DETACHED == "detached"
+
+    def test_default_is_attached(self) -> None:
+        spec = RuntimeSpec(name="a", invoke_command=["cmd"])
+        assert spec.analysis_mode == AnalysisMode.ATTACHED
+
+
+# ── TranscriptConfig ──────────────────────────────────────────────────
+
+
+class TestTranscriptConfig:
+    def test_construction(self) -> None:
+        tc = TranscriptConfig(path="/output/.hyenas/copilot-log", format="copilot_v3")
+        assert tc.path == "/output/.hyenas/copilot-log"
+        assert tc.format == "copilot_v3"
+
+    def test_frozen(self) -> None:
+        tc = TranscriptConfig(path="/tmp/log", format="copilot_v3")
+        with pytest.raises(ValidationError):
+            tc.path = "/other"  # type: ignore[misc]
+
+
+# ── RuntimeSpec detached mode ─────────────────────────────────────────
+
+
+class TestRuntimeSpecDetached:
+    def test_detached_requires_transcript_config(self) -> None:
+        with pytest.raises(ValueError, match="transcript_config"):
+            RuntimeSpec(
+                name="a",
+                invoke_command=["cmd"],
+                analysis_mode=AnalysisMode.DETACHED,
+            )
+
+    def test_detached_with_transcript_config_ok(self) -> None:
+        spec = RuntimeSpec(
+            name="a",
+            invoke_command=["cmd"],
+            analysis_mode=AnalysisMode.DETACHED,
+            transcript_config=TranscriptConfig(
+                path="/output/log", format="copilot_v3"
+            ),
+        )
+        assert spec.analysis_mode == AnalysisMode.DETACHED
+        assert spec.transcript_config is not None
+
+    def test_attached_without_transcript_config_ok(self) -> None:
+        spec = RuntimeSpec(name="a", invoke_command=["cmd"])
+        assert spec.analysis_mode == AnalysisMode.ATTACHED
+        assert spec.transcript_config is None
+
+    def test_attached_with_transcript_config_ok(self) -> None:
+        spec = RuntimeSpec(
+            name="a",
+            invoke_command=["cmd"],
+            analysis_mode=AnalysisMode.ATTACHED,
+            transcript_config=TranscriptConfig(
+                path="/output/log", format="copilot_v3"
+            ),
+        )
+        assert spec.transcript_config is not None
+
+
+# ── build_env detached mode ───────────────────────────────────────────
+
+
+class TestBuildEnvDetached:
+    def test_detached_skips_bridge_injected(self) -> None:
+        """In detached mode with no bridge params, bridge_injected is not interpolated."""
+        spec = RuntimeSpec(
+            name="a",
+            invoke_command=["cmd"],
+            analysis_mode=AnalysisMode.DETACHED,
+            transcript_config=TranscriptConfig(
+                path="/output/log", format="copilot_v3"
+            ),
+            env_schema=EnvSchema(
+                bridge_injected={"URL": "{bridge_url}/api"},
+                defaults={"K": "v"},
+            ),
+        )
+        env = spec.build_env()
+        assert "URL" not in env
+        assert env["K"] == "v"
+
+    def test_detached_still_has_defaults_and_required(self) -> None:
+        spec = RuntimeSpec(
+            name="a",
+            invoke_command=["cmd"],
+            analysis_mode=AnalysisMode.DETACHED,
+            transcript_config=TranscriptConfig(
+                path="/output/log", format="copilot_v3"
+            ),
+            env_schema=EnvSchema(
+                defaults={"D": "default_val"},
+                required={"R": "required var"},
+            ),
+        )
+        with patch.dict(os.environ, {"R": "req_val"}):
+            env = spec.build_env()
+        assert env["D"] == "default_val"
+        assert env["R"] == "req_val"
+
+    def test_attached_requires_bridge_params(self) -> None:
+        spec = RuntimeSpec(name="a", invoke_command=["cmd"])
+        with pytest.raises(ValueError, match="bridge_url and bridge_api_key are required"):
+            spec.build_env()
