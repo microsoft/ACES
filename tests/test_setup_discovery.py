@@ -310,6 +310,47 @@ class TestCreateTaskSetupHookIntegration:
             # dataset should have been present in the dict at call time
             assert captured_kwargs["dataset"] == "my_dataset"
 
+    def test_create_task_forwards_task_filter_to_setup_hooks(
+        self, tmp_path: Path
+    ) -> None:
+        """create_task() forwards explicit task_filter to _discover_setup_hooks."""
+        from unittest.mock import MagicMock, patch
+
+        from saber.hooks import SetupHooksResult
+
+        mock_hooks = [MagicMock()]
+        mock_result = SetupHooksResult(results=())
+        captured_kwargs: dict[str, object] = {}
+
+        def capture_discover(domain_root: object, kwargs: dict[str, object]) -> list[object]:
+            captured_kwargs.update(kwargs)
+            return mock_hooks
+
+        with (
+            patch(
+                "saber.setup_discovery._discover_setup_hooks",
+                side_effect=capture_discover,
+            ),
+            patch(
+                "saber.hooks.run_setup_hooks", return_value=mock_result
+            ),
+            patch("saber.task._find_config_root") as mock_find_config,
+        ):
+            mock_find_config.side_effect = SystemExit("stop early")
+
+            with pytest.raises(SystemExit, match="stop early"):
+                from saber.task import create_task
+
+                create_task(
+                    domain_root=tmp_path,
+                    task_filter="blob_storage_attack_bundle_reconnaissance",
+                )
+
+            assert (
+                captured_kwargs["task_filter"]
+                == "blob_storage_attack_bundle_reconnaissance"
+            )
+
     def test_create_task_omits_dataset_from_hooks_when_none(
         self, tmp_path: Path
     ) -> None:

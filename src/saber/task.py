@@ -178,14 +178,18 @@ def create_task(
     from saber.hooks import run_setup_hooks
     from saber.setup_discovery import _discover_setup_hooks
 
-    # Temporarily inject dataset so hooks can consume it
+    # Temporarily inject named params so hooks can consume them
+    if task_filter is not None:
+        kwargs["task_filter"] = task_filter
     if dataset is not None:
         kwargs["dataset"] = dataset
 
     hooks = _discover_setup_hooks(domain_root, kwargs)
     # _discover_setup_hooks pops consumed keys in-place from kwargs
 
-    # dataset is a named param — remove from kwargs if hooks didn't consume it
+    # Named params are also explicit create_task args — remove them from kwargs
+    # if hooks didn't consume them so they don't leak downstream.
+    kwargs.pop("task_filter", None)
     kwargs.pop("dataset", None)
     if hooks:
         hooks_result = run_setup_hooks(hooks, domain_root)

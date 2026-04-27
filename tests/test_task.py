@@ -890,6 +890,54 @@ class TestKwargsConsumption:
         call_kwargs = mock_solver.call_args.kwargs
         assert "dataset" not in call_kwargs, "'dataset' leaked to solver"
 
+    def test_task_filter_not_leaked_to_solver(self, tmp_path: Path) -> None:
+        """Injected 'task_filter' should be removed from kwargs after hook discovery."""
+        _write_minimal_domain(tmp_path)
+        mock_factory = lambda: lambda **kwargs: lambda state, gen: state  # noqa: E731
+
+        def fake_discover(domain_root: Path, kwargs: dict[str, object]) -> list[object]:
+            assert kwargs.get("task_filter") == "blob_storage_attack_bundle_reconnaissance"
+            return []
+
+        from saber.config.models import PromptPaths, TaskConfig
+
+        fake_task = TaskConfig(
+            task_id="t1",
+            title="T",
+            description="D",
+            prompts=PromptPaths(instruction="instructions/inst.md"),
+        )
+
+        from inspect_ai.dataset import Sample as InspectSample
+
+        fake_sample = InspectSample(input="test", id="t1")
+
+        with (
+            patch("saber.setup_discovery._discover_setup_hooks", side_effect=fake_discover),
+            patch("saber.task.resolve_agent", return_value=mock_factory),
+            patch("saber.task.create_saber_solver") as mock_solver,
+            patch("saber.task.ConfigLoader") as mock_loader_cls,
+            patch("saber.task._find_config_root", return_value=tmp_path),
+            patch("saber.task.tasks_to_samples", return_value=[fake_sample]),
+            patch("saber.task.ScorerFactory") as mock_scorer_cls,
+        ):
+            mock_loader = mock_loader_cls.return_value
+            mock_loader.load_global_config.return_value = MagicMock(permanent_environment=None)
+            mock_loader.load_tasks.return_value = [fake_task]
+            mock_scorer_cls.return_value.create_runtime_scorers.return_value = [
+                _dummy_scorer()
+            ]
+            mock_solver.return_value = MagicMock()
+            create_task(
+                tmp_path,
+                agent="react",
+                permanent_compose=None,
+                task_filter="blob_storage_attack_bundle_reconnaissance",
+            )
+
+        call_kwargs = mock_solver.call_args.kwargs
+        assert "task_filter" not in call_kwargs, "'task_filter' leaked to solver"
+
     def test_unconsumed_kwargs_still_forwarded(self, tmp_path: Path) -> None:
         """kwargs NOT consumed by hooks should still reach create_saber_solver."""
         _write_minimal_domain(tmp_path)
