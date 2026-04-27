@@ -84,6 +84,103 @@ uv sync --all-extras
 uv run python -c "from saber.task import create_task; print('✅ saber installed')"
 ```
 
+### Creating a New Evaluation Workspace
+
+Use `saber new-eval-workspace <directory>` to scaffold a fresh uv-managed SABER
+benchmark workspace. By default, the command creates a minimal `starter_demo`
+domain so you can immediately inspect a valid domain layout and run a first eval.
+
+If you already have this repo checked out locally:
+
+```bash
+uv run saber new-eval-workspace my-eval-workspace
+```
+
+If you want to run it directly from the GitHub-hosted remote without cloning:
+
+```bash
+uvx --from git+https://github.com/microsoft/ACES.git saber new-eval-workspace my-eval-workspace
+```
+
+To create the workspace without the starter demo domain:
+
+```bash
+uv run saber new-eval-workspace my-eval-workspace --no-demo-domain
+```
+
+Or via `uvx`:
+
+```bash
+uvx --from git+https://github.com/microsoft/ACES.git saber new-eval-workspace my-eval-workspace --no-demo-domain
+```
+
+To run the command from a specific Git ref:
+
+```bash
+uvx --from git+https://github.com/microsoft/ACES.git@main saber new-eval-workspace my-eval-workspace
+```
+
+After creating the workspace:
+
+```bash
+cd my-eval-workspace
+uv sync
+
+# If you created the default starter scaffold
+uv run inspect list tasks | grep starter_demo
+uv run inspect eval domains/starter_demo --model openai/gpt-4.1-mini
+```
+
+#### Default generated structure
+
+```text
+my-eval-workspace/
+├── README.md
+├── pyproject.toml
+└── domains/
+    └── starter_demo/
+        ├── starter_demo.py
+        ├── eval.yaml
+        ├── prompts/
+        │   ├── assistants/
+        │   │   └── starter_assistant.j2
+        │   └── instructions/
+        │       └── starter_demo.j2
+        └── tasks/
+            ├── global.yaml
+            └── starter_task.yaml
+```
+
+What the starter scaffold gives you:
+
+- `pyproject.toml` — a uv-managed project pinned to the same `saber` source or version used to generate the workspace
+- `README.md` — workspace-local instructions for creating new domains and tasks
+- `domains/starter_demo/` — a minimal, runnable example domain
+- `starter_demo.py` — Inspect AI entrypoint that calls `saber.task.create_task()`
+- `eval.yaml` — top-level domain metadata
+- `tasks/global.yaml` — shared defaults such as prompts and max steps
+- `tasks/starter_task.yaml` — one simple static-scored example task
+- `prompts/` — local instruction and assistant prompt templates used by the starter task
+
+#### Structure with `--no-demo-domain`
+
+If you pass `--no-demo-domain`, the command creates the workspace shell and leaves
+`domains/` empty so you can start from scratch:
+
+```text
+my-eval-workspace/
+├── README.md
+├── pyproject.toml
+└── domains/
+```
+
+The generated workspace `README.md` includes copy/pasteable examples for:
+
+- the domain entrypoint module
+- `eval.yaml`
+- `tasks/global.yaml`
+- a minimal task YAML file
+
 ### Running an Evaluation
 
 ```bash
@@ -158,7 +255,7 @@ src/saber/
 │   ├── images.py                   # Docker image build management
 │   └── preflight.py                # Compose file validation
 └── cli/
-    ├── app.py                      # saber CLI (build, teardown, start)
+    ├── app.py                      # saber CLI (build, teardown, start, new-eval-workspace)
     ├── discovery.py                # Domain discovery utilities
     └── output.py                   # Rich console output
 ```

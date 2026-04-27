@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -19,6 +21,7 @@ from saber.cli.output import (
     print_warning,
     teardown_projects_table,
 )
+from saber.cli.workspace import create_eval_workspace
 from saber.config.loader import ConfigLoader
 from saber.environments.images import RebuildMode, build_domain_images
 from saber.logging import get_logger
@@ -31,6 +34,27 @@ app = typer.Typer(
     help="SABER — Security Agent Benchmarking and Evaluation Research CLI",
     no_args_is_help=True,
 )
+
+
+@app.command("new-eval-workspace")  # type: ignore[misc]
+def new_eval_workspace(
+    directory: Annotated[Path, typer.Argument(help="Path to a new, non-existent workspace directory")],
+    demo_domain: Annotated[
+        bool,
+        typer.Option("--demo-domain/--no-demo-domain", help="Create the starter demo domain scaffold"),
+    ] = True,
+) -> None:
+    """Create a fresh uv-managed SABER evaluation workspace."""
+    try:
+        workspace = create_eval_workspace(directory, include_demo_domain=demo_domain)
+    except (RuntimeError, ValueError, OSError) as exc:
+        print_error(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    if demo_domain:
+        print_success(f"Created a new SABER evaluation workspace at {workspace}")
+    else:
+        print_success(f"Created a new SABER evaluation workspace at {workspace} without the starter demo domain")
 
 
 @app.command()  # type: ignore[misc]
