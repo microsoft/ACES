@@ -291,6 +291,59 @@ class TestResolveMcpServers:
         assert "headers" not in mcp_json["mcpServers"]["srv"]
 
 
+class TestMcpConfigHelpers:
+    """Runtime MCP config read/merge helpers."""
+
+    def test_read_mcp_config_validates_shape(self, tmp_path: Path) -> None:
+        """Reads a bundle .mcp.json file."""
+        from saber.agents.bridge_utils import read_mcp_config
+
+        config_path = tmp_path / ".mcp.json"
+        config_path.write_text(json.dumps({"mcpServers": {"Azure": {"type": "stdio", "command": "npx"}}}))
+
+        assert read_mcp_config(config_path) == {"mcpServers": {"Azure": {"type": "stdio", "command": "npx"}}}
+
+    def test_read_mcp_config_rejects_non_object_servers(self, tmp_path: Path) -> None:
+        """mcpServers must be an object."""
+        from saber.agents.bridge_utils import read_mcp_config
+
+        config_path = tmp_path / ".mcp.json"
+        config_path.write_text(json.dumps({"mcpServers": []}))
+
+        with pytest.raises(ValueError, match="mcpServers"):
+            read_mcp_config(config_path)
+
+    def test_merge_mcp_configs_overlays_servers(self) -> None:
+        """Later MCP configs override server name collisions."""
+        from saber.agents.bridge_utils import merge_mcp_configs
+
+        merged = merge_mcp_configs(
+            {"mcpServers": {"saber": {"type": "http", "url": "http://localhost:1"}}},
+            {"mcpServers": {"Azure": {"type": "stdio", "command": "npx"}}},
+            json.dumps({"mcpServers": {"saber": {"type": "http", "url": "http://localhost:2"}}}),
+        )
+
+        assert merged["mcpServers"] == {
+            "saber": {"type": "http", "url": "http://localhost:2"},
+            "Azure": {"type": "stdio", "command": "npx"},
+        }
+
+    def test_mcp_allowed_tools_handles_wildcard_and_specific_tools(self) -> None:
+        """Claude Code allowed-tools patterns derive from merged MCP config."""
+        from saber.agents.bridge_utils import mcp_allowed_tools
+
+        allowed = mcp_allowed_tools(
+            {
+                "mcpServers": {
+                    "Azure": {"type": "stdio", "tools": ["*"]},
+                    "Saber": {"type": "http", "tools": ["query", "fetch"]},
+                }
+            }
+        )
+
+        assert allowed == ["mcp__Azure__*", "mcp__Saber__query", "mcp__Saber__fetch"]
+
+
 class TestValidateModelAvailability:
     """validate_model_availability pre-flight check."""
 
@@ -508,6 +561,36 @@ class TestUploadSkillsToSandbox:
         call_paths = {call.args[0] for call in sbox.write_file.call_args_list}
         assert ".claude/skills/real.md" in call_paths
         assert ".claude/skills/link.md" not in call_paths
+
+
+class TestUploadAgentBundleToSandbox:
+    """upload_agent_bundle_to_sandbox copies parsed agent definitions."""
+
+    @pytest.mark.asyncio
+    async def test_upload_agent_bundle_writes_agent_files(self, tmp_path: Path) -> None:
+        """Agent bundle files are written under the requested sandbox dir."""
+        from saber.agents.bridge_utils import upload_agent_bundle_to_sandbox
+        from saber.agents.persona import load_agent_bundle
+
+        (tmp_path / "main.agent.md").write_text(
+            "---\nname: Main Agent\n---\nMain prompt.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "sub.agent.md").write_text(
+            "---\nname: Sub Agent\n---\nSub prompt.\n",
+            encoding="utf-8",
+        )
+        bundle = load_agent_bundle(agent_bundle=tmp_path, main_agent="main")
+
+        sbox = MagicMock()
+        sbox.write_file = AsyncMock()
+
+        result = await upload_agent_bundle_to_sandbox(sbox, bundle, ".github/agents")
+
+        assert result == ".github/agents"
+        calls = {call.args[0]: call.args[1] for call in sbox.write_file.call_args_list}
+        assert calls[".github/agents/main.agent.md"] == b"---\nname: Main Agent\n---\nMain prompt.\n"
+        assert calls[".github/agents/sub.agent.md"] == b"---\nname: Sub Agent\n---\nSub prompt.\n"
 
 
 class TestCreateToolCallLimitFilter:

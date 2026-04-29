@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from saber.agents.persona import (
     AgentFileMetadata,
     AgentToolsConfig,
     CustomAgentConfig,
+    load_agent_bundle,
     parse_agent_file,
 )
 
@@ -52,6 +54,19 @@ class TestAgentFileMetadata:
         )
         assert meta.skill_directories == ["/skills/a", "/skills/b"]
 
+    def test_agent_file_metadata_accepts_list_tools_and_user_invocable_alias(self) -> None:
+        """MTP-style list tools and user-invocable metadata are accepted."""
+        meta = AgentFileMetadata(
+            name="recon-agent",
+            tools=["agent"],
+            **{"user-invocable": False, "owner": "security"},
+        )
+
+        assert meta.tools is not None
+        assert meta.tools.allowed == ["agent"]
+        assert meta.user_invocable is False
+        assert meta.model_extra == {"owner": "security"}
+
 
 # ── AgentToolsConfig ────────────────────────────────────────────────
 
@@ -65,6 +80,13 @@ class TestAgentToolsConfig:
         with pytest.raises(ValidationError):
             cfg.allowed = ["tool2"]  # type: ignore[misc]
 
+    def test_agent_tools_config_accepts_string_values(self) -> None:
+        """Single string tool values are normalized to one-item lists."""
+        cfg = AgentToolsConfig(allowed="agent", disallowed="web")  # type: ignore[arg-type]
+
+        assert cfg.allowed == ["agent"]
+        assert cfg.disallowed == ["web"]
+
 
 # ── CustomAgentConfig ───────────────────────────────────────────────
 
@@ -73,7 +95,7 @@ class TestCustomAgentConfig:
     """Tests for CustomAgentConfig model."""
 
     def test_custom_agent_config_to_sdk_dict(self) -> None:
-        """camelCase keys produced; optional fields included when set."""
+        """snake_case SDK keys produced; optional fields included when set."""
         cfg = CustomAgentConfig(
             name="my-agent",
             display_name="My Agent",
@@ -82,7 +104,7 @@ class TestCustomAgentConfig:
         )
         sdk = cfg.to_sdk_dict()
         assert sdk["name"] == "my-agent"
-        assert sdk["displayName"] == "My Agent"
+        assert sdk["display_name"] == "My Agent"
         assert sdk["description"] == "A helpful agent"
         assert sdk["prompt"] == "You are helpful."
         assert sdk["infer"] is True
@@ -104,6 +126,18 @@ class TestCustomAgentConfig:
         cfg = CustomAgentConfig(name="bare", prompt="Bare prompt.")
         sdk = cfg.to_sdk_dict()
         assert set(sdk.keys()) == {"name", "prompt", "infer"}
+
+    def test_custom_agent_config_to_sdk_dict_with_mcp_servers(self) -> None:
+        """Agent-scoped MCP servers use SDK snake_case key names."""
+        cfg = CustomAgentConfig(
+            name="mcp-agent",
+            prompt="Use MCP.",
+            mcp_servers={"Azure": {"type": "stdio", "command": "npx"}},
+        )
+
+        sdk = cfg.to_sdk_dict()
+
+        assert sdk["mcp_servers"] == {"Azure": {"type": "stdio", "command": "npx"}}
 
 
 # ── parse_agent_file ────────────────────────────────────────────────
@@ -187,6 +221,27 @@ class TestParseAgentFile:
         assert meta.skill_directories == ["/skills/a", "/skills/b"]
         assert "# Prompt body" in body
 
+    def test_parse_agent_file_with_list_tools_and_user_invocable(self, tmp_path: Path) -> None:
+        """Native MTP-style agent frontmatter parses without compatibility copies."""
+        content = textwrap.dedent("""\
+            ---
+            name: fingerprint-agent
+            tools:
+              - agent
+            user-invocable: false
+            ---
+            # Fingerprint Agent
+        """)
+        agent_file = tmp_path / "fingerprint.agent.md"
+        agent_file.write_text(content)
+
+        meta, body = parse_agent_file(agent_file)
+
+        assert meta.tools is not None
+        assert meta.tools.allowed == ["agent"]
+        assert meta.user_invocable is False
+        assert "# Fingerprint Agent" in body
+
     def test_parse_agent_file_unclosed_frontmatter(self, tmp_path: Path) -> None:
         """Unclosed frontmatter (missing closing ---) raises ValueError."""
         content = textwrap.dedent("""\
@@ -229,3 +284,90 @@ class TestParseAgentFile:
 
         with pytest.raises(ValueError, match="did not parse to a mapping"):
             parse_agent_file(agent_file)
+
+
+class TestLoadAgentBundle:
+    """Runtime agent bundle resolution."""
+
+    def test_load_agent_bundle_from_manifest(self, tmp_path: Path) -> None:
+        """Bundle root discovers agents, skills, MCP config, and manifest main agent."""
+        bundle_dir = tmp_path / "recon-agent"
+        bundle_dir.mkdir()
+        (bundle_dir / "skills").mkdir()
+        (bundle_dir / "skills" / "README.md").write_text("# Skill")
+        (bundle_dir / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {"Azure": {"type": "stdio", "command": "npx", "tools": ["*"]}}})
+        )
+        (bundle_dir / "manifest.json").write_text(json.dumps({"agent": "recon.agent.md"}))
+        (bundle_dir / "recon.agent.md").write_text(
+            textwrap.dedent("""\
+                ---
+                name: Recon Agent
+                tools:
+                  - agent
+                ---
+                Main recon prompt.
+            """)
+        )
+        (bundle_dir / "fingerprint.agent.md").write_text(
+            textwrap.dedent("""\
+                ---
+                name: Fingerprint Agent
+                user-invocable: false
+                ---
+                Fingerprint prompt.
+            """)
+        )
+
+        bundle = load_agent_bundle(agent_bundle=bundle_dir)
+
+        assert bundle.root == bundle_dir.resolve()
+        assert bundle.main_agent is not None
+        assert bundle.main_agent.name == "Recon Agent"
+        assert bundle.skills_dir == (bundle_dir / "skills").resolve()
+        assert bundle.mcp_config == (bundle_dir / ".mcp.json").resolve()
+        assert {agent.name for agent in bundle.agents} == {"Recon Agent", "Fingerprint Agent"}
+
+        configs = {cfg.name: cfg.to_sdk_dict() for cfg in bundle.custom_agent_configs()}
+        assert configs["Recon Agent"]["tools"] == ["agent"]
+        assert configs["Fingerprint Agent"]["infer"] is False
+
+    def test_load_agent_bundle_explicit_main_agent_selector(self, tmp_path: Path) -> None:
+        """Explicit main_agent can select by normalized name or filename."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+        (agents_dir / "attack-path.agent.md").write_text(
+            textwrap.dedent("""\
+                ---
+                name: Attack Path Agent
+                ---
+                Attack path prompt.
+            """)
+        )
+        (agents_dir / "report.agent.md").write_text(
+            textwrap.dedent("""\
+                ---
+                name: Report Agent
+                ---
+                Report prompt.
+            """)
+        )
+
+        bundle = load_agent_bundle(agents_dir=agents_dir, main_agent="attack-path")
+
+        assert bundle.main_agent is not None
+        assert bundle.main_agent.name == "Attack Path Agent"
+
+    def test_load_agent_bundle_missing_main_agent_raises(self, tmp_path: Path) -> None:
+        """Invalid explicit main agent selectors fail fast."""
+        (tmp_path / "only.agent.md").write_text(
+            textwrap.dedent("""\
+                ---
+                name: Only Agent
+                ---
+                Prompt.
+            """)
+        )
+
+        with pytest.raises(ValueError, match="not found in bundle"):
+            load_agent_bundle(agents_dir=tmp_path, main_agent="missing")

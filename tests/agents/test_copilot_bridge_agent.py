@@ -34,6 +34,13 @@ class TestRunnerScript:
 
         assert "from copilot" in RUNNER_SCRIPT or "import copilot" in RUNNER_SCRIPT
 
+    def test_runner_script_approves_permissions_with_sdk_kind(self) -> None:
+        """Runner uses the Copilot SDK 0.3 permission result kind."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert 'PermissionRequestResult(kind="approve-once")' in RUNNER_SCRIPT
+        assert 'PermissionRequestResult(kind="approved")' not in RUNNER_SCRIPT
+
     def test_runner_script_reads_env_vars(self) -> None:
         """Runner reads required env vars."""
         from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
@@ -188,6 +195,63 @@ class TestBuildRunnerEnv:
             mcp_configs=[],
         )
         assert env["COPILOT_MCP_CONFIG"] == "{}"
+
+    def test_extra_mcp_config_is_merged(self) -> None:
+        """Operator MCP config merges with bridge MCP servers."""
+        import json
+        from types import SimpleNamespace
+
+        from saber.agents.registry.copilot.solver import _build_runner_env
+
+        env = _build_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            mcp_configs=[
+                SimpleNamespace(
+                    name="saber_tools",
+                    url="http://localhost:13131/mcp/saber_tools",
+                    type="http",
+                )
+            ],
+            extra_mcp_config={
+                "mcpServers": {
+                    "Azure": {
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "@azure/mcp@latest", "server", "start"],
+                        "tools": ["*"],
+                    }
+                }
+            },
+        )
+
+        parsed = json.loads(env["COPILOT_MCP_CONFIG"])
+        assert parsed["saber_tools"]["url"] == "http://localhost:13131/mcp/saber_tools"
+        assert parsed["Azure"]["command"] == "npx"
+
+    def test_custom_agents_flow_to_env(self) -> None:
+        """Custom agent registry and active agent are passed to runner env."""
+        from saber.agents.registry.copilot.solver import _build_runner_env
+
+        custom_agents_json = '[{"name":"Recon Agent","prompt":"Recon.","infer":true}]'
+        env = _build_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            mcp_configs=[],
+            custom_agents_json=custom_agents_json,
+            active_agent="Recon Agent",
+            config_dir=".",
+        )
+
+        assert env["COPILOT_CUSTOM_AGENTS"] == custom_agents_json
+        assert env["COPILOT_AGENT"] == "Recon Agent"
+        assert env["COPILOT_CONFIG_DIR"] == "."
+        assert env["COPILOT_NESTED_AGENTS"] == "bridge"
+        assert env["COPILOT_NESTED_AGENT_TIMEOUT"] == "600"
+        assert env["COPILOT_NESTED_AGENT_QUIET_TIMEOUT"] == "5"
+        assert env["COPILOT_NESTED_AGENT_MAX_CALLS"] == "16"
 
     def test_timeout_flows_to_env(self) -> None:
         """Custom timeout is passed through to COPILOT_TIMEOUT."""
@@ -468,6 +532,32 @@ class TestRunnerScriptDeepContent:
 
         assert "COPILOT_MCP_CONFIG" in RUNNER_SCRIPT
 
+    def test_runner_script_registers_custom_agents(self) -> None:
+        """Runner passes SDK-native custom agents to create_session."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "COPILOT_CUSTOM_AGENTS" in RUNNER_SCRIPT
+        assert 'session_config["custom_agents"]' in RUNNER_SCRIPT
+        assert 'session_config["agent"]' in RUNNER_SCRIPT
+        assert "client.create_session(**session_config)" in RUNNER_SCRIPT
+
+    def test_runner_script_has_bridge_agent_tool(self) -> None:
+        """Runner can provide a bridge-backed agent delegation tool."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "COPILOT_NESTED_AGENTS" in RUNNER_SCRIPT
+        assert "_build_bridge_agent_tool" in RUNNER_SCRIPT
+        assert 'name="agent"' in RUNNER_SCRIPT
+        assert "COPILOT_NESTED_AGENT_START" in RUNNER_SCRIPT
+        assert "COPILOT_NESTED_AGENT_END" in RUNNER_SCRIPT
+
+    def test_runner_script_uses_sdk_02_send_api(self) -> None:
+        """Runner sends prompt strings for github-copilot-sdk 0.2.x."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert "await session.send(prompt)" in RUNNER_SCRIPT
+        assert 'session.send({"prompt": prompt})' not in RUNNER_SCRIPT
+
 
 # ---------------------------------------------------------------------------
 # Phase 2 extensions — CopilotBridgeConfig edge cases
@@ -486,11 +576,27 @@ class TestCopilotBridgeConfigEdgeCases:
                 "sandbox_name": "custom",
                 "port_base": 4000,
                 "model": "gpt-4",
+                "agent_bundle": "/tmp/bundle",
+                "agents_dir": "/tmp/bundle/agents",
+                "main_agent": "Recon Agent",
+                "mcp_config": "/tmp/bundle/.mcp.json",
+                "nested_agents": "bridge",
+                "nested_agent_timeout": 120,
+                "nested_agent_quiet_timeout": 3,
+                "nested_agent_max_calls": 4,
             }
         )
         assert cfg.sandbox_name == "custom"
         assert cfg.port_base == 4000
         assert cfg.model == "gpt-4"
+        assert cfg.agent_bundle == "/tmp/bundle"
+        assert cfg.agents_dir == "/tmp/bundle/agents"
+        assert cfg.main_agent == "Recon Agent"
+        assert cfg.mcp_config == "/tmp/bundle/.mcp.json"
+        assert cfg.nested_agents == "bridge"
+        assert cfg.nested_agent_timeout == 120
+        assert cfg.nested_agent_quiet_timeout == 3
+        assert cfg.nested_agent_max_calls == 4
 
     def test_from_kwargs_only_unknown_kwargs(self) -> None:
         """Passing only unknown keys yields a default config."""

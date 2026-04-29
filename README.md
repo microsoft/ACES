@@ -205,6 +205,13 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
 # Use claude_code agent
 uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
   -T agent=claude_code
+
+# Use a runtime agent bundle with nested/subagent definitions
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot \
+  -T agent_bundle=/path/to/agent-bundle \
+  -T main_agent="Recon Agent" \
+  -T nested_agents=bridge
 ```
 
 ## Package Structure
@@ -276,7 +283,7 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1
 
 Runs the Copilot SDK Python client inside the Docker sandbox via a bridge proxy that routes LLM traffic back through inspect_ai.
 
-**Prerequisite:** The `copilot` Python package must be installed inside the sandbox Docker image.
+**Prerequisite:** `github-copilot-sdk>=0.3.0` must be installed inside the sandbox Docker image.
 
 ```bash
 uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
@@ -289,12 +296,27 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
   -T skills_dir=path/to/skills/ \
   -T timeout=600 \
   -T max_steps=100
+
+# With a complete agent bundle, including sibling subagents and .mcp.json
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot \
+  -T agent_bundle=/path/to/recon-agent \
+  -T main_agent="Recon Agent" \
+  -T nested_agents=bridge
 ```
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `persona_file` | None | Agent persona markdown file (YAML frontmatter + body) |
 | `skills_dir` | None | Skills directory — uploaded to sandbox at `.github/skills/` |
+| `agent_bundle` | None | Runtime bundle root containing `*.agent.md`, optional `manifest.json`, `skills/`, and `.mcp.json` |
+| `agents_dir` | None | Directory of agent definitions when it differs from `agent_bundle` |
+| `main_agent` | None | Agent name or filename selector for the top-level agent |
+| `mcp_config` | None | Additional MCP config JSON to merge with SABER's bridge MCP tools |
+| `nested_agents` | `"bridge"` | Copilot nested-agent mode. `"bridge"` installs a SABER-owned `agent` delegation tool that runs sibling custom agents through the same Inspect model bridge; `"native"` uses SDK-native custom-agent registration only; `"disabled"` skips registration |
+| `nested_agent_timeout` | 600 | Per-delegation timeout in seconds for `nested_agents=bridge` |
+| `nested_agent_quiet_timeout` | 5 | Seconds of quiet after a nested assistant response with no in-flight tools before treating the delegation as complete |
+| `nested_agent_max_calls` | 16 | Maximum bridge-backed nested agent calls per sample |
 | `timeout` | 300 | Runner timeout (seconds) |
 | `max_steps` | 50 | Max tool calls before forced completion |
 | `port_base` | 3000 | Bridge proxy starting port |
@@ -315,16 +337,44 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
   -T persona_file=path/to/persona.md \
   -T skills_dir=path/to/skills/ \
   -T disallowed_tools="WebFetch,NotebookEdit"
+
+# With a complete agent bundle, including .claude/agents staging
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=claude_code \
+  -T agent_bundle=/path/to/recon-agent \
+  -T main_agent="Recon Agent"
 ```
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `persona_file` | None | Persona content passed as `--append-system-prompt` |
 | `skills_dir` | None | Skills directory — uploaded to sandbox at `.claude/skills/` |
+| `agent_bundle` | None | Runtime bundle root containing `*.agent.md`, optional `manifest.json`, `skills/`, and `.mcp.json` |
+| `agents_dir` | None | Directory of agent definitions when it differs from `agent_bundle` |
+| `main_agent` | None | Agent name or filename selector for the top-level agent |
+| `mcp_config` | None | Additional MCP config JSON to merge with SABER's bridge MCP tools |
 | `version` | `"auto"` | Claude binary path or `"auto"` to search PATH |
 | `disallowed_tools` | `[]` | Tools to disallow via `--disallowed-tools` |
 | `timeout` | 300 | Execution timeout (seconds) |
 | `max_steps` | 50 | Max tool calls before forced completion |
+
+### Runtime agent bundles
+
+`agent_bundle`, `agents_dir`, `main_agent`, `skills_dir`, and `mcp_config` are runtime evaluation choices. They are intentionally not part of scenario/task export formats. A scenario bundle should stay reusable across `react`, `copilot`, `claude_code`, custom harnesses, and future solvers; the eval operator selects the harness, model, persona, skills, and subagent bundle at `inspect eval` time.
+
+A generic bundle can look like:
+
+```text
+agent-bundle/
+├── manifest.json          # optional: {"agent": "recon.agent.md"}
+├── recon.agent.md         # top-level persona; may allow the agent/task tool
+├── fingerprint.agent.md   # sibling subagent
+├── report.agent.md        # sibling subagent
+├── skills/                # optional, staged into the harness-specific skills dir
+└── .mcp.json              # optional, merged with SABER bridge MCP tools
+```
+
+Copilot stages definitions under `.github/agents` and registers SDK `custom_agents`/`agent` session configuration. By default, `nested_agents=bridge` also exposes a SABER-owned `agent` tool so parent agents can delegate to sibling custom agents without requiring GitHub OAuth/HMAC in the sandbox; each nested session reuses the same Inspect bridge provider, merged MCP config, and skills. Claude Code stages definitions under `.claude/agents` and keeps `CLAUDE_CODE_SUBAGENT_MODEL=inspect` so subagent model calls continue to route through the bridge.
 
 ### Bridge Architecture
 
@@ -384,6 +434,10 @@ These are forwarded through `**kwargs` to the agent factory.
 |-----------|------|---------|-------------|
 | `persona_file` | `str` | `None` | Path to agent persona markdown file |
 | `skills_dir` | `str` | `None` | Path to skills directory (uploaded into sandbox) |
+| `agent_bundle` | `str` | `None` | Runtime bundle root containing agent definitions, optional skills, and optional `.mcp.json` |
+| `agents_dir` | `str` | `None` | Agent definition directory when separate from `agent_bundle` |
+| `main_agent` | `str` | `None` | Top-level agent selector by name or filename |
+| `mcp_config` | `str` | `None` | Additional MCP config JSON file |
 | `timeout` | `int` | `300` | Agent execution timeout in seconds |
 | `max_steps` | `int` | `50` | Max tool calls before forced completion |
 
@@ -392,6 +446,10 @@ These are forwarded through `**kwargs` to the agent factory.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `port_base` | `int` | `3000` | Bridge proxy starting port |
+| `nested_agents` | `str` | `"bridge"` | Use SABER bridge-backed delegation by default; use `"native"` for SDK-only custom-agent registration or `"disabled"` to skip registration |
+| `nested_agent_timeout` | `int` | `600` | Per-delegation timeout in seconds for `nested_agents=bridge` |
+| `nested_agent_quiet_timeout` | `int` | `5` | Quiet period after a nested assistant response before considering the delegated call complete |
+| `nested_agent_max_calls` | `int` | `16` | Maximum bridge-backed nested calls per sample |
 
 **Claude Code only:**
 
@@ -441,6 +499,12 @@ uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
 uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
   -T agent=claude_code \
   -T timeout=600
+
+# Use a Copilot-compatible runtime agent bundle
+uv run inspect eval domains/excytin --model openai/azure/gpt-4.1 \
+  -T agent=copilot \
+  -T agent_bundle=/home/me/agents/recon-agent \
+  -T main_agent="Recon Agent"
 
 # CRSBench: run lite dataset
 uv run inspect eval domains/crsbench --model openai/azure/gpt-4.1 \

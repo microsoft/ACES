@@ -19,7 +19,6 @@ Architecture:
 import json
 from collections.abc import Callable, Sequence
 from enum import StrEnum
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -31,15 +30,19 @@ from saber.agents.bridge_utils import (
     build_user_prompt,
     compose_filters,
     create_tool_call_limit_filter,
+    merge_mcp_configs,
     parse_bridge_stderr,
     parse_idle_decision,
     parse_runner_metrics,
+    read_mcp_config,
     record_bridge_summary,
     resolve_model_aliases,
+    upload_agent_bundle_to_sandbox,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
 from saber.agents.cli_output_parser import parse_copilot_stderr as parse_copilot_cli
+from saber.agents.persona import load_agent_bundle
 from saber.logging import get_logger
 
 if TYPE_CHECKING:
@@ -73,6 +76,9 @@ Reads configuration from environment variables:
 - COPILOT_PROMPT: User prompt text (SABER system prompt prepended)
 - COPILOT_MCP_CONFIG: JSON string of MCP server configs (optional)
 - COPILOT_PERSONA_PROMPT: Persona prompt text to append to system message (optional)
+- COPILOT_CUSTOM_AGENTS: JSON list of Copilot SDK custom agent configs (optional)
+- COPILOT_AGENT: Selected custom agent name (optional)
+- COPILOT_NESTED_AGENTS: Nested-agent mode: native, bridge, disabled, github_auth
 - COPILOT_TIMEOUT: Max wall-clock timeout in seconds (default: 3600)
 - COPILOT_IDLE_TIMEOUT: Max idle time with no activity events (default: 300)
 """
@@ -84,7 +90,18 @@ import signal
 import sys
 import time
 
-from copilot.types import PermissionRequestResult
+try:
+    from copilot.types import PermissionRequestResult
+except ModuleNotFoundError:
+    from copilot.session import PermissionRequestResult
+
+try:
+    from copilot.tools import Tool, ToolResult
+except ModuleNotFoundError:
+    Tool = None
+    ToolResult = None
+
+from copilot.generated.session_events import SessionEventType
 
 # ---------------------------------------------------------------------------
 # Constants for process health classification
@@ -380,7 +397,7 @@ def _approve_all(
 
     The Copilot SDK's PermissionHandler signature is
     ``(PermissionRequest, Dict[str, str]) -> PermissionRequestResult``.
-    Returning a ``PermissionRequestResult(kind="approved")`` grants the
+    Returning a ``PermissionRequestResult(kind="approve-once")`` grants the
     request.  The SDK accesses result attributes (``result.kind``), so a
     plain dict would raise ``AttributeError`` and be silently converted to
     a denial.
@@ -388,7 +405,412 @@ def _approve_all(
     This is safe because the runner executes inside an isolated Docker
     sandbox used exclusively for benchmarking.
     """
-    return PermissionRequestResult(kind="approved")
+    return PermissionRequestResult(kind="approve-once")
+
+
+def _normalize_agent_selector(value):
+    """Normalize agent names/filenames for delegation lookup."""
+    return "-".join(part for part in "".join(ch.lower() if ch.isalnum() else "-" for ch in value).split("-") if part)
+
+
+def _agent_aliases(custom_agents):
+    """Build normalized alias -> SDK agent name mapping."""
+    aliases = {}
+    for agent_config in custom_agents:
+        if not isinstance(agent_config, dict):
+            continue
+        name = agent_config.get("name")
+        display_name = agent_config.get("display_name")
+        for value in (name, display_name):
+            if isinstance(value, str) and value.strip():
+                aliases[value] = name
+                aliases[_normalize_agent_selector(value)] = name
+                aliases[_normalize_agent_selector(value).removesuffix("-agent")] = name
+    return {k: v for k, v in aliases.items() if k and v}
+
+
+def _coerce_agent_tool_args(arguments):
+    """Accept common argument shapes for the bridge-backed agent tool."""
+    if isinstance(arguments, dict):
+        return arguments
+    if isinstance(arguments, str):
+        return {"prompt": arguments}
+    return {}
+
+
+def _first_arg(args, names):
+    """Return the first string argument from a set of aliases."""
+    for name in names:
+        value = args.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _event_content(event):
+    """Extract assistant content from a Copilot SDK event."""
+    data = getattr(event, "data", None)
+    content = getattr(data, "content", None)
+    if content is None and isinstance(data, dict):
+        content = data.get("content")
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _tool_failure(message):
+    """Return a Copilot ToolResult failure."""
+    return ToolResult(
+        text_result_for_llm=f"Nested agent failed: {message}",
+        result_type="failure",
+        error=message,
+    )
+
+
+def _build_bridge_agent_tool(
+    *,
+    client,
+    base_session_config,
+    custom_agents,
+    timeout_seconds,
+    quiet_timeout_seconds,
+    max_calls,
+    output_limit,
+    tool_name="agent",
+    allow_ad_hoc=False,
+):
+    """Create a bridge-backed `agent` tool for delegated custom agents.
+
+    The Copilot SDK's native delegation path may require GitHub auth in the
+    sandbox. This tool is SABER-owned: it creates a nested SDK session with the
+    same custom OpenAI provider, MCP config, skills, and custom-agent registry
+    as the parent, but without re-exposing the delegation tool recursively.
+    """
+    if Tool is None or ToolResult is None:
+        raise RuntimeError("github-copilot-sdk does not expose custom Tool support; install >=0.2.2.")
+
+    aliases = _agent_aliases(custom_agents)
+    agents_by_name = {
+        agent_config["name"]: agent_config
+        for agent_config in custom_agents
+        if isinstance(agent_config, dict) and isinstance(agent_config.get("name"), str)
+    }
+    calls = {"count": 0}
+
+    async def _run_nested_session(agent_name, prompt, call_id, agent_prompt_override=None):
+        agent_config = agents_by_name.get(agent_name, {})
+        agent_prompt = agent_prompt_override or agent_config.get("prompt")
+        if not isinstance(agent_prompt, str) or not agent_prompt.strip():
+            return _tool_failure(f"agent '{agent_name}' has no prompt")
+
+        nested_config = {
+            key: value
+            for key, value in base_session_config.items()
+            if key not in (
+                "agent",
+                "config_dir",
+                "custom_agents",
+                "enable_config_discovery",
+                "system_message",
+                "tools",
+            )
+        }
+        nested_config["system_message"] = {
+            "mode": "append",
+            "content": agent_prompt,
+        }
+        provider = nested_config.get("provider")
+        if isinstance(provider, dict) and provider.get("type") == "openai":
+            nested_provider = dict(provider)
+            nested_provider["wire_api"] = "responses"
+            nested_config["provider"] = nested_provider
+
+        idle_event = asyncio.Event()
+        session_error = ""
+        last_content = ""
+        assistant_messages = 0
+        tool_calls_started = 0
+        tool_calls_completed = 0
+        in_flight_tools = {}
+        start_time = time.monotonic()
+        last_activity_time = start_time
+        poll_error_reported = False
+
+        nested_client = type(client)()
+        try:
+            await nested_client.start()
+            session = await nested_client.create_session(**nested_config)
+
+            async def _poll_nested_messages():
+                nonlocal last_content, tool_calls_started, tool_calls_completed
+                nonlocal last_activity_time
+                nonlocal poll_error_reported
+
+                try:
+                    events = await session.get_messages()
+                except Exception as exc:
+                    if not poll_error_reported:
+                        print(
+                            "COPILOT_NESTED_AGENT_POLL_WARNING: "
+                            + json.dumps(
+                                {
+                                    "call_id": call_id,
+                                    "agent_name": agent_name,
+                                    "message": str(exc)[:300],
+                                }
+                            ),
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        poll_error_reported = True
+                    return
+
+                polled_content = ""
+                polled_tool_starts = 0
+                polled_tool_completes = 0
+                for event in events:
+                    if event.type == SessionEventType.ASSISTANT_MESSAGE:
+                        content = _event_content(event)
+                        if content:
+                            polled_content = content
+                    elif event.type == SessionEventType.TOOL_EXECUTION_START:
+                        polled_tool_starts += 1
+                    elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
+                        polled_tool_completes += 1
+
+                if polled_content and polled_content != last_content:
+                    last_content = polled_content
+                    last_activity_time = time.monotonic()
+
+                if polled_tool_starts or polled_tool_completes:
+                    tool_calls_started = max(tool_calls_started, polled_tool_starts)
+                    tool_calls_completed = max(tool_calls_completed, polled_tool_completes)
+                    if polled_tool_starts > polled_tool_completes:
+                        in_flight_tools["__polled__"] = polled_tool_starts - polled_tool_completes
+                    else:
+                        in_flight_tools.pop("__polled__", None)
+
+            def _on_nested_event(event):
+                nonlocal session_error, last_content, assistant_messages
+                nonlocal tool_calls_started, tool_calls_completed
+                nonlocal last_activity_time
+
+                last_activity_time = time.monotonic()
+                if event.type == SessionEventType.ASSISTANT_MESSAGE:
+                    assistant_messages += 1
+                    content = _event_content(event)
+                    if content:
+                        last_content = content
+                elif event.type == SessionEventType.TOOL_EXECUTION_START:
+                    tool_calls_started += 1
+                    data = getattr(event, "data", None)
+                    tool_name = getattr(data, "tool_name", None) or getattr(data, "name", None)
+                    if tool_name:
+                        in_flight_tools[tool_name] = in_flight_tools.get(tool_name, 0) + 1
+                elif event.type == SessionEventType.TOOL_EXECUTION_COMPLETE:
+                    tool_calls_completed += 1
+                    data = getattr(event, "data", None)
+                    tool_name = getattr(data, "tool_name", None) or getattr(data, "name", None)
+                    if tool_name:
+                        count = in_flight_tools.get(tool_name, 1) - 1
+                        if count <= 0:
+                            in_flight_tools.pop(tool_name, None)
+                        else:
+                            in_flight_tools[tool_name] = count
+                elif event.type == SessionEventType.SESSION_IDLE:
+                    idle_event.set()
+                elif event.type == SessionEventType.SESSION_ERROR:
+                    session_error = str(getattr(getattr(event, "data", None), "message", event.data))
+                    idle_event.set()
+
+            unsubscribe = session.on(_on_nested_event)
+            try:
+                await session.send(prompt)
+                completion_reason = "idle"
+                while True:
+                    await _poll_nested_messages()
+                    now = time.monotonic()
+                    if idle_event.is_set():
+                        completion_reason = "idle"
+                        break
+                    if last_content and not in_flight_tools and (now - last_activity_time) >= quiet_timeout_seconds:
+                        completion_reason = "quiet"
+                        break
+                    if (now - start_time) >= timeout_seconds:
+                        completion_reason = "timeout"
+                        break
+                    await asyncio.sleep(1.0)
+
+                if completion_reason == "timeout":
+                    elapsed = round(time.monotonic() - start_time, 1)
+                    print(
+                        "COPILOT_NESTED_AGENT_ERROR: "
+                        + json.dumps(
+                            {
+                                "call_id": call_id,
+                                "agent_name": agent_name,
+                                "error_kind": "timeout",
+                                "elapsed_seconds": elapsed,
+                            }
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return _tool_failure(f"{agent_name} timed out after {timeout_seconds}s")
+
+                elapsed = round(time.monotonic() - start_time, 1)
+                if session_error:
+                    print(
+                        "COPILOT_NESTED_AGENT_ERROR: "
+                        + json.dumps(
+                            {
+                                "call_id": call_id,
+                                "agent_name": agent_name,
+                                "error_kind": "session_error",
+                                "elapsed_seconds": elapsed,
+                                "message": session_error[:300],
+                            }
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return _tool_failure(session_error)
+
+                print(
+                    "COPILOT_NESTED_AGENT_END: "
+                    + json.dumps(
+                        {
+                            "call_id": call_id,
+                            "agent_name": agent_name,
+                            "status": "success",
+                            "elapsed_seconds": elapsed,
+                            "assistant_messages": assistant_messages,
+                            "tool_calls_started": tool_calls_started,
+                            "tool_calls_completed": tool_calls_completed,
+                            "completion_reason": completion_reason,
+                        }
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if len(last_content) > output_limit:
+                    last_content = last_content[:output_limit] + "\n\n[truncated]"
+                return ToolResult(text_result_for_llm=last_content or f"{agent_name} completed without text output.")
+            finally:
+                unsubscribe()
+        finally:
+            if "session" in locals():
+                if hasattr(session, "disconnect"):
+                    await session.disconnect()
+                else:
+                    await session.destroy()
+            await nested_client.stop()
+
+    async def _agent_handler(invocation):
+        args = _coerce_agent_tool_args(getattr(invocation, "arguments", None))
+        requested_agent = _first_arg(args, ("agent", "agent_name", "name", "subagent", "recipient"))
+        prompt = _first_arg(args, ("prompt", "task", "instructions", "input", "message"))
+
+        if not requested_agent and not allow_ad_hoc:
+            return _tool_failure("missing required argument: agent")
+        if not requested_agent:
+            requested_agent = "task"
+        if not prompt:
+            return _tool_failure("missing required argument: prompt")
+
+        selected_agent = aliases.get(requested_agent) or aliases.get(_normalize_agent_selector(requested_agent))
+        if not selected_agent:
+            if allow_ad_hoc:
+                selected_agent = f"ad-hoc-{_normalize_agent_selector(requested_agent) or 'task'}"
+                ad_hoc_prompt = (
+                    "You are a focused delegated assistant running inside SABER. "
+                    "Complete only the task provided by the parent agent, use available tools when needed, "
+                    "return concise evidence and results, and do not modify cloud resources."
+                )
+                if calls["count"] >= max_calls:
+                    return _tool_failure(f"nested agent call limit exceeded ({max_calls})")
+                calls["count"] += 1
+                call_id = f"nested-{calls['count']}"
+                print(
+                    "COPILOT_NESTED_AGENT_START: "
+                    + json.dumps(
+                        {
+                            "call_id": call_id,
+                            "agent_name": selected_agent,
+                            "depth": 1,
+                            "model": base_session_config.get("model"),
+                            "timeout": timeout_seconds,
+                            "tool": tool_name,
+                        }
+                    ),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return await _run_nested_session(selected_agent, prompt, call_id, ad_hoc_prompt)
+            known = ", ".join(sorted({v for v in aliases.values()}))
+            return _tool_failure(f"unknown agent '{requested_agent}'. Known agents: {known}")
+
+        if calls["count"] >= max_calls:
+            return _tool_failure(f"nested agent call limit exceeded ({max_calls})")
+
+        calls["count"] += 1
+        call_id = f"nested-{calls['count']}"
+        print(
+            "COPILOT_NESTED_AGENT_START: "
+            + json.dumps(
+                {
+                    "call_id": call_id,
+                    "agent_name": selected_agent,
+                    "depth": 1,
+                        "model": base_session_config.get("model"),
+                        "timeout": timeout_seconds,
+                        "tool": tool_name,
+                    }
+                ),
+                file=sys.stderr,
+                flush=True,
+            )
+        return await _run_nested_session(selected_agent, prompt, call_id)
+
+    return Tool(
+        name=tool_name,
+        description=(
+            "Delegate a focused task to a named custom agent from the current agent bundle. "
+            "Use this for subagents such as fingerprint, attack-path, choke-point, or report."
+            if tool_name == "agent"
+            else "Run a focused delegated task through SABER's bridge-routed nested session."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string",
+                    "description": "Name of the subagent to invoke.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Task instructions and all context the subagent needs.",
+                },
+            },
+            "required": ["agent", "prompt"],
+            "additionalProperties": True,
+        },
+        handler=_agent_handler,
+        overrides_built_in_tool=True,
+        skip_permission=True,
+    )
 
 
 async def main() -> int:
@@ -401,6 +823,14 @@ async def main() -> int:
     model = os.environ.get("COPILOT_MODEL", "inspect")
     prompt = os.environ.get("COPILOT_PROMPT", "")
     mcp_config_str = os.environ.get("COPILOT_MCP_CONFIG", "")
+    custom_agents_str = os.environ.get("COPILOT_CUSTOM_AGENTS", "")
+    active_agent = os.environ.get("COPILOT_AGENT", "")
+    config_dir = os.environ.get("COPILOT_CONFIG_DIR", "")
+    nested_agents_mode = os.environ.get("COPILOT_NESTED_AGENTS", "native")
+    nested_agent_timeout = int(os.environ.get("COPILOT_NESTED_AGENT_TIMEOUT", "600"))
+    nested_agent_quiet_timeout = int(os.environ.get("COPILOT_NESTED_AGENT_QUIET_TIMEOUT", "5"))
+    nested_agent_max_calls = int(os.environ.get("COPILOT_NESTED_AGENT_MAX_CALLS", "16"))
+    nested_agent_output_limit = int(os.environ.get("COPILOT_NESTED_AGENT_OUTPUT_LIMIT", "20000"))
     max_timeout = int(os.environ.get("COPILOT_TIMEOUT", "3600"))
     idle_timeout = int(os.environ.get("COPILOT_IDLE_TIMEOUT", "300"))
 
@@ -409,23 +839,21 @@ async def main() -> int:
         return 1
 
     # Build session config
-    # wire_api="responses" tells the Copilot CLI to use the OpenAI
-    # Responses API (POST /v1/responses) instead of Chat Completions.
-    # The bridge's Chat Completions handler serialises
-    # ChatCompletion.tool_calls as ``null`` for text-only model turns
-    # (Pydantic model_dump default).  The CLI's JS code accesses
-    # ``tool_calls.length`` without a null-guard, crashing with
-    # "TypeError: Cannot read properties of null (reading 'length')".
-    # The Responses API schema has no ``tool_calls`` field at all —
-    # tool calls are separate output items in a list, so the null
-    # issue never arises.
+    # Use Chat Completions for the bridge-facing custom OpenAI provider.
+    # In this environment the Copilot CLI stalls indefinitely when routed
+    # through the Responses API bridge, never emitting an assistant turn or
+    # tool call. Non-streaming Chat Completions is the compatible path.
     session_config: dict = {
         "model": model,
+        # The Inspect bridge only implements non-streaming OpenAI proxy calls.
+        # Copilot's SDK may default to streaming for custom providers, which can
+        # leave the session hanging without ever producing an assistant message.
+        "streaming": False,
         "provider": {
             "type": "openai",
             "base_url": base_url,
             "api_key": api_key,
-            "wire_api": "responses",
+            "wire_api": "completions",
         },
         "on_permission_request": _approve_all,
     }
@@ -434,6 +862,9 @@ async def main() -> int:
     if mcp_config_str:
         try:
             mcp_servers = json.loads(mcp_config_str)
+            if not isinstance(mcp_servers, dict):
+                print("ERROR: COPILOT_MCP_CONFIG must decode to an object", file=sys.stderr)
+                return 1
             if mcp_servers:
                 session_config["mcp_servers"] = mcp_servers
         except json.JSONDecodeError as exc:
@@ -458,6 +889,28 @@ async def main() -> int:
         except json.JSONDecodeError as exc:
             print(f"ERROR: Invalid COPILOT_SKILL_DIRECTORIES: {skill_dirs_str} — {exc}", file=sys.stderr)
             return 1
+
+    # Custom agent bundle definitions, passed directly to the SDK. These are
+    # snake_case dictionaries; the SDK converts them to wire format.
+    custom_agents = []
+    if custom_agents_str:
+        try:
+            custom_agents = json.loads(custom_agents_str)
+            if not isinstance(custom_agents, list):
+                print("ERROR: COPILOT_CUSTOM_AGENTS must decode to a list", file=sys.stderr)
+                return 1
+            if custom_agents and nested_agents_mode != "bridge":
+                session_config["custom_agents"] = custom_agents
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: Invalid COPILOT_CUSTOM_AGENTS: {custom_agents_str} — {exc}", file=sys.stderr)
+            return 1
+
+    if active_agent and nested_agents_mode != "bridge":
+        session_config["agent"] = active_agent
+
+    if config_dir and nested_agents_mode != "bridge":
+        session_config["config_dir"] = config_dir
+        session_config["enable_config_discovery"] = True
 
     # Activity tracking
     start_time = time.monotonic()
@@ -560,12 +1013,36 @@ async def main() -> int:
     client = CopilotClient()
     try:
         await client.start()
-        session = await client.create_session(session_config)
+        if nested_agents_mode == "bridge" and custom_agents:
+            session_config["tools"] = [
+                _build_bridge_agent_tool(
+                    client=client,
+                    base_session_config=session_config,
+                    custom_agents=custom_agents,
+                    timeout_seconds=nested_agent_timeout,
+                    quiet_timeout_seconds=nested_agent_quiet_timeout,
+                    max_calls=nested_agent_max_calls,
+                    output_limit=nested_agent_output_limit,
+                    tool_name="agent",
+                ),
+                _build_bridge_agent_tool(
+                    client=client,
+                    base_session_config=session_config,
+                    custom_agents=custom_agents,
+                    timeout_seconds=nested_agent_timeout,
+                    quiet_timeout_seconds=nested_agent_quiet_timeout,
+                    max_calls=nested_agent_max_calls,
+                    output_limit=nested_agent_output_limit,
+                    tool_name="task",
+                    allow_ad_hoc=True,
+                )
+            ]
+        session = await client.create_session(**session_config)
 
         try:
             unsubscribe = session.on(_on_event)
             try:
-                await session.send({"prompt": prompt})
+                await session.send(prompt)
                 last_activity_time = time.monotonic()  # Reset after send
 
                 # Poll loop with activity-aware timeout
@@ -656,7 +1133,10 @@ async def main() -> int:
             finally:
                 unsubscribe()
         finally:
-            await session.destroy()
+            if hasattr(session, "disconnect"):
+                await session.disconnect()
+            else:
+                await session.destroy()
     except Exception as exc:
         # Non-timeout exceptions (session creation failure, etc.)
         print(f"ERROR: Session failed: {exc}", file=sys.stderr)
@@ -690,8 +1170,17 @@ class CopilotBridgeConfig(BaseModel):
     sandbox_name: str = "default"
     port_base: int = _DEFAULT_PORT_BASE
     model: str = "inspect"
+    agent_bundle: str | None = None
+    agents_dir: str | None = None
+    main_agent: str | None = None
     persona_file: str | None = None
     skills_dir: str | None = None
+    mcp_config: str | None = None
+    nested_agents: Literal["native", "bridge", "disabled", "github_auth"] = "bridge"
+    nested_agent_timeout: int = 600
+    nested_agent_quiet_timeout: int = 5
+    nested_agent_max_calls: int = 16
+    nested_agent_output_limit: int = 20000
     idle_timeout: int = 300
 
     @classmethod
@@ -760,6 +1249,15 @@ def _build_runner_env(
     timeout: int = _DEFAULT_TIMEOUT,
     persona_prompt: str = "",
     skill_directories_json: str = "[]",
+    extra_mcp_config: dict[str, object] | None = None,
+    custom_agents_json: str = "[]",
+    active_agent: str = "",
+    config_dir: str = "",
+    nested_agents_mode: str = "bridge",
+    nested_agent_timeout: int = 600,
+    nested_agent_quiet_timeout: int = 5,
+    nested_agent_max_calls: int = 16,
+    nested_agent_output_limit: int = 20000,
     idle_timeout: int = 300,
 ) -> dict[str, str]:
     """Build environment variables for the runner script.
@@ -776,6 +1274,20 @@ def _build_runner_env(
             system message via ``system_message`` mode=append.
         skill_directories_json: JSON-serialized list of sandbox skill
             directory paths.
+        extra_mcp_config: Operator-provided MCP config object, typically
+            read from an agent bundle ``.mcp.json``.
+        custom_agents_json: JSON-serialized Copilot SDK custom-agent configs.
+        active_agent: Name of the custom agent to select for the session.
+        config_dir: Sandbox config directory for optional SDK discovery.
+        nested_agents_mode: Copilot nested-agent mode.
+        nested_agent_timeout: Per-delegation timeout in seconds for bridge
+            mode.
+        nested_agent_quiet_timeout: Seconds of quiet after a nested assistant
+            response with no in-flight tools before treating the call complete.
+        nested_agent_max_calls: Maximum number of bridge-backed nested calls
+            per sample.
+        nested_agent_output_limit: Maximum nested output characters returned
+            to the parent.
         idle_timeout: Maximum idle time (no activity events) in seconds
             before the runner exits gracefully.
 
@@ -792,15 +1304,27 @@ def _build_runner_env(
             "url": c.url,
             "tools": ["*"],
         }
+    merged_mcp = merge_mcp_configs({"mcpServers": mcp_dict} if mcp_dict else {}, extra_mcp_config)
+    mcp_servers = merged_mcp.get("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        raise ValueError("Merged MCP config must contain object-valued mcpServers.")
     return {
         "OPENAI_BASE_URL": f"http://localhost:{bridge_port}/v1",
         "OPENAI_API_KEY": "sk-placeholder-for-bridge",
         "COPILOT_MODEL": model,
         "COPILOT_PROMPT": prompt,
-        "COPILOT_MCP_CONFIG": json.dumps(mcp_dict),
+        "COPILOT_MCP_CONFIG": json.dumps(mcp_servers),
         "COPILOT_TIMEOUT": str(timeout),
         "COPILOT_PERSONA_PROMPT": persona_prompt,
         "COPILOT_SKILL_DIRECTORIES": skill_directories_json,
+        "COPILOT_CUSTOM_AGENTS": custom_agents_json,
+        "COPILOT_AGENT": active_agent,
+        "COPILOT_CONFIG_DIR": config_dir,
+        "COPILOT_NESTED_AGENTS": nested_agents_mode,
+        "COPILOT_NESTED_AGENT_TIMEOUT": str(nested_agent_timeout),
+        "COPILOT_NESTED_AGENT_QUIET_TIMEOUT": str(nested_agent_quiet_timeout),
+        "COPILOT_NESTED_AGENT_MAX_CALLS": str(nested_agent_max_calls),
+        "COPILOT_NESTED_AGENT_OUTPUT_LIMIT": str(nested_agent_output_limit),
         "COPILOT_IDLE_TIMEOUT": str(idle_timeout),
     }
 
@@ -901,31 +1425,46 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     # --- Persona & Skills handling ---
                     persona_prompt = ""
                     skill_directories_json = "[]"
+                    custom_agents_json = "[]"
+                    active_agent = ""
+                    config_dir = ""
 
-                    if config.persona_file:
-                        from saber.agents.persona import parse_agent_file
+                    bundle = load_agent_bundle(
+                        agent_bundle=config.agent_bundle,
+                        agents_dir=config.agents_dir,
+                        main_agent=config.main_agent,
+                        persona_file=config.persona_file,
+                        skills_dir=config.skills_dir,
+                        mcp_config=config.mcp_config,
+                    )
+                    if bundle.main_agent is not None:
+                        persona_prompt = bundle.main_agent.prompt
 
-                        persona_path = Path(config.persona_file)
-                        metadata, prompt_body = parse_agent_file(persona_path)
-
-                        # Copy the raw persona file into sandbox
-                        sandbox_persona_path = f".github/agents/{persona_path.name}"
-                        await sbox.write_file(
-                            sandbox_persona_path,
-                            persona_path.read_text(encoding="utf-8"),
+                    should_register_custom_agents = (
+                        bundle.has_agents
+                        and config.nested_agents != "disabled"
+                        and bool(config.agent_bundle or config.agents_dir or config.main_agent)
+                    )
+                    if should_register_custom_agents:
+                        sandbox_agents_dir = await upload_agent_bundle_to_sandbox(sbox, bundle, ".github/agents")
+                        if sandbox_agents_dir:
+                            config_dir = "."
+                        custom_agents_json = json.dumps(
+                            [agent_config.to_sdk_dict() for agent_config in bundle.custom_agent_configs()]
                         )
+                        if bundle.main_agent is not None:
+                            active_agent = bundle.main_agent.name
                         logger.info(
-                            "Copied persona file to sandbox: %s",
-                            sandbox_persona_path,
+                            "Registered %d Copilot custom agent(s); active_agent=%s",
+                            len(bundle.agents),
+                            active_agent or "(default)",
                         )
 
-                        # Use the prompt body as the persona prompt
-                        # The SDK injects this via system_message mode=append
-                        persona_prompt = prompt_body
-
-                    if config.skills_dir:
-                        sandbox_skills = await upload_skills_to_sandbox(sbox, config.skills_dir, ".github/skills")
+                    if bundle.skills_dir:
+                        sandbox_skills = await upload_skills_to_sandbox(sbox, bundle.skills_dir, ".github/skills")
                         skill_directories_json = json.dumps([sandbox_skills])
+
+                    extra_mcp_config = read_mcp_config(bundle.mcp_config)
 
                     # Derive timeout from inspect_ai's sample time limit.
                     # sample_limits().time.remaining gives the seconds left
@@ -952,6 +1491,15 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         timeout=runner_timeout,
                         persona_prompt=persona_prompt,
                         skill_directories_json=skill_directories_json,
+                        extra_mcp_config=extra_mcp_config,
+                        custom_agents_json=custom_agents_json,
+                        active_agent=active_agent,
+                        config_dir=config_dir,
+                        nested_agents_mode=config.nested_agents,
+                        nested_agent_timeout=config.nested_agent_timeout,
+                        nested_agent_quiet_timeout=config.nested_agent_quiet_timeout,
+                        nested_agent_max_calls=config.nested_agent_max_calls,
+                        nested_agent_output_limit=config.nested_agent_output_limit,
                         idle_timeout=config.idle_timeout,
                     )
 

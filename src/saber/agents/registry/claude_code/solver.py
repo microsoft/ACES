@@ -8,6 +8,7 @@ Two-level factory pattern:
     ``create_agent(**kwargs)`` -> ``create_with_prompts(**prompt_kwargs)`` -> ``Solver``
 """
 
+import json
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -20,14 +21,19 @@ from saber.agents.bridge_utils import (
     build_user_prompt,
     compose_filters,
     create_tool_call_limit_filter,
+    mcp_allowed_tools,
+    merge_mcp_configs,
     parse_bridge_stderr,
+    read_mcp_config,
     record_bridge_summary,
     resolve_mcp_servers,
     resolve_model_aliases,
+    upload_agent_bundle_to_sandbox,
     upload_skills_to_sandbox,
     validate_model_availability,
 )
 from saber.agents.cli_output_parser import parse_claude_code_stream_json
+from saber.agents.persona import load_agent_bundle
 from saber.logging import get_logger
 
 if TYPE_CHECKING:
@@ -278,6 +284,14 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         persona_file: str | None = str(_pf) if _pf else None
         _sd = outer_kwargs.get("skills_dir")
         skills_dir: str | None = str(_sd) if _sd else None
+        _ab = outer_kwargs.get("agent_bundle")
+        agent_bundle: str | None = str(_ab) if _ab else None
+        _ad = outer_kwargs.get("agents_dir")
+        agents_dir: str | None = str(_ad) if _ad else None
+        _ma = outer_kwargs.get("main_agent")
+        main_agent: str | None = str(_ma) if _ma else None
+        _mc = outer_kwargs.get("mcp_config")
+        mcp_config: str | None = str(_mc) if _mc else None
 
         our_system_prompt = build_system_prompt(
             instruction_prompt=instruction_prompt,
@@ -331,14 +345,32 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     # Resolve MCP servers
                     mcp_config_json = ""
                     allowed_tools: list[str] = []
+                    bridge_mcp_config: dict[str, object] = {}
                     if bridge.mcp_server_configs:
                         mcp_config_json, allowed_tools = resolve_mcp_servers(
                             bridge.mcp_server_configs,
                         )
+                        bridge_mcp_config = json.loads(mcp_config_json)
+
+                    bundle = load_agent_bundle(
+                        agent_bundle=agent_bundle,
+                        agents_dir=agents_dir,
+                        main_agent=main_agent,
+                        persona_file=persona_file,
+                        skills_dir=skills_dir,
+                        mcp_config=mcp_config,
+                    )
+                    use_agent_bundle = bool(agent_bundle or agents_dir or main_agent)
 
                     # Read persona file content from host
                     persona_content: str | None = None
-                    if persona_file:
+                    if use_agent_bundle and bundle.main_agent is not None:
+                        persona_content = bundle.main_agent.prompt
+                        logger.info(
+                            "Loaded main Claude Code agent from bundle: %s",
+                            bundle.main_agent.path,
+                        )
+                    elif persona_file:
                         persona_path = Path(persona_file)
                         if not persona_path.is_file():
                             msg = f"Persona file not found: {persona_path}"
@@ -352,9 +384,20 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
                     # Upload skills directory to sandbox
                     add_dirs: list[str] = []
-                    if skills_dir:
-                        sandbox_skills = await upload_skills_to_sandbox(sbox, skills_dir, ".claude/skills")
+                    if use_agent_bundle and bundle.has_agents:
+                        sandbox_agents_dir = await upload_agent_bundle_to_sandbox(sbox, bundle, ".claude/agents")
+                        if sandbox_agents_dir:
+                            add_dirs.append(sandbox_agents_dir)
+
+                    if bundle.skills_dir:
+                        sandbox_skills = await upload_skills_to_sandbox(sbox, bundle.skills_dir, ".claude/skills")
                         add_dirs.append(sandbox_skills)
+
+                    extra_mcp_config = read_mcp_config(bundle.mcp_config)
+                    merged_mcp_config = merge_mcp_configs(bridge_mcp_config, extra_mcp_config)
+                    if merged_mcp_config:
+                        mcp_config_json = json.dumps(merged_mcp_config)
+                        allowed_tools = mcp_allowed_tools(merged_mcp_config)
 
                     # Build CLI args
                     cmd_args = _build_claude_cmd(

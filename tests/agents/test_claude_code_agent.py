@@ -404,6 +404,28 @@ class TestClaudeCodePersonaSkills:
         solver = create_with_prompts(instruction_prompt="Do the task.", max_steps=200)
         assert isinstance(solver, Solver)
 
+    def test_create_agent_accepts_agent_bundle_options(self) -> None:
+        """Runtime bundle kwargs produce a Solver without scenario YAML changes."""
+        from inspect_ai.solver import Solver
+
+        from saber.agents.registry.claude_code.solver import create_agent
+
+        create_with_prompts = create_agent(
+            agent_bundle="/tmp/recon-agent",
+            main_agent="Recon Agent",
+            mcp_config="/tmp/recon-agent/.mcp.json",
+        )
+        solver = create_with_prompts(instruction_prompt="Do the task.", max_steps=200)
+        assert isinstance(solver, Solver)
+
+    def test_solver_stages_claude_agents_directory(self) -> None:
+        """Claude Code solver contains bundle staging hooks for .claude/agents."""
+        import saber.agents.registry.claude_code.solver as mod
+
+        source = inspect.getsource(mod)
+        assert "upload_agent_bundle_to_sandbox" in source
+        assert '".claude/agents"' in source
+
 
 class TestBuildAgentEnv:
     """_build_agent_env returns environment variables dict."""

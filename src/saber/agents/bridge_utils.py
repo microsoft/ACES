@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from inspect_ai.util import SandboxEnvironment
 
     from saber.agents.bridge_tracking_models import BridgeSessionSummary
+    from saber.agents.persona import AgentBundle
     from saber.agents.registry.copilot.solver import IdleDecision
 
 from saber.logging import get_logger
@@ -313,6 +314,85 @@ def resolve_mcp_servers(
 
     mcp_config_json = json.dumps({"mcpServers": mcp_servers_json})
     return mcp_config_json, allowed_tools
+
+
+def read_mcp_config(path: str | Path | None) -> dict[str, object]:
+    """Read an MCP config JSON file.
+
+    Args:
+        path: Path to a JSON file containing ``{"mcpServers": ...}``.
+
+    Returns:
+        Parsed config. Empty dict when *path* is ``None``.
+
+    Raises:
+        FileNotFoundError: If the path does not exist.
+        ValueError: If the file is not a mapping or has invalid
+            ``mcpServers`` shape.
+    """
+    if path is None:
+        return {}
+    config_path = Path(path)
+    if not config_path.is_file():
+        raise FileNotFoundError(f"MCP config file not found: {config_path}")
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid MCP config JSON in {config_path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"MCP config in {config_path} must be a JSON object.")
+    servers = data.get("mcpServers")
+    if servers is not None and not isinstance(servers, dict):
+        raise ValueError(f"MCP config in {config_path} must contain object-valued mcpServers.")
+    return data
+
+
+def merge_mcp_configs(*configs: dict[str, object] | str | None) -> dict[str, object]:
+    """Merge MCP config objects or JSON strings.
+
+    Later configs override earlier configs when server names collide.
+    Non-``mcpServers`` top-level fields from later configs also override
+    earlier values.
+    """
+    merged: dict[str, object] = {}
+    merged_servers: dict[str, object] = {}
+    for config in configs:
+        if not config:
+            continue
+        if isinstance(config, str):
+            parsed = json.loads(config)
+            if not isinstance(parsed, dict):
+                raise ValueError("MCP config JSON must decode to an object.")
+            config_obj = parsed
+        else:
+            config_obj = config
+        for key, value in config_obj.items():
+            if key == "mcpServers":
+                if not isinstance(value, dict):
+                    raise ValueError("mcpServers must be an object.")
+                merged_servers.update(value)
+            else:
+                merged[key] = value
+    if merged_servers:
+        merged["mcpServers"] = merged_servers
+    return merged
+
+
+def mcp_allowed_tools(config: dict[str, object]) -> list[str]:
+    """Return Claude Code ``--allowed-tools`` patterns for an MCP config."""
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+    allowed: list[str] = []
+    for server_name, raw_server in servers.items():
+        tools: object = None
+        if isinstance(raw_server, dict):
+            tools = raw_server.get("tools")
+        if tools in (None, "all", ["*"]):
+            allowed.append(f"mcp__{server_name}__*")
+        elif isinstance(tools, list):
+            allowed.extend(f"mcp__{server_name}__{tool}" for tool in tools if isinstance(tool, str))
+    return allowed
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +779,37 @@ async def upload_skills_to_sandbox(
 
     logger.debug("Uploaded %d skill files to sandbox at %s", uploaded, sandbox_base)
     return sandbox_base
+
+
+async def upload_agent_bundle_to_sandbox(
+    sbox: SandboxEnvironment,
+    bundle: AgentBundle,
+    sandbox_agents_dir: str,
+) -> str | None:
+    """Upload parsed agent definition files into a sandbox agent directory.
+
+    Args:
+        sbox: Inspect sandbox environment.
+        bundle: Runtime agent bundle.
+        sandbox_agents_dir: Agent directory inside the sandbox, e.g.
+            ``".github/agents"`` or ``".claude/agents"``.
+
+    Returns:
+        ``sandbox_agents_dir`` if files were uploaded, otherwise ``None``.
+    """
+    if not bundle.agents:
+        return None
+    uploaded = 0
+    for agent in bundle.agents:
+        relative = agent.relative_path
+        if relative.is_absolute() or any(part == ".." for part in relative.parts):
+            msg = f"Unsafe agent relative path: {relative}"
+            raise ValueError(msg)
+        sandbox_path = f"{sandbox_agents_dir}/{relative.as_posix()}"
+        await sbox.write_file(sandbox_path, agent.raw_content.encode("utf-8"))
+        uploaded += 1
+    logger.debug("Uploaded %d agent file(s) to sandbox at %s", uploaded, sandbox_agents_dir)
+    return sandbox_agents_dir
 
 
 # ---------------------------------------------------------------------------
