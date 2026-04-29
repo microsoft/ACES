@@ -20,13 +20,15 @@ import json
 import os
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, Literal, Protocol, cast
 
 # Enable faulthandler for debugging — prints thread tracebacks on SIGUSR1
 faulthandler.enable()
 if hasattr(faulthandler, "register"):
     import signal
+
     faulthandler.register(signal.SIGUSR1, all_threads=True)
 
 from inspect_ai.model import (
@@ -49,6 +51,40 @@ logger = get_logger(__name__)
 _SESSION_DELETE_TIMEOUT = 10  # seconds to wait for session cleanup
 _CLIENT_STOP_TIMEOUT = 15  # seconds to wait for SDK subprocess shutdown
 _POOL_ACQUIRE_TIMEOUT = 120  # seconds to wait for a client from pool
+_StopReason = Literal["stop", "max_tokens", "model_length", "tool_calls", "content_filter", "unknown"]
+
+
+class _CopilotSessionLike(Protocol):
+    """Minimum Copilot SDK session surface used by this integration."""
+
+    session_id: str
+
+    def on(self, handler: Callable[[object], None]) -> Callable[[], None]: ...
+
+    async def send(self, prompt: str) -> object: ...
+
+    async def get_messages(self) -> list[object]: ...
+
+
+class _CopilotClientLike(Protocol):
+    """Minimum Copilot SDK client surface used by this integration."""
+
+    async def start(self) -> object: ...
+
+    async def stop(self) -> object: ...
+
+    async def force_stop(self) -> object: ...
+
+    async def create_session(
+        self,
+        *,
+        model: str,
+        on_permission_request: object,
+        tools: list[object],
+        available_tools: list[object],
+    ) -> _CopilotSessionLike: ...
+
+    async def delete_session(self, session_id: str) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -176,7 +212,7 @@ def _sdk_response_to_model_output(
     tool_requests: list[object] = getattr(response_data, "tool_requests", None) or []
 
     tool_calls: list[ToolCall] | None = None
-    stop_reason: str = "stop"
+    stop_reason: _StopReason = "stop"
 
     if tool_requests:
         stop_reason = "tool_calls"
@@ -191,7 +227,7 @@ def _sdk_response_to_model_output(
                     tool_calls=tool_calls,
                     source="generate",
                 ),
-                stop_reason=stop_reason,  # type: ignore[arg-type]
+                stop_reason=stop_reason,
             ),
         ],
         usage=usage,
@@ -275,10 +311,10 @@ class CopilotModelAPI(ModelAPI):
     (one subprocess each) for parallel inference.
     """
 
-    _pool: ClassVar[asyncio.Queue[object] | None] = None
+    _pool: ClassVar[asyncio.Queue[_CopilotClientLike] | None] = None
     _pool_lock: ClassVar[asyncio.Lock] = asyncio.Lock()  # Eager init — no race
     _pool_size: ClassVar[int] = 8
-    _all_clients: ClassVar[list[object]] = []
+    _all_clients: ClassVar[list[_CopilotClientLike]] = []
     _instance_count: ClassVar[int] = 0
     _github_token: ClassVar[str | None] = None
     _shutting_down: ClassVar[bool] = False
@@ -306,9 +342,7 @@ class CopilotModelAPI(ModelAPI):
         Raises:
             RuntimeError: If no authentication source is available.
         """
-        super().__init__(
-            model_name, base_url, api_key, [], config or GenerateConfig()
-        )
+        super().__init__(model_name, base_url, api_key, [], config or GenerateConfig())
         self._timeout = int(model_args.get("timeout", "300"))
         self._pool_size_local = int(model_args.get("pool_size", "8"))
         CopilotModelAPI._pool_size = self._pool_size_local
@@ -325,30 +359,26 @@ class CopilotModelAPI(ModelAPI):
         CopilotModelAPI._instance_count += 1
 
     @classmethod
-    async def _create_single_client(cls) -> object:
+    async def _create_single_client(cls) -> _CopilotClientLike:
         """Create and start a single CopilotClient instance."""
-        from copilot import CopilotClient  # type: ignore[import-untyped]
-        from copilot.client import SubprocessConfig  # type: ignore[import-untyped]
+        from copilot import CopilotClient
+        from copilot.client import SubprocessConfig
 
         subprocess_config = (
-            SubprocessConfig(github_token=cls._github_token)
-            if cls._github_token
-            else SubprocessConfig()
+            SubprocessConfig(github_token=cls._github_token) if cls._github_token else SubprocessConfig()
         )
         client = CopilotClient(subprocess_config)
         await client.start()
-        return client
+        return cast(_CopilotClientLike, client)
 
     @classmethod
     async def _init_pool(cls) -> None:
         """Lazily create the client pool (idempotent under lock)."""
-        if cls._pool is not None:
-            return
         async with cls._pool_lock:
             if cls._pool is not None:
                 return  # Another coroutine already initialized
-            pool: asyncio.Queue[object] = asyncio.Queue(maxsize=cls._pool_size)
-            clients: list[object] = []
+            pool: asyncio.Queue[_CopilotClientLike] = asyncio.Queue(maxsize=cls._pool_size)
+            clients: list[_CopilotClientLike] = []
             try:
                 for i in range(cls._pool_size):
                     client = await cls._create_single_client()
@@ -359,7 +389,7 @@ class CopilotModelAPI(ModelAPI):
                 # Stop any clients already started to avoid subprocess leaks
                 for c in clients:
                     try:
-                        await asyncio.wait_for(c.stop(), timeout=_CLIENT_STOP_TIMEOUT)  # type: ignore[union-attr]
+                        await asyncio.wait_for(c.stop(), timeout=_CLIENT_STOP_TIMEOUT)
                     except Exception:
                         pass
                 raise
@@ -393,10 +423,13 @@ class CopilotModelAPI(ModelAPI):
         """
         t_start = time.monotonic()
         await self._init_pool()
+        pool = self._pool
+        if pool is None:
+            raise RuntimeError("Copilot client pool failed to initialize")
 
         try:
             client = await asyncio.wait_for(
-                self._pool.get(),  # type: ignore[union-attr]
+                pool.get(),
                 timeout=_POOL_ACQUIRE_TIMEOUT,
             )
         except TimeoutError:
@@ -415,18 +448,22 @@ class CopilotModelAPI(ModelAPI):
             await self._return_or_replace_client(client, client_failed)
 
     @classmethod
-    async def _return_or_replace_client(cls, client: object, failed: bool) -> None:
+    async def _return_or_replace_client(cls, client: _CopilotClientLike, failed: bool) -> None:
         """Return a healthy client to pool, or replace a dead one."""
         if cls._shutting_down:
             # Pool is closing — stop this client instead of returning it
             try:
-                await asyncio.wait_for(client.stop(), timeout=_CLIENT_STOP_TIMEOUT)  # type: ignore[union-attr]
+                await asyncio.wait_for(client.stop(), timeout=_CLIENT_STOP_TIMEOUT)
             except Exception:
                 logger.debug("Failed to stop client during shutdown", exc_info=True)
             return
 
+        pool = cls._pool
+        if pool is None:
+            raise RuntimeError("Copilot client pool is not initialized")
+
         if not failed:
-            await cls._pool.put(client)  # type: ignore[union-attr]
+            await pool.put(client)
             return
 
         # Client died — remove from tracking, try to create replacement
@@ -435,7 +472,7 @@ class CopilotModelAPI(ModelAPI):
         try:
             replacement = await cls._create_single_client()
             cls._all_clients.append(replacement)
-            await cls._pool.put(replacement)  # type: ignore[union-attr]
+            await pool.put(replacement)
             logger.info("Copilot pool: replaced dead client (pool size maintained)")
         except Exception:
             logger.warning(
@@ -445,7 +482,7 @@ class CopilotModelAPI(ModelAPI):
 
     async def _generate_impl(
         self,
-        client: object,
+        client: _CopilotClientLike,
         input: list[ChatMessage],
         tools: list[ToolInfo],
         tool_choice: ToolChoice,
@@ -459,8 +496,8 @@ class CopilotModelAPI(ModelAPI):
             t_client - t_start,
         )
 
-        from copilot import PermissionHandler  # type: ignore[import-untyped]
-        from copilot.generated.session_events import (  # type: ignore[import-untyped]
+        from copilot import PermissionHandler
+        from copilot.generated.session_events import (
             SessionEventType,
         )
 
@@ -541,13 +578,9 @@ class CopilotModelAPI(ModelAPI):
                 )
 
                 try:
-                    response_data = await asyncio.wait_for(
-                        first_response, timeout=self._timeout
-                    )
+                    response_data = await asyncio.wait_for(first_response, timeout=self._timeout)
                 except asyncio.CancelledError:
-                    logger.warning(
-                        "Copilot generate cancelled (likely time-limit exceeded)"
-                    )
+                    logger.warning("Copilot generate cancelled (likely time-limit exceeded)")
                     response_data = None
                     # Do NOT re-raise — return empty output so the eval can
                     # proceed to scoring instead of leaving the event loop dead.
@@ -571,8 +604,7 @@ class CopilotModelAPI(ModelAPI):
             response_content = getattr(response_data, "content", None) if response_data else None
             response_trs = getattr(response_data, "tool_requests", None) if response_data else None
             logger.info(
-                "Copilot generate: response received (%.1fs), "
-                "content_len=%s, tool_requests=%s, data_type=%s",
+                "Copilot generate: response received (%.1fs), content_len=%s, tool_requests=%s, data_type=%s",
                 t_response - t_send,
                 len(response_content) if response_content else 0,
                 len(response_trs) if response_trs else 0,
@@ -587,9 +619,7 @@ class CopilotModelAPI(ModelAPI):
             except (asyncio.CancelledError, Exception):
                 logger.debug("Failed to retrieve usage from session", exc_info=True)
 
-            result = _sdk_response_to_model_output(
-                response_data, self.model_name, usage
-            )
+            result = _sdk_response_to_model_output(response_data, self.model_name, usage)
             t_done = time.monotonic()
             logger.info(
                 "Copilot generate: total=%.1fs (client=%.1fs, session=%.1fs, "
@@ -638,9 +668,7 @@ class CopilotModelAPI(ModelAPI):
         # Stop all tracked clients
         for client in CopilotModelAPI._all_clients:
             try:
-                await asyncio.wait_for(
-                    client.stop(), timeout=_CLIENT_STOP_TIMEOUT
-                )
+                await asyncio.wait_for(client.stop(), timeout=_CLIENT_STOP_TIMEOUT)
             except TimeoutError:
                 logger.warning("Copilot pool: client stop timed out — force-killing")
                 try:
@@ -682,12 +710,11 @@ async def _noop_tool_handler(invocation: object) -> object:
     execute a tool, we return a descriptive error rather than raising,
     so the CLI can feed the error back to the model gracefully.
     """
-    from copilot.tools import ToolResult  # type: ignore[import-untyped]
+    from copilot.tools import ToolResult
 
     return ToolResult(
         text_result_for_llm=(
-            "Tool execution is disabled in pure-inference mode. "
-            "Only the caller (e.g. Hyenas CLI) may execute tools."
+            "Tool execution is disabled in pure-inference mode. Only the caller (e.g. Hyenas CLI) may execute tools."
         ),
         result_type="failure",
         error="tool execution disabled",
@@ -706,7 +733,7 @@ def _convert_tools_for_sdk(tools: list[ToolInfo]) -> list[object]:
     Returns:
         List of SDK ``Tool`` objects.
     """
-    from copilot.tools import Tool as CopilotSdkTool  # type: ignore[import-untyped]
+    from copilot.tools import Tool as CopilotSdkTool
 
     sdk_tools: list[object] = []
     for tool_info in tools:
@@ -733,7 +760,6 @@ def copilot() -> type[ModelAPI]:
         import copilot as _copilot  # noqa: F401
     except ImportError:
         raise ImportError(
-            "The 'copilot' model provider requires github-copilot-sdk. "
-            "Install with: pip install github-copilot-sdk"
+            "The 'copilot' model provider requires github-copilot-sdk. Install with: pip install github-copilot-sdk"
         ) from None
     return CopilotModelAPI

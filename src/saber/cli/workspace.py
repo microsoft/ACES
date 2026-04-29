@@ -119,6 +119,7 @@ def _load_saber_distribution() -> Distribution | None:
     except PackageNotFoundError:
         return None
 
+
 def _dependency_from_direct_url(direct_url: object) -> SaberDependency | None:
     """Build a workspace dependency from PEP 610 direct URL metadata."""
     if not isinstance(direct_url, Mapping):
@@ -149,18 +150,18 @@ def _dependency_from_direct_url(direct_url: object) -> SaberDependency | None:
     if isinstance(vcs_info, Mapping):
         vcs = vcs_info.get("vcs")
         if isinstance(vcs, str) and vcs == "git":
-            source: dict[str, object] = {"git": raw_url}
+            git_source: dict[str, object] = {"git": raw_url}
             commit_id = vcs_info.get("commit_id")
             requested_revision = vcs_info.get("requested_revision")
             if isinstance(commit_id, str) and commit_id:
-                source["rev"] = commit_id
+                git_source["rev"] = commit_id
             elif isinstance(requested_revision, str) and requested_revision:
-                source["rev"] = requested_revision
+                git_source["rev"] = requested_revision
             if subdirectory:
-                source["subdirectory"] = subdirectory
+                git_source["subdirectory"] = subdirectory
             return SaberDependency(
                 dependency="saber",
-                uv_sources=(_render_uv_source_line("saber", source),),
+                uv_sources=(_render_uv_source_line("saber", git_source),),
             )
 
         return SaberDependency(dependency=f"saber @ {raw_url}")

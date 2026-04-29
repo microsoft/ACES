@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from saber.agents.bridge_utils import (
     create_tool_call_limit_filter,
@@ -42,10 +42,7 @@ def create_agent(
     """
     spec = RuntimeRegistry.get(runtime)
     if spec is None:
-        raise ValueError(
-            f"Unknown runtime '{runtime}'. "
-            f"Available: {RuntimeRegistry.list_runtimes()}"
-        )
+        raise ValueError(f"Unknown runtime '{runtime}'. Available: {RuntimeRegistry.list_runtimes()}")
     outer_kwargs = kwargs
 
     def create_with_prompts(
@@ -76,9 +73,11 @@ def create_agent(
 
         model_aliases = spec.build_model_aliases()
 
-        @agent
-        def _firstparty_agent() -> "Agent":
-            async def execute(state: "AgentState") -> "AgentState":
+        typed_agent = cast("Callable[[Callable[[], Agent]], Callable[[], Agent]]", agent)
+
+        @typed_agent
+        def _firstparty_agent() -> Agent:
+            async def execute(state: AgentState) -> AgentState:
                 port = store().get(_STORE_PORT_KEY, spec.port_base) + 1
                 store().set(_STORE_PORT_KEY, port)
 

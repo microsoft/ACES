@@ -72,11 +72,7 @@ def create_saber_solver(
 
             get_store().set(
                 "firstparty_sample_metadata",
-                {
-                    k: str(v)
-                    for k, v in metadata.items()
-                    if k in FIRSTPARTY_METADATA_KEYS and v is not None
-                },
+                {k: str(v) for k, v in metadata.items() if k in FIRSTPARTY_METADATA_KEYS and v is not None},
             )
 
             # Build agent kwargs

@@ -10,9 +10,7 @@ from pydantic import BaseModel, ConfigDict, SkipValidation
 if TYPE_CHECKING:
     from inspect_ai.util import SandboxEnvironment
 
-    InvokeHook = Callable[
-        ["SandboxEnvironment", dict[str, str]], Awaitable[dict[str, str]]
-    ]
+    InvokeHook = Callable[["SandboxEnvironment", dict[str, str]], Awaitable[dict[str, str]]]
 
 # At runtime Pydantic cannot resolve the SandboxEnvironment forward reference,
 # so hook fields use SkipValidation with a generic callable annotation.
@@ -92,10 +90,7 @@ class RuntimeSpec(BaseModel):
         for var_name, description in self.env_schema.required.items():
             value = os.environ.get(var_name)
             if value is None:
-                msg = (
-                    f"Required environment variable '{var_name}' is not set. "
-                    f"Description: {description}"
-                )
+                msg = f"Required environment variable '{var_name}' is not set. Description: {description}"
                 raise ValueError(msg)
             env[var_name] = value
 
@@ -138,8 +133,4 @@ def interpolate_command(command: list[str], **values: str) -> list[str]:
         key = match.group(1)
         return values.get(key, match.group(0))
 
-    return [
-        resolved
-        for part in command
-        if (resolved := _PLACEHOLDER_RE.sub(_replace, part))
-    ]
+    return [resolved for part in command if (resolved := _PLACEHOLDER_RE.sub(_replace, part))]
