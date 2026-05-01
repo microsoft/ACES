@@ -215,6 +215,37 @@ class TestParseContinuousNaN:
         assert _parse_continuous("NaN", 10.0) == 0.0
 
 
+# ── _parse_continuous — markdown-wrapped JSON ───────────────────────
+
+
+class TestParseContinuousMarkdownWrappedJson:
+    """Some judges return the score JSON inside a ```json ... ``` fence."""
+
+    def test_markdown_json_fence(self) -> None:
+        response = '```json\n{"score": 0.8}\n```'
+        assert _parse_continuous(response, 1.0) == pytest.approx(0.8)
+
+    def test_markdown_plain_fence(self) -> None:
+        response = "```\n{\"score\": 0.5}\n```"
+        assert _parse_continuous(response, 1.0) == pytest.approx(0.5)
+
+    def test_json_with_leading_prose(self) -> None:
+        response = "Here is the score: {\"score\": 0.42}"
+        assert _parse_continuous(response, 1.0) == pytest.approx(0.42)
+
+    def test_json_with_trailing_prose(self) -> None:
+        response = '{"score": 0.6} — based on the rubric above.'
+        assert _parse_continuous(response, 1.0) == pytest.approx(0.6)
+
+    def test_markdown_json_scaled_by_max(self) -> None:
+        response = '```json\n{"score": 0.5}\n```'
+        assert _parse_continuous(response, 10.0) == pytest.approx(5.0)
+
+    def test_markdown_json_clamped(self) -> None:
+        response = '```json\n{"score": 1.5}\n```'
+        assert _parse_continuous(response, 1.0) == 1.0
+
+
 # ── _parse_binary — word boundary ───────────────────────────────────
 
 

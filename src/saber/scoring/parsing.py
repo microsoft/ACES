@@ -131,23 +131,29 @@ def _parse_binary(response: str, max_score: float) -> float:
 def _parse_continuous(response: str, max_score: float) -> float:
     """Parse JSON ``{"score": <float>}`` or bare float, scaled by *max_score*.
 
-    Both the JSON path and bare-float fallback assume the value is a 0-1
-    ratio that gets multiplied by *max_score*.  The result is clamped to
-    ``[0.0, max_score]``.
+    Tolerates markdown-wrapped JSON (```json ... ```) by extracting the first
+    ``{...}`` object substring before parsing. Both the JSON path and bare-float
+    fallback assume the value is a 0-1 ratio that gets multiplied by *max_score*.
+    The result is clamped to ``[0.0, max_score]``.
     """
-    try:
-        data = json.loads(response)
-        if isinstance(data, dict) and "score" in data:
-            value = float(data["score"])
-            if math.isnan(value):
-                return 0.0
-            return max(0.0, min(value * max_score, max_score))
-    except (json.JSONDecodeError, TypeError, ValueError):
-        pass
+    text = response.strip()
+
+    # Extract first JSON object (handles markdown ```json ... ``` wrapping)
+    obj_match = re.search(r"\{[\s\S]*\}", text)
+    if obj_match:
+        try:
+            data = json.loads(obj_match.group(0))
+            if isinstance(data, dict) and "score" in data:
+                value = float(data["score"])
+                if math.isnan(value):
+                    return 0.0
+                return max(0.0, min(value * max_score, max_score))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
 
     # Fallback: bare float (also treated as 0-1 ratio)
     try:
-        value = float(response.strip())
+        value = float(text)
         if math.isnan(value):
             return 0.0
         return max(0.0, min(value * max_score, max_score))
