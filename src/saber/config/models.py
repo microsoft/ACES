@@ -185,8 +185,60 @@ _COMMON_FIELDS: frozenset[str] = frozenset(
         "title",
         "description",
         "hints",
+        "submission_source",
     }
 )
+
+
+class SubmissionSourceType(StrEnum):
+    """Where ScoringContext.submission is sourced from."""
+
+    COMPLETION = "completion"
+    FILE = "file"
+
+
+class SubmissionFallback(StrEnum):
+    """Behavior when a file-type submission_source cannot be resolved."""
+
+    COMPLETION = "completion"
+    ERROR = "error"
+
+
+class SubmissionSource(BaseModel):
+    """Per-scorer configuration for where to source ``submission`` from.
+
+    When unset on a :class:`ScorerConfig`, behavior is unchanged: submission
+    is populated from ``state.output.completion`` (agent's final chat msg).
+
+    When ``type=file``, SABER reads the file from the sample's sandbox via
+    ``inspect_ai.util.sandbox().read_file(path)`` and uses its content as the
+    submission. Use this for agents whose primary deliverable is a structured
+    artifact written to disk rather than emitted inline.
+
+    Example YAML::
+
+        gate_report_complete:
+          target: submission
+          submission_source:
+            type: file
+            path: "/workspace/shared/posture_analysis_report.md"
+            fallback: completion
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    type: SubmissionSourceType = SubmissionSourceType.COMPLETION
+    path: str | None = None
+    fallback: SubmissionFallback = SubmissionFallback.ERROR
+    encoding: str = "utf-8"
+
+    @model_validator(mode="after")
+    def _require_path_for_file_type(self) -> SubmissionSource:
+        if self.type == SubmissionSourceType.FILE and not self.path:
+            raise ValueError(
+                "submission_source.path is required when type=file"
+            )
+        return self
 
 
 class ScorerConfig(BaseModel):
@@ -200,6 +252,11 @@ class ScorerConfig(BaseModel):
     target: ScorerTarget = ScorerTarget.TRAJECTORY
     max_score: Annotated[float, Field(gt=0, le=100)] = 1.0
     weight: Annotated[float, Field(ge=0, le=1)] = 1.0
+
+    # Optional: override where ScoringContext.submission is sourced from.
+    # When None (default), submission = state.output.completion.
+    # See SubmissionSource docstring for file-resident artifact scoring.
+    submission_source: SubmissionSource | None = None
 
     title: str = ""
     description: str = ""

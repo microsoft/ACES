@@ -32,6 +32,8 @@ from inspect_ai.solver import TaskState
 from saber.config.models import (
     ScorerConfig,
     ScorerTarget,
+    SubmissionFallback,
+    SubmissionSourceType,
     TaskConfig,
 )
 from saber.scoring.aggregation import (
@@ -101,7 +103,58 @@ def _scorer_config_by_name(task: TaskConfig, scorer_name: str) -> ScorerConfig |
     return None
 
 
-def _make_scoring_context(
+class SubmissionSourceError(Exception):
+    """Raised when a scorer's ``submission_source`` cannot be resolved."""
+
+
+async def _resolve_submission(state: TaskState, scorer: ScorerConfig) -> str:
+    """Resolve the submission text for a scorer.
+
+    Default behavior (when ``scorer.submission_source`` is None or
+    ``type=completion``): returns ``state.output.completion`` — the
+    agent's final assistant message text.
+
+    When ``scorer.submission_source.type == file``: reads the configured
+    sandbox file via inspect_ai's sandbox API and returns its contents.
+    If the file is missing and ``fallback == completion``, falls back to
+    the chat message; otherwise raises :class:`SubmissionSourceError`.
+
+    See :class:`saber.config.models.SubmissionSource` for the contract.
+    """
+    src = scorer.submission_source
+    if src is None or src.type == SubmissionSourceType.COMPLETION:
+        return state.output.completion if state.output else ""
+
+    if src.type == SubmissionSourceType.FILE:
+        from inspect_ai.util import sandbox as sandbox_env
+
+        try:
+            content = await sandbox_env().read_file(src.path)
+            if src.encoding != "utf-8":
+                # read_file returns str (UTF-8 decoded); re-decode if
+                # a different encoding was requested.
+                content = content.encode("utf-8").decode(src.encoding)
+            return content
+        except FileNotFoundError:
+            if src.fallback == SubmissionFallback.COMPLETION:
+                return state.output.completion if state.output else ""
+            raise SubmissionSourceError(
+                f"submission_source file not found: {src.path}. "
+                f"Set fallback: completion to use chat message instead."
+            ) from None
+        except (PermissionError, OSError, UnicodeDecodeError) as exc:
+            if src.fallback == SubmissionFallback.COMPLETION:
+                return state.output.completion if state.output else ""
+            raise SubmissionSourceError(
+                f"submission_source file read failed: {src.path}: {exc}"
+            ) from exc
+
+    raise SubmissionSourceError(  # pragma: no cover — guarded by enum
+        f"Unknown submission_source.type: {src.type!r}"
+    )
+
+
+async def _make_scoring_context(
     *,
     state: TaskState,
     target: Target,
@@ -120,7 +173,7 @@ def _make_scoring_context(
         target: The target answer.
         task_id: Unique task identifier.
         domain_slug: Domain name (directory basename).
-        scorer: Scorer configuration.
+        scorer: Scorer configuration (may specify ``submission_source``).
         tool_steps: Pre-extracted tool steps; extracted from
             ``state.messages`` when *None*.
 
@@ -128,7 +181,7 @@ def _make_scoring_context(
         Fully-populated :class:`ScoringContext`.
     """
     return ScoringContext(
-        submission=state.output.completion if state.output else "",
+        submission=await _resolve_submission(state, scorer),
         tool_steps=(tool_steps if tool_steps is not None else tuple(extract_tool_steps(state.messages))),
         messages=tuple(state.messages),
         target=target.text,
@@ -251,7 +304,7 @@ class ScorerFactory:
             else:
                 # Submission LLM judges, static, tool_call, etc. → individual
                 strategy = self._registry.get(sc.strategy)
-                ctx = _make_scoring_context(
+                ctx = await _make_scoring_context(
                     state=state,
                     target=target,
                     task_id=task_id,
@@ -264,7 +317,7 @@ class ScorerFactory:
         # Batch LLM judge checkpoint scorers
         if llm_batch_configs:
             contexts = [
-                _make_scoring_context(
+                await _make_scoring_context(
                     state=state,
                     target=target,
                     task_id=task_id,
@@ -443,7 +496,7 @@ class ScorerFactory:
                 if isinstance(unified, dict) and scorer_config.scorer_name in unified:
                     return unified[scorer_config.scorer_name]
 
-                ctx = _make_scoring_context(
+                ctx = await _make_scoring_context(
                     state=state,
                     target=target,
                     task_id=task_id,
@@ -484,7 +537,7 @@ class ScorerFactory:
                     return unified[scorer_name]
 
                 strategy = self._registry.get(scorer_config.strategy)
-                ctx = _make_scoring_context(
+                ctx = await _make_scoring_context(
                     state=state,
                     target=target,
                     task_id=task_id,
