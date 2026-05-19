@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Domain discovery utilities for the SABER CLI."""
 
 from __future__ import annotations

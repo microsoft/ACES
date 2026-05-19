@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for parse_bridge_stderr() in bridge_utils."""
 
 from saber.agents.bridge_utils import parse_bridge_stderr

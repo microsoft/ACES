@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Pydantic models for bridge generation tracking."""
 
 from __future__ import annotations

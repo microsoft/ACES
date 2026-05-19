@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Thin logging wrapper that delegates to inspect_ai's log handler.
 
 When running under inspect_ai, ``saber.*`` log messages propagate to

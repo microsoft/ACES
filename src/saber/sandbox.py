@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Thin sandbox subclass adding permanent environment lifecycle.
 
 All per-sample behavior (exec, read_file, write_file, sample_init,

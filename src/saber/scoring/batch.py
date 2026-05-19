@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Batched LLM judge scoring for multiple scorer checkpoints.
 
 Evaluates multiple checkpoint ``ScoringContext`` objects in fewer LLM calls

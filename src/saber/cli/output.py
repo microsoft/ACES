@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Rich formatting helpers for the SABER CLI."""
 
 from __future__ import annotations

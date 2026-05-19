@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Domain setup hooks — pre-task setup actions.
 
 Provides the ``SetupHook`` protocol and ``run_setup_hooks()`` executor for

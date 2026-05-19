@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Copilot agent solver — sandbox_agent_bridge integration.
 
 Uses inspect_ai's ``sandbox_agent_bridge()`` to run a self-contained

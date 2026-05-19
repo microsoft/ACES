@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Pydantic v2 data models for SABER configuration.
 
 All models use ``ConfigDict(frozen=True)`` for immutability.

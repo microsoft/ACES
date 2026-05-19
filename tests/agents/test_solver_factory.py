@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for create_saber_solver factory."""
 
 from __future__ import annotations

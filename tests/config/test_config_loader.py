@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for ConfigLoader — YAML config loading with 3-level inheritance."""
 
 from __future__ import annotations

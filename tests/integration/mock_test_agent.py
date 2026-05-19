@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 #!/usr/bin/env python3
 """
 Lightweight mock agent for container execution testing.

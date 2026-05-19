@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Integration smoke tests for firstparty agent pipeline."""
 
 from __future__ import annotations

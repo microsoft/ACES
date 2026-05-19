@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for Copilot model conversion functions and CopilotModelAPI.
 
 Tests the pure conversion functions and the CopilotModelAPI class:

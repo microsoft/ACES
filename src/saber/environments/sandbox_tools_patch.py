@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Auto-patch inspect-ai artefacts in site-packages.
 
 When inspect-ai is installed as a git VCS reference (not editable), the

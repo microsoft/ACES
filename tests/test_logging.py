@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.logging – thin wrapper delegating to inspect_ai's logger."""
 
 from __future__ import annotations

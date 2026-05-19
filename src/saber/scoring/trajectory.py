@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Trajectory extraction — convert inspect_ai messages to ToolStep objects.
 
 The single public function :func:`extract_tool_steps` walks the flat message

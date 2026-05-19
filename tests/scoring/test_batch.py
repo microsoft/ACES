@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for batched LLM judge scoring (score_checkpoints_llm_batch)."""
 
 from __future__ import annotations

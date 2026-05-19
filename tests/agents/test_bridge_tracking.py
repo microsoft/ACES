@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for bridge generation tracking filter."""
 
 from __future__ import annotations

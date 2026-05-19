@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Judge prompt template renderer for scoring strategies."""
 
 from __future__ import annotations

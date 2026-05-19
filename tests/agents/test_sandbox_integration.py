@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Integration tests — verify agent tooling inside the saber/sandbox container.
 
 These tests start a real ``saber/sandbox:latest`` Docker container and

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tool registry and domain tools."""
 
 from saber.tools.security import ToolSecurityConfig

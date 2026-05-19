@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tool registry — resolves tool names from YAML config to inspect_ai Tool instances."""
 
 from __future__ import annotations

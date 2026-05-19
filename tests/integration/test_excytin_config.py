@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Validate excytin domain configuration loads correctly with saber pipeline.
 
 These tests verify that the real excytin YAML files, prompts, and task

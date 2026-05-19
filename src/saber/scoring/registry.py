@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Scoring strategy registry.
 
 Maps strategy name strings to :class:`~saber.scoring.strategies.SaberScoringStrategy`

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Scoring context models for SABER evaluation.
 
 Provides ``ToolStep`` and ``ScoringContext`` — the immutable value objects

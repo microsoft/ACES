@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Docker image rebuild mode parsing and build primitives for SABER environments.
 
 Provides ``RebuildMode`` (which images to rebuild),

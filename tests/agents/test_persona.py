@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for agent persona file parsing and models."""
 
 from __future__ import annotations

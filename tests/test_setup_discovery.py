@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for setup hook auto-discovery.
 
 Tests the ``_discover_setup_hooks()`` function that will be merged into

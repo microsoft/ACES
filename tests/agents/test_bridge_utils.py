@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for shared bridge_utils helpers.
 
 These utilities are used by both claude_code and copilot agents.

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Solver factory — bridges agent factory to inspect_ai Solver."""
 
 from __future__ import annotations

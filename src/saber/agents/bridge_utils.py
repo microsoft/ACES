@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Shared utilities for sandbox_agent_bridge-based agents.
 
 Common helpers used by both ``claude_code`` and ``copilot`` solvers.

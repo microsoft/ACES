@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Agent persona file parsing and models.
 
 Parse Copilot agent persona files (YAML frontmatter + markdown body) into

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Configuration loading and deep merge utilities for SABER's 3-level YAML inheritance cascade.
 
 Provides pure-dict merge functions that operate BEFORE Pydantic validation,

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.config.models — Pydantic v2 data models for SABER configuration."""
 
 from __future__ import annotations

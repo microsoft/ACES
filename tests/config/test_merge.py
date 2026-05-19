@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for deep_merge and merge_task_configs utilities."""
 
 from __future__ import annotations

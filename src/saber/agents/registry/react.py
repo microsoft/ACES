@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Default react agent implementation.
 
 Uses inspect_ai's react() agent with SABER prompt injection.

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for RebuildMode and parse_rebuild_param."""
 
 from __future__ import annotations

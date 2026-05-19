@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Setup hook auto-discovery for SABER domains.
 
 Discovers and loads ``SetupHook`` instances from a domain's ``setup.py``

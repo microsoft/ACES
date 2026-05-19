@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for the `saber new-eval-workspace` command."""
 
 from __future__ import annotations

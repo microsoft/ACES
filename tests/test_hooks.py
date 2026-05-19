@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.hooks — setup hook protocol and executor."""
 
 from __future__ import annotations

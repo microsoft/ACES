@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for ToolSecurityConfig — written BEFORE implementation (TDD)."""
 
 from __future__ import annotations

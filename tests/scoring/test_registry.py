@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for ScoringStrategyRegistry."""
 
 from __future__ import annotations
