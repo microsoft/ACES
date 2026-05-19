@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tool inspectors for extracting validatable content from tool call arguments.
 
 Provides a :class:`ToolInspector` protocol, concrete implementations

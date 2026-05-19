@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """High-level domain task factory.
 
 Wires ConfigLoader + PromptRenderer + converter + ScorerFactory +

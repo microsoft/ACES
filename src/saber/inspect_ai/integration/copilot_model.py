@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Copilot model provider for inspect_ai.
 
 Pure conversion functions and CopilotModelAPI class for routing inference

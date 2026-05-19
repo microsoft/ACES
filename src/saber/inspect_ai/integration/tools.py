@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """SABER ToolSource implementation.
 
 This module provides the ToolSource implementation that exposes SABER's MCP client

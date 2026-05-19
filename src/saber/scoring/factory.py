@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Scorer factory — creates inspect_ai ``@scorer`` instances from YAML task config.
 
 Each :class:`TaskConfig` produces N unit scorers + 1 aggregate scorer.

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Compose file preflight validation.
 
 Validates Docker Compose YAML files for structural correctness and

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Copilot agent — sandbox_agent_bridge integration for SABER."""
 
 from .solver import create_agent

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Bridge generation tracking filter for subagent classification."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.config.converter — TaskConfig to inspect_ai Sample conversion."""
 
 from __future__ import annotations

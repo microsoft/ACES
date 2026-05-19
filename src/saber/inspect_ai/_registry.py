@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Registry for SABER Inspect AI extension.
 
 This module is imported by Inspect AI via the setuptools entry point mechanism.

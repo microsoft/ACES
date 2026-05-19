@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for bridge tracking Pydantic models."""
 
 from __future__ import annotations

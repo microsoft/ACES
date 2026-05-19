@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Secure Jinja2 prompt rendering for SABER benchmark tasks.
 
 Uses ``SandboxedEnvironment`` to prevent template injection and

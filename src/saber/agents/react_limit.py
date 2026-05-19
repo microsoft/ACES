@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Graceful tool-call-limit agent wrapper for the react loop.
 
 Wraps model generation with proactive tool-call counting.  When the

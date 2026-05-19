@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """E2E tests for orchestrated evaluation synchronization.
 
 Tests the complete flow from episode creation through coordinated scoring.

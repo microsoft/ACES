@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """CLI output parsing for bridge-based agent solvers.
 
 Extracts structured data from agent CLI stdout/stderr for observability.

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Standalone response-parsing functions for LLM judge outputs.
 
 Pure functions with no dependencies on templates, strategies, or scoring context.

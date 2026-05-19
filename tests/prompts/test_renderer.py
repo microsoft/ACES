@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.prompts.renderer — PromptRenderer and path validation."""
 
 from __future__ import annotations

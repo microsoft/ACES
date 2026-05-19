@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """SABER - Security Agent Benchmarking and Evaluation Research."""
 
 __version__ = "0.1.0"

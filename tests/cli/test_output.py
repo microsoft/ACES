@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.cli.output — Rich formatting helpers."""
 
 from __future__ import annotations

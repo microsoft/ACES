@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.tools.security — ValidationResult, CommandSecurityValidator, defaults, build_tool_approval."""
 
 from __future__ import annotations

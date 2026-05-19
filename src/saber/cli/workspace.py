@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Workspace scaffolding helpers for the SABER CLI."""
 
 from __future__ import annotations

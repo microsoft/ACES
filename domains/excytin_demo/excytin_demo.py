@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Excytin Demo - Incident Response domain for Inspect AI.
 
 This module exposes the Excytin Demo domain as an Inspect AI task that can be

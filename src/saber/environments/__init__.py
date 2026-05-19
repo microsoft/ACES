@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Sandbox environment resolution.
 
 Maps domain configuration to the correct inspect_ai sandbox specification.

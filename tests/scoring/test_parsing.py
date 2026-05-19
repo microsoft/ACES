@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.scoring.parsing — response parsing functions."""
 
 from __future__ import annotations

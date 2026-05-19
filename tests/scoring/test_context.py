@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for ToolStep and ScoringContext Pydantic models."""
 
 from __future__ import annotations

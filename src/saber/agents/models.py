@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Agent-related type definitions."""
 
 from __future__ import annotations

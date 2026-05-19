@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for saber.sandbox — SaberSandboxEnvironment lifecycle."""
 
 from __future__ import annotations

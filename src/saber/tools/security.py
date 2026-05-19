@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Per-tool security configuration, validation, and approval.
 
 Provides :class:`ToolSecurityConfig` (frozen Pydantic model),

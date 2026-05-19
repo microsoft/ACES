@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """SABER CLI — operational commands for Docker environments and images.
 
 Entry point: ``uv run saber <command>``

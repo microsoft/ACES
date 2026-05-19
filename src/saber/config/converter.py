@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Convert TaskConfig objects to inspect_ai Sample objects.
 
 This module bridges SABER's task configuration layer with the

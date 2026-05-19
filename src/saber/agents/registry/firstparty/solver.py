@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """First-party agent solver — sandbox_agent_bridge integration."""
 
 from __future__ import annotations

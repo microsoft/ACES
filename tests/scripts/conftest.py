@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """conftest for scripts tests — adds external/saber/scripts to sys.path."""
 
 from __future__ import annotations

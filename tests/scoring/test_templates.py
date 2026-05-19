@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for TemplateRenderer — judge prompt template rendering."""
 
 from __future__ import annotations

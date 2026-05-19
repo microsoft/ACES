@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Agent Model API for SABER.
 
 This module provides a mock ModelAPI that allows using "agent/<agent_name>"

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for per-scorer ``submission_source`` resolution.
 
 Covers :class:`saber.config.models.SubmissionSource` schema validation and

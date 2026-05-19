@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Agent registry with auto-discovery.
 
 Agents are auto-discovered from the registry/ directory at import time.

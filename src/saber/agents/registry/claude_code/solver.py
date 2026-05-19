@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Claude Code agent solver — sandbox_agent_bridge integration.
 
 Uses inspect_ai's ``sandbox_agent_bridge()`` to run the Claude Code CLI

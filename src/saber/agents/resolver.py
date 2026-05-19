@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Agent name resolution with helpful error messages."""
 
 from __future__ import annotations

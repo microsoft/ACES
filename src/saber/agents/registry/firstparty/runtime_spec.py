@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Runtime specification models for first-party agent runtimes."""
 
 import os

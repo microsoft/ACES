@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Integration tests for LLMJudgeStrategy with mocked model.
 
 Exercises the full flow: context building → template rendering →

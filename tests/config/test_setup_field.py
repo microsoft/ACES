@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for the setup field on TaskConfig, GlobalDefaults, and converter mapping."""
 
 from __future__ import annotations

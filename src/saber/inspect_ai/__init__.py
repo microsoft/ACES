@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """SABER Inspect AI integration.
 
 This package provides Inspect AI-specific integration code:

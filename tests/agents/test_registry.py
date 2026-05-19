@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for AgentRegistry, auto-discovery, and resolve_agent."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Score aggregation and checkpoint summary utilities.
 
 Combines scorer results using configurable strategies,

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for firstparty runtime_spec models."""
 
 from __future__ import annotations

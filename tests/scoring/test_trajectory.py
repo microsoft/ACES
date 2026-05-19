@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for extract_tool_steps trajectory extraction."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Message-level utilities for the agent solver layer.
 
 Helpers that operate on ``inspect_ai`` ``ChatMessage`` lists and are

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Registry of available first-party runtime specifications."""
 
 from __future__ import annotations

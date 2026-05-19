@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Scoring strategies for SABER evaluation.
 
 Provides the :class:`SaberScoringStrategy` protocol and built-in

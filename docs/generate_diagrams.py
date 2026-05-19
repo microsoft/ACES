@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 #!/usr/bin/env python3
 """
 Script to generate PNG diagrams from PlantUML files.

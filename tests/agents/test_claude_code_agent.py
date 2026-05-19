@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
 """Tests for claude_code agent module — sandbox_agent_bridge architecture."""
 
 from __future__ import annotations
