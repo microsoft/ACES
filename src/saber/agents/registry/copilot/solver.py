@@ -93,7 +93,15 @@ import time
 try:
     from copilot.types import PermissionRequestResult
 except ModuleNotFoundError:
-    from copilot.session import PermissionRequestResult
+    try:
+        from copilot.session import PermissionRequestResult
+    except ImportError:
+        PermissionRequestResult = None
+
+try:
+    from copilot.session import PermissionDecisionApproveOnce
+except (ModuleNotFoundError, ImportError):
+    PermissionDecisionApproveOnce = None
 
 try:
     from copilot.tools import Tool, ToolResult
@@ -392,19 +400,21 @@ def make_idle_decision(ancestor_pid, prev_snapshots, in_flight_tools, idle_secon
 def _approve_all(
     _request: dict,
     _context: dict,
-) -> PermissionRequestResult:
+) -> object:
     """Auto-approve every permission request.
 
-    The Copilot SDK's PermissionHandler signature is
-    ``(PermissionRequest, Dict[str, str]) -> PermissionRequestResult``.
-    Returning a ``PermissionRequestResult(kind="approve-once")`` grants the
-    request.  The SDK accesses result attributes (``result.kind``), so a
-    plain dict would raise ``AttributeError`` and be silently converted to
-    a denial.
+    Newer Copilot SDKs return typed permission decisions. Older SDKs used a
+    constructible ``PermissionRequestResult`` with ``kind="approve-once"``.
+    Prefer the typed decision and fall back only when running against an older
+    SDK.
 
     This is safe because the runner executes inside an isolated Docker
     sandbox used exclusively for benchmarking.
     """
+    if PermissionDecisionApproveOnce is not None:
+        return PermissionDecisionApproveOnce()
+    if PermissionRequestResult is None:
+        raise RuntimeError("Copilot SDK does not expose a permission approval result")
     return PermissionRequestResult(kind="approve-once")
 
 

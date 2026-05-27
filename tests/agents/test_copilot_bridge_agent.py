@@ -35,9 +35,10 @@ class TestRunnerScript:
         assert "from copilot" in RUNNER_SCRIPT or "import copilot" in RUNNER_SCRIPT
 
     def test_runner_script_approves_permissions_with_sdk_kind(self) -> None:
-        """Runner uses the Copilot SDK 0.3 permission result kind."""
+        """Runner uses the current Copilot SDK permission decision."""
         from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
 
+        assert "PermissionDecisionApproveOnce()" in RUNNER_SCRIPT
         assert 'PermissionRequestResult(kind="approve-once")' in RUNNER_SCRIPT
         assert 'PermissionRequestResult(kind="approved")' not in RUNNER_SCRIPT
 
