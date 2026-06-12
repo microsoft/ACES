@@ -364,6 +364,24 @@ def _discover_agent_files(agents_dir: Path | None, persona_file: Path | None) ->
                     if path.is_file() and path.name.lower() not in {"readme.md", "license.md"}
                 )
             )
+        # Also discover nested agent definitions: <dir>/<name>/agent.md
+        discovered.extend(
+            sorted(
+                path.resolve()
+                for path in agents_dir.glob("*/agent.md")
+                if path.is_file() and path.resolve() not in {p for p in discovered}
+            )
+        )
+        # Also check subagents/ subdirectory for <subagents>/<name>/agent.md
+        subagents_dir = agents_dir / "subagents"
+        if subagents_dir.is_dir():
+            discovered.extend(
+                sorted(
+                    path.resolve()
+                    for path in subagents_dir.glob("*/agent.md")
+                    if path.is_file() and path.resolve() not in {p for p in discovered}
+                )
+            )
 
     if persona_file is not None:
         discovered.append(persona_file.resolve())
