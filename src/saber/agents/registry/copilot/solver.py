@@ -17,6 +17,7 @@ Architecture:
 """
 
 import json
+import os
 from collections.abc import Callable, Sequence
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
@@ -29,6 +30,8 @@ from saber.agents.bridge_utils import (
     build_system_prompt,
     build_user_prompt,
     compose_filters,
+    create_reasoning_effort_filter,
+    create_responses_store_filter,
     create_tool_call_limit_filter,
     merge_mcp_configs,
     parse_bridge_stderr,
@@ -544,7 +547,7 @@ def _build_bridge_agent_tool(
         provider = nested_config.get("provider")
         if isinstance(provider, dict) and provider.get("type") == "openai":
             nested_provider = dict(provider)
-            nested_provider["wire_api"] = "responses"
+            nested_provider["wire_api"] = os.environ.get("COPILOT_WIRE_API", "responses")
             nested_config["provider"] = nested_provider
 
         idle_event = asyncio.Event()
@@ -849,10 +852,20 @@ async def main() -> int:
         return 1
 
     # Build session config
-    # Use Chat Completions for the bridge-facing custom OpenAI provider.
-    # In this environment the Copilot CLI stalls indefinitely when routed
-    # through the Responses API bridge, never emitting an assistant turn or
-    # tool call. Non-streaming Chat Completions is the compatible path.
+    # Wire protocol for the bridge-facing custom OpenAI provider.
+    #
+    # Default is Chat Completions: in this environment the Copilot CLI has
+    # historically stalled when routed through the Responses API bridge,
+    # never emitting an assistant turn or tool call, so non-streaming Chat
+    # Completions is the compatible default path.
+    #
+    # However, Chat Completions cannot represent Responses-API reasoning
+    # items, so they are stripped between turns. Reasoning models served
+    # over the Responses API (e.g. MAI flash-code) reject the next turn
+    # because a replayed `function_call` is missing its required `reasoning`
+    # item. For those models set COPILOT_WIRE_API=responses so reasoning
+    # items round-trip through the runner's conversation history.
+    wire_api = os.environ.get("COPILOT_WIRE_API", "completions")
     session_config: dict = {
         "model": model,
         # The Inspect bridge only implements non-streaming OpenAI proxy calls.
@@ -863,7 +876,7 @@ async def main() -> int:
             "type": "openai",
             "base_url": base_url,
             "api_key": api_key,
-            "wire_api": "completions",
+            "wire_api": wire_api,
         },
         "on_permission_request": _approve_all,
     }
@@ -1186,6 +1199,7 @@ class CopilotBridgeConfig(BaseModel):
     persona_file: str | None = None
     skills_dir: str | None = None
     mcp_config: str | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
     nested_agents: Literal["native", "bridge", "disabled", "github_auth"] = "bridge"
     nested_agent_timeout: int = 600
     nested_agent_quiet_timeout: int = 5
@@ -1331,6 +1345,7 @@ def _build_runner_env(
         "COPILOT_AGENT": active_agent,
         "COPILOT_CONFIG_DIR": config_dir,
         "COPILOT_NESTED_AGENTS": nested_agents_mode,
+        "COPILOT_WIRE_API": os.environ.get("COPILOT_WIRE_API", "completions"),
         "COPILOT_NESTED_AGENT_TIMEOUT": str(nested_agent_timeout),
         "COPILOT_NESTED_AGENT_QUIET_TIMEOUT": str(nested_agent_quiet_timeout),
         "COPILOT_NESTED_AGENT_MAX_CALLS": str(nested_agent_max_calls),
@@ -1398,10 +1413,68 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
                 bridge_filter, check_tool_limit = create_tool_call_limit_filter()
                 tracking_filter, get_tracking_summary = create_tracking_filter()
-                composed = compose_filters(tracking_filter, bridge_filter)
+                store_filter = create_responses_store_filter()
+                # Reasoning effort: prefer the task param (-T reasoning_effort=...,
+                # recorded in task_args/CONFIG), falling back to the env var.
+                _reasoning_effort = config.reasoning_effort or (os.environ.get("COPILOT_REASONING_EFFORT") or None)
+                reasoning_filter = create_reasoning_effort_filter(_reasoning_effort)
+                if _reasoning_effort:
+                    logger.info("copilot bridge reasoning effort override: %s", _reasoning_effort)
+                    try:
+                        from inspect_ai.log._transcript import transcript
+
+                        transcript().info(
+                            {"reasoning_effort": _reasoning_effort},
+                            source="saber.reasoning_effort",
+                        )
+                    except Exception:
+                        logger.debug("Could not record reasoning_effort InfoEvent")
+                composed = compose_filters(tracking_filter, reasoning_filter, store_filter, bridge_filter)
 
                 _raw_aliases = outer_kwargs.get("model_aliases")
                 model_aliases = resolve_model_aliases(_raw_aliases if isinstance(_raw_aliases, dict) else None)
+
+                # Propagate the eval's primary model (with its -M model args,
+                # e.g. responses_api / responses_store) across the sandbox bridge
+                # boundary. The bridge otherwise re-resolves the requested model
+                # name via get_model() in a context where the active model
+                # contextvar is not propagated, yielding a fresh model that drops
+                # the -M args. For Responses-API reasoning models this means
+                # store=false is sent without reasoning.encrypted_content, so the
+                # next turn's reasoning-item reference fails ("Item ... not found.
+                # Items are not persisted when store is set to false"). Injecting
+                # the primary Model as an alias for the requested name makes the
+                # bridge use the correctly-configured instance.
+                #
+                # The Copilot SDK forwards an OpenAI-style model field that drops
+                # the inspect provider prefix (e.g. "openai/azure/foo-bar" becomes
+                # "foo-bar"), so alias both the full provider-qualified name and
+                # the bare service-model segment to cover whichever the runner
+                # actually sends across the bridge.
+                #
+                # Use active_model() (the Model instance inspect constructed for
+                # this eval, carrying its -M args) rather than get_model() with no
+                # args: the latter falls back to building a fresh model from the
+                # INSPECT_EVAL_MODEL name string, dropping responses_store /
+                # responses_api and re-introducing the store=false failure.
+                from inspect_ai.model._model import active_model as _active_model
+                from inspect_ai.model._model import get_model as _get_primary_model
+
+                primary_model = _active_model() or _get_primary_model()
+                _store_flag = getattr(getattr(primary_model, "api", None), "responses_store", None)
+                _api_flag = getattr(getattr(primary_model, "api", None), "responses_api", None)
+                logger.info(
+                    "copilot bridge primary model resolved: %s (responses_api=%s responses_store=%s active=%s)",
+                    getattr(primary_model, "name", primary_model),
+                    _api_flag,
+                    _store_flag,
+                    _active_model() is not None,
+                )
+                _alias_keys = {config.model, config.model.rsplit("/", 1)[-1]}
+                model_aliases = {
+                    **(model_aliases or {}),
+                    **dict.fromkeys(_alias_keys, primary_model),
+                }
 
                 async with sandbox_agent_bridge(
                     state,

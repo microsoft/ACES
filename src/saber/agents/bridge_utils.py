@@ -614,6 +614,112 @@ def create_tool_call_limit_filter() -> tuple[object, Callable[[], None]]:
     return _filter, check_after_exec
 
 
+def create_responses_store_filter() -> GenerateFilter:
+    """Create a GenerateFilter that keeps the Responses API ``store`` flag on.
+
+    The ``sandbox_agent_bridge`` reconstructs each generation's request from
+    the agent CLI runner (e.g. the Copilot/codex SDK), which defaults to
+    ``store: false`` and captures that value into ``config.extra_body``.
+    inspect_ai's Responses provider then re-injects ``extra_body["store"]``
+    into the outgoing request (``completion_params_responses``), overriding
+    the model's ``responses_store=True`` setting.
+
+    For reasoning models the server only persists reasoning items
+    (``rs_...``) when ``store`` is true; with ``store: false`` the next turn
+    fails with ``Item with id 'rs_...' not found ... Items are not persisted
+    when 'store' is set to false``.
+
+    This filter aligns ``config.extra_body["store"]`` with the model's
+    ``responses_store`` intent when that intent is ``True``, so the runner's
+    ``store: false`` cannot override it. It mutates ``config`` in place and
+    returns ``None`` (observation-only), so it never short-circuits other
+    filters in the chain.
+
+    Returns:
+        A ``GenerateFilter`` callable suitable for
+        ``sandbox_agent_bridge(filter=...)``.
+    """
+
+    async def _filter(
+        model: object,
+        messages: list[ChatMessage],
+        tools: list[object],
+        tool_choice: object | None,
+        config: object,
+    ) -> None:
+        api = getattr(model, "api", None)
+        if getattr(api, "responses_store", None) is not True:
+            return None
+        extra_body = getattr(config, "extra_body", None)
+        if isinstance(extra_body, dict) and extra_body.get("store") is not True:
+            extra_body["store"] = True
+            logger.debug(
+                "Responses store filter: forced extra_body['store']=True to honor model responses_store (model=%s)",
+                getattr(model, "name", str(model)),
+            )
+        return None
+
+    return _filter
+
+
+def create_reasoning_effort_filter(effort: str | None = None) -> GenerateFilter | None:
+    """Create a GenerateFilter that forces a Responses-API reasoning effort.
+
+    Some Azure reasoning deployments (e.g. ``...flash-code``) are not matched
+    by inspect_ai's name-based reasoning heuristic
+    (``ResponsesModelInfo.has_reasoning_options()`` only recognises o-series /
+    gpt-5 / codex names). As a result inspect drops any ``reasoning_effort``
+    with a ``reasoning options ignored for non-reasoning model`` warning, and
+    the server silently applies its own default effort.
+
+    When ``effort`` is provided this filter, per generation:
+      * marks the bridge model as reasoning-capable by overriding
+        ``model.api.has_reasoning_options`` to return ``True`` (instance-level,
+        so inspect emits the ``reasoning`` param), and
+      * sets ``config.reasoning_effort`` to the requested level.
+
+    It mutates ``config`` in place and returns ``None`` (observation-only).
+
+    Args:
+        effort: One of ``minimal`` / ``low`` / ``medium`` / ``high``. When
+            falsy the factory returns ``None`` (no filter installed).
+
+    Returns:
+        A ``GenerateFilter`` callable, or ``None`` when ``effort`` is falsy.
+    """
+    if not effort:
+        return None
+
+    async def _filter(
+        model: object,
+        messages: list[ChatMessage],
+        tools: list[object],
+        tool_choice: object | None,
+        config: object,
+    ) -> None:
+        api = getattr(model, "api", None)
+        if api is not None and getattr(api, "has_reasoning_options", None) is not None:
+            # Instance-level override so completion_params_responses emits the
+            # reasoning param for this otherwise-unrecognised deployment.
+            try:
+                api.has_reasoning_options = lambda: True
+            except Exception:
+                logger.debug("Could not override has_reasoning_options on bridge model")
+        if getattr(config, "reasoning_effort", None) != effort:
+            try:
+                config.reasoning_effort = effort  # type: ignore[attr-defined]
+                logger.debug(
+                    "Reasoning effort filter: set reasoning_effort=%s (model=%s)",
+                    effort,
+                    getattr(model, "name", str(model)),
+                )
+            except Exception:
+                logger.debug("Could not set reasoning_effort on bridge config")
+        return None
+
+    return _filter
+
+
 # ---------------------------------------------------------------------------
 # Model aliases
 # ---------------------------------------------------------------------------
