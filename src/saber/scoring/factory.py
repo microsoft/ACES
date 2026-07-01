@@ -129,7 +129,7 @@ async def _resolve_submission(state: TaskState, scorer: ScorerConfig) -> str:
         from inspect_ai.util import sandbox as sandbox_env
 
         try:
-            content = await sandbox_env().read_file(src.path)
+            content: str = await sandbox_env().read_file(src.path)
             if src.encoding != "utf-8":
                 # read_file returns str (UTF-8 decoded); re-decode if
                 # a different encoding was requested.
@@ -139,15 +139,12 @@ async def _resolve_submission(state: TaskState, scorer: ScorerConfig) -> str:
             if src.fallback == SubmissionFallback.COMPLETION:
                 return state.output.completion if state.output else ""
             raise SubmissionSourceError(
-                f"submission_source file not found: {src.path}. "
-                f"Set fallback: completion to use chat message instead."
+                f"submission_source file not found: {src.path}. Set fallback: completion to use chat message instead."
             ) from None
         except (PermissionError, OSError, UnicodeDecodeError) as exc:
             if src.fallback == SubmissionFallback.COMPLETION:
                 return state.output.completion if state.output else ""
-            raise SubmissionSourceError(
-                f"submission_source file read failed: {src.path}: {exc}"
-            ) from exc
+            raise SubmissionSourceError(f"submission_source file read failed: {src.path}: {exc}") from exc
 
     raise SubmissionSourceError(  # pragma: no cover — guarded by enum
         f"Unknown submission_source.type: {src.type!r}"
