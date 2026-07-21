@@ -20,10 +20,16 @@ import json
 import os
 from collections.abc import Callable, Sequence
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, Literal
 
+from inspect_ai.util import OutputLimitExceededError
 from pydantic import BaseModel, ConfigDict
 
+from saber.agents.bridge_events import (
+    SABER_BRIDGE_TOOL_STEPS_KEY,
+    bridge_event_tool_steps_from_lines,
+)
 from saber.agents.bridge_tracking import create_tracking_filter
 from saber.agents.bridge_utils import (
     build_bridged_tools_for_copilot,
@@ -34,9 +40,11 @@ from saber.agents.bridge_utils import (
     create_responses_store_filter,
     create_tool_call_limit_filter,
     merge_mcp_configs,
+    override_state_completion,
     parse_bridge_stderr,
     parse_idle_decision,
     parse_runner_metrics,
+    parse_workflow_status,
     read_mcp_config,
     record_bridge_summary,
     resolve_model_aliases,
@@ -62,8 +70,74 @@ logger = get_logger(__name__)
 _STORE_PORT_KEY = "copilot_model_port"
 _DEFAULT_PORT_BASE = 3000
 _RUNNER_PATH = "/tmp/_copilot_runner.py"
+_NODEJS_RUNNER_PATH = "/tmp/_copilot_runner.mjs"
+_RUNNER_EVENT_LOG_PATH = "/workspace/.runner_events.jsonl"
+_RUNNER_EVENT_LOG_MAX_EVENTS = 2000
+_RUNNER_EVENT_LOG_MAX_BYTES = 2_000_000
 _DEFAULT_TIMEOUT = 3600
 _MIN_TIMEOUT = 30  # Floor to allow graceful completion
+
+
+def _is_nonfatal_idle_timeout(stderr: str) -> bool:
+    """Return whether an old-style runner timeout permits partial scoring."""
+    return "Timeout after" in stderr and "session.idle" in stderr
+
+
+async def _read_bridge_tool_steps(sbox: Any) -> list[dict[str, object]]:
+    """Read, validate, and remove the runner tool-event log."""
+    event_log_text = ""
+    try:
+        event_log_text = await sbox.read_file(_RUNNER_EVENT_LOG_PATH)
+    except (
+        FileNotFoundError,
+        OSError,
+        OutputLimitExceededError,
+        UnicodeError,
+        RuntimeError,
+    ) as exc:
+        logger.warning(
+            "Could not read bridged Copilot tool events; "
+            "falling back to message-derived steps: %s",
+            exc,
+        )
+    finally:
+        try:
+            cleanup = await sbox.exec(["rm", "-f", _RUNNER_EVENT_LOG_PATH])
+            if cleanup.returncode != 0:
+                logger.warning(
+                    "Could not remove bridged Copilot event log (exit %d)",
+                    cleanup.returncode,
+                )
+        except (OSError, OutputLimitExceededError, RuntimeError) as exc:
+            logger.warning(
+                "Could not remove bridged Copilot event log: %s",
+                exc,
+            )
+
+    if not event_log_text:
+        return []
+    if len(event_log_text.encode("utf-8")) > _RUNNER_EVENT_LOG_MAX_BYTES:
+        logger.warning(
+            "Runner event log exceeded %d bytes; "
+            "falling back to message-derived steps",
+            _RUNNER_EVENT_LOG_MAX_BYTES,
+        )
+        return []
+    event_lines = event_log_text.splitlines()
+    if len(event_lines) > _RUNNER_EVENT_LOG_MAX_EVENTS:
+        logger.warning(
+            "Runner event log exceeded %d events; "
+            "falling back to message-derived steps",
+            _RUNNER_EVENT_LOG_MAX_EVENTS,
+        )
+        return []
+    steps = bridge_event_tool_steps_from_lines(event_lines)
+    if not steps:
+        logger.warning(
+            "Runner event log did not match bridge tool-event schema; "
+            "falling back to message-derived steps",
+        )
+    return steps
 
 # ---------------------------------------------------------------------------
 # Embedded runner script (executed inside the Docker sandbox)
@@ -129,6 +203,16 @@ NETWORK_WAIT_FNS = frozenset({
     "tcp_recvmsg", "sk_wait_data", "do_select",
 })
 MAX_IDLE_EXTENSIONS = 3
+EVENT_LOG_PATH = "/workspace/.runner_events.jsonl"
+EVENT_SCHEMA_VERSION = 1
+EVENT_LOG_MAX_EVENTS = 2000
+EVENT_LOG_MAX_BYTES = 2_000_000
+EVENT_FIELD_MAX_CHARS = 20_000
+SECRET_FIELD_NAMES = frozenset({
+    "access_token", "api_key", "apikey", "authorization", "client_secret",
+    "credential", "credentials", "device_code", "password", "private_key",
+    "refresh_token", "sas_token", "secret", "token",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -951,6 +1035,21 @@ async def main() -> int:
     idle_extensions = 0
     proc_snapshots = {}
     last_heartbeat_time = start_time
+    event_log_path = EVENT_LOG_PATH
+    event_sequence = 0
+    event_log_bytes = 0
+    event_log_events = 0
+
+    try:
+        with open(event_log_path, "w", encoding="utf-8"):
+            pass
+    except OSError as exc:
+        print(
+            f"COPILOT_EVENT_LOG_WARNING: Unable to initialize {event_log_path}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        event_log_path = ""
 
     # Event types that count as "activity" (agent is doing work)
     ACTIVITY_EVENTS = {
@@ -973,6 +1072,164 @@ async def main() -> int:
         if hasattr(SessionEventType, _evt_name):
             ACTIVITY_EVENTS.add(getattr(SessionEventType, _evt_name))
 
+    def _event_data(event):
+        data = getattr(event, "data", None)
+        if data is None or isinstance(data, dict):
+            return data or {}
+        if hasattr(data, "model_dump"):
+            try:
+                return data.model_dump(mode="json", by_alias=True)
+            except TypeError:
+                return data.model_dump()
+        if hasattr(data, "to_dict"):
+            return data.to_dict()
+        if hasattr(data, "__dict__"):
+            return {
+                key: value
+                for key, value in vars(data).items()
+                if not key.startswith("_")
+            }
+        return {}
+
+    def _data_field(data, *names):
+        for name in names:
+            if name in data:
+                return data[name]
+        return None
+
+    def _redact_event_value(value, field_name=""):
+        normalized_name = str(field_name).lower().replace("-", "_")
+        if normalized_name in SECRET_FIELD_NAMES:
+            return "[REDACTED]"
+        if isinstance(value, dict):
+            return {
+                str(key): _redact_event_value(child, str(key))
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [_redact_event_value(child) for child in value]
+        if isinstance(value, tuple):
+            return [_redact_event_value(child) for child in value]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    pass
+                else:
+                    value = json.dumps(_redact_event_value(parsed), default=str)
+            if len(value) > EVENT_FIELD_MAX_CHARS:
+                return value[:EVENT_FIELD_MAX_CHARS] + "...[truncated]"
+        return value
+
+    def _bounded_event_value(value):
+        redacted = _redact_event_value(value)
+        rendered = json.dumps(redacted, default=str)
+        if len(rendered) <= EVENT_FIELD_MAX_CHARS:
+            return redacted
+        return rendered[:EVENT_FIELD_MAX_CHARS] + "...[truncated]"
+
+    def _tool_event_record(event):
+        event_type = str(event.type.value) if hasattr(event.type, "value") else str(event.type)
+        if event_type not in {"tool.execution_start", "tool.execution_complete"}:
+            return None
+
+        data = _event_data(event)
+        tool_call_id = _data_field(data, "toolCallId", "tool_call_id")
+        parent_tool_call_id = _data_field(
+            data,
+            "parentToolCallId",
+            "parent_tool_call_id",
+        )
+        tool_name = _data_field(
+            data,
+            "mcpToolName",
+            "mcp_tool_name",
+            "toolName",
+            "tool_name",
+        )
+        if not tool_call_id:
+            return None
+
+        record_data = {
+            "toolCallId": str(tool_call_id),
+            "parentToolCallId": (
+                str(parent_tool_call_id) if parent_tool_call_id else None
+            ),
+        }
+        if event_type == "tool.execution_start":
+            if not tool_name:
+                return None
+            record_data.update({
+                "toolName": str(tool_name),
+                "arguments": _bounded_event_value(
+                    _data_field(data, "arguments")
+                ),
+            })
+        else:
+            record_data.update({
+                "success": bool(_data_field(data, "success")),
+                "result": _bounded_event_value(_data_field(data, "result")),
+            })
+            telemetry = _data_field(data, "toolTelemetry", "tool_telemetry")
+            if isinstance(telemetry, dict):
+                error_type = _data_field(telemetry, "errorType", "error_type")
+                if error_type:
+                    record_data["toolTelemetry"] = {
+                        "errorType": str(error_type),
+                    }
+
+        return {
+            "schema_version": EVENT_SCHEMA_VERSION,
+            "ts": time.time(),
+            "type": event_type,
+            "data": record_data,
+        }
+
+    def _append_event_log(event):
+        nonlocal event_log_path, event_sequence
+        nonlocal event_log_bytes, event_log_events
+        if not event_log_path:
+            return
+
+        record = _tool_event_record(event)
+        if record is None:
+            return
+        if event_log_events >= EVENT_LOG_MAX_EVENTS:
+            print(
+                f"COPILOT_EVENT_LOG_WARNING: Event limit reached for {event_log_path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            event_log_path = ""
+            return
+
+        event_sequence += 1
+        record["seq"] = event_sequence
+        line = json.dumps(record, default=str) + "\n"
+        line_bytes = len(line.encode("utf-8"))
+        if event_log_bytes + line_bytes > EVENT_LOG_MAX_BYTES:
+            print(
+                f"COPILOT_EVENT_LOG_WARNING: Byte limit reached for {event_log_path}",
+                file=sys.stderr,
+                flush=True,
+            )
+            event_log_path = ""
+            return
+        try:
+            with open(event_log_path, "a", encoding="utf-8") as event_log:
+                event_log.write(line)
+            event_log_bytes += line_bytes
+            event_log_events += 1
+        except OSError as exc:
+            print(
+                f"COPILOT_EVENT_LOG_WARNING: Unable to append {event_log_path}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            event_log_path = ""
+
     def _on_event(event):
         nonlocal last_activity_time, total_events, assistant_messages
         nonlocal tool_calls_started, tool_calls_completed, turn_count
@@ -980,6 +1237,7 @@ async def main() -> int:
 
         total_events += 1
         last_event_type = str(event.type.value) if hasattr(event.type, 'value') else str(event.type)
+        _append_event_log(event)
 
         if event.type in ACTIVITY_EVENTS:
             last_activity_time = time.monotonic()
@@ -1206,6 +1464,12 @@ class CopilotBridgeConfig(BaseModel):
     nested_agent_max_calls: int = 16
     nested_agent_output_limit: int = 20000
     idle_timeout: int = 300
+    runner_type: Literal["python", "nodejs"] = "python"
+    nodejs_runner_path: str | None = None
+    use_runner_stdout_completion: bool = False
+    max_turns: int | None = None
+    max_delegated_turns: int | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
 
     @classmethod
     def from_kwargs(cls, kwargs: "dict[str, object]") -> "CopilotBridgeConfig":
@@ -1354,6 +1618,187 @@ def _build_runner_env(
     }
 
 
+def _build_nodejs_runner_env(
+    *,
+    bridge_port: int,
+    model: str,
+    prompt: str,
+    timeout: int = _DEFAULT_TIMEOUT,
+    agent_md_path: str = "",
+    working_dir: str = "/workspace",
+    max_turns: int | None = None,
+    max_delegated_turns: int | None = None,
+    reasoning_effort: str | None = None,
+) -> dict[str, str]:
+    """Build environment variables for the Node.js runner script.
+
+    The Node.js runner reads agent.md directly and handles hooks, subagents,
+    MCP servers, and tool allowlists natively via the @github/copilot-sdk.
+
+    Args:
+        bridge_port: Port where the bridge proxy is listening.
+        model: Model identifier to pass to the runner.
+        prompt: User prompt text.
+        timeout: Timeout in seconds.
+        agent_md_path: Path to agent.md inside the sandbox.
+        working_dir: Working directory inside the sandbox.
+
+    Returns:
+        Dict of env vars to pass to ``sbox.exec()``.
+    """
+    return {
+        "BRIDGE_URL": f"http://localhost:{bridge_port}/v1",
+        "BRIDGE_API_KEY": "sk-placeholder-for-bridge",
+        "COPILOT_MODEL": model,
+        "PROMPT": prompt,
+        "AGENT_MD_PATH": agent_md_path,
+        "WORKING_DIR": working_dir,
+        "TIMEOUT": str(timeout),
+        "COPILOT_MAX_TURNS": str(max_turns) if max_turns is not None else "",
+        "COPILOT_MAX_DELEGATED_TURNS": (
+            str(max_delegated_turns) if max_delegated_turns is not None else ""
+        ),
+        "COPILOT_REASONING_EFFORT": reasoning_effort or "",
+        # Enable source maps in the CLI subprocess for better stack traces
+        "NODE_OPTIONS": "--enable-source-maps",
+    }
+
+
+def _resolve_nodejs_reasoning_effort(config: CopilotBridgeConfig) -> str | None:
+    """Resolve reasoning effort for the Node.js runner.
+
+    Explicit task config wins, otherwise inherit Inspect's active model config
+    populated by the top-level ``--reasoning-effort`` flag.
+    """
+    if config.reasoning_effort:
+        return config.reasoning_effort
+
+    from inspect_ai.model._model import get_model
+
+    model = get_model()
+    return getattr(model.config, "reasoning_effort", None)
+
+
+def _sandbox_path(path: str, *, working_dir: str = "/workspace") -> str:
+    """Return an absolute sandbox path for files written relative to WORKDIR."""
+    if path.startswith("/"):
+        return path
+    rel = path[2:] if path.startswith("./") else path
+    return f"{working_dir.rstrip('/')}/{rel}"
+
+
+def _nodejs_agent_md_candidates(
+    *,
+    bundle: Any,
+    config: "CopilotBridgeConfig",
+    sandbox_agents_dir: str | None,
+    working_dir: str = "/workspace",
+) -> list[str]:
+    """Return sandbox-local candidate paths for the Node runner's agent.md.
+
+    The Node runner reads ``AGENT_MD_PATH`` from inside the sandbox. Host-side
+    agent definition paths must not be passed through directly.
+    """
+    candidates: list[str] = []
+
+    main = config.main_agent or "defender-investigation-agent"
+    if config.agent_bundle or config.main_agent:
+        candidates.append(f"{working_dir.rstrip('/')}/agents/{main}/agent.md")
+
+    main_agent = getattr(bundle, "main_agent", None)
+    relative_path = getattr(main_agent, "relative_path", None)
+    if sandbox_agents_dir and relative_path is not None:
+        candidates.append(_sandbox_path(f"{sandbox_agents_dir}/{relative_path.as_posix()}", working_dir=working_dir))
+
+    candidates.append(f"{working_dir.rstrip('/')}/agents/defender-investigation-agent/agent.md")
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+async def _first_existing_sandbox_file(sbox: Any, candidates: list[str], *, label: str) -> str:
+    """Return the first candidate that exists in the sandbox, else fail clearly."""
+    for candidate in candidates:
+        result = await sbox.exec(["test", "-f", candidate])
+        if result.returncode == 0:
+            return candidate
+    raise FileNotFoundError(
+        f"Could not find {label} in sandbox. Tried: {', '.join(candidates) or '(none)'}"
+    )
+
+
+def _agent_as_solver_with_metadata(agent_obj: Any, *, max_steps: int) -> Any:
+    """Convert an Inspect agent to a solver while preserving bridge metadata.
+
+    Inspect's built-in ``as_solver`` copies only messages and output from
+    ``AgentState`` back onto ``TaskState``. Copilot bridge tool steps are
+    discovered at the end of the agent run, so attach them to ``TaskState``
+    explicitly before scoring.
+    """
+    from inspect_ai._util.registry import (
+        RegistryInfo,
+        is_registry_object,
+        registry_info,
+        registry_params,
+        registry_unqualified_name,
+        set_registry_info,
+        set_registry_params,
+    )
+    from inspect_ai.agent import AgentState
+    from inspect_ai.solver._constants import SOLVER_ALL_PARAMS_ATTR
+    from inspect_ai.solver._solver import Generate, Solver, solver
+    from inspect_ai.solver._task_state import TaskState
+    from inspect_ai.tool._tool_info import parse_tool_info
+    from inspect_ai.util import apply_limits, span, tool_call_limit
+
+    if not is_registry_object(agent_obj):
+        raise RuntimeError(
+            "Agent passed to _agent_as_solver_with_metadata must be an @agent"
+        )
+    agent_name = registry_unqualified_name(agent_obj)
+
+    agent_info = parse_tool_info(agent_obj)
+    for name, param in list(agent_info.parameters.properties.items())[1:]:
+        if param.default is None:
+            raise ValueError(
+                f"To use the {agent_name} agent as a solver "
+                + f"you must pass a value for the agent's required '{name}' parameter."
+            )
+
+    @solver
+    def agent_to_solver() -> Solver:
+        async def solve(state: TaskState, generate: Generate) -> TaskState:
+            agent_state = AgentState(messages=state.messages)
+
+            try:
+                with apply_limits([tool_call_limit(max_steps)]):
+                    async with span(name=agent_name, type="agent"):
+                        agent_state = await agent_obj(agent_state)
+            finally:
+                state.messages = agent_state.messages
+                if agent_state.output:
+                    state.output = agent_state.output
+
+                bridge_steps = getattr(agent_state, "_saber_bridge_tool_steps", None)
+                if isinstance(bridge_steps, list) and bridge_steps:
+                    state.metadata[SABER_BRIDGE_TOOL_STEPS_KEY] = bridge_steps
+
+            return state
+
+        return solve
+
+    slv = agent_to_solver()
+    set_registry_info(slv, RegistryInfo(type="solver", name=registry_info(agent_obj).name))
+    set_registry_params(slv, registry_params(agent_obj))
+    setattr(slv, SOLVER_ALL_PARAMS_ATTR, getattr(agent_obj, SOLVER_ALL_PARAMS_ATTR))
+    return slv
+
+
 # ---------------------------------------------------------------------------
 # Two-level factory
 # ---------------------------------------------------------------------------
@@ -1389,9 +1834,9 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
         Returns:
             An inspect_ai ``Solver`` instance.
         """
-        from inspect_ai.agent import Agent, AgentState, agent, as_solver, sandbox_agent_bridge
+        from inspect_ai.agent import Agent, AgentState, agent, sandbox_agent_bridge
         from inspect_ai.util import sandbox as sandbox_env
-        from inspect_ai.util import store, tool_call_limit
+        from inspect_ai.util import store
 
         config = CopilotBridgeConfig.from_kwargs(dict(outer_kwargs))
 
@@ -1485,13 +1930,36 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     filter=composed,
                     model_aliases=model_aliases,
                 ) as bridge:
+                    bridge_start = perf_counter()
+                    logger.info(
+                        "Copilot sandbox bridge ready: port=%d sandbox=%s runner_type=%s",
+                        bridge.port,
+                        config.sandbox_name,
+                        config.runner_type,
+                    )
+                    bridge_summary_recorded = False
+
+                    def record_bridge_diagnostics() -> None:
+                        """Record bridge summary once for success or explicit runner exits."""
+                        nonlocal bridge_summary_recorded
+                        if bridge_summary_recorded:
+                            return
+                        bridge_summary_recorded = True
+                        record_bridge_summary(get_tracking_summary, logger)
+                        logger.info(
+                            "Copilot sandbox bridge closing after %.1fs: port=%d",
+                            perf_counter() - bridge_start,
+                            bridge.port,
+                        )
+
                     sbox = sandbox_env(config.sandbox_name)
 
-                    # Write runner script to sandbox
-                    await sbox.write_file(
-                        _RUNNER_PATH,
-                        RUNNER_SCRIPT,
-                    )
+                    # Write Python runner script (skipped for nodejs runner)
+                    if config.runner_type != "nodejs":
+                        await sbox.write_file(
+                            _RUNNER_PATH,
+                            RUNNER_SCRIPT,
+                        )
 
                     # Build user prompt from message history
                     user_prompt, _has_assistant = build_user_prompt(
@@ -1511,6 +1979,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                     custom_agents_json = "[]"
                     active_agent = ""
                     config_dir = ""
+                    sandbox_agents_dir = None
 
                     bundle = load_agent_bundle(
                         agent_bundle=config.agent_bundle,
@@ -1565,88 +2034,132 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                         # No active sample context (e.g. during testing)
                         runner_timeout = _DEFAULT_TIMEOUT
 
-                    # Build environment
-                    runner_env = _build_runner_env(
-                        bridge_port=bridge.port,
-                        model=config.model,
-                        prompt=user_prompt,
-                        mcp_configs=bridge.mcp_server_configs,
-                        timeout=runner_timeout,
-                        persona_prompt=persona_prompt,
-                        skill_directories_json=skill_directories_json,
-                        extra_mcp_config=extra_mcp_config,
-                        custom_agents_json=custom_agents_json,
-                        active_agent=active_agent,
-                        config_dir=config_dir,
-                        nested_agents_mode=config.nested_agents,
-                        nested_agent_timeout=config.nested_agent_timeout,
-                        nested_agent_quiet_timeout=config.nested_agent_quiet_timeout,
-                        nested_agent_max_calls=config.nested_agent_max_calls,
-                        nested_agent_output_limit=config.nested_agent_output_limit,
-                        idle_timeout=config.idle_timeout,
-                    )
-
-                    # Execute runner in sandbox (stdin closed to prevent hangs).
-                    # No timeout — inspect_ai's --time-limit governs the
-                    # overall sample wall-clock budget.
-                    result = await sbox.exec(
-                        [
-                            "bash",
-                            "-c",
-                            'exec 0</dev/null; "$@"',
-                            "bash",
-                            "python3",
-                            _RUNNER_PATH,
-                        ],
-                        env=runner_env,
-                    )
-
-                    if result.returncode != 0:
-                        stderr = result.stderr or ""
-                        stdout = result.stdout or ""
-
-                        # Check if this is a timeout from the old-style
-                        # runner ("Timeout after ...s waiting for session.idle")
-                        # — treat as non-fatal so partial scoring can proceed.
-                        if "Timeout after" in stderr and "session.idle" in stderr:
-                            logger.warning(
-                                "Copilot runner timed out (non-fatal, returning partial transcript): %s",
-                                stderr[:500],
+                    # Build environment and execute runner
+                    if config.runner_type == "nodejs":
+                        # Node.js runner: reads agent.md directly, handles
+                        # hooks/subagents/tools natively via copilot-sdk.
+                        nodejs_runner_source = config.nodejs_runner_path
+                        if not nodejs_runner_source:
+                            raise ValueError(
+                                "nodejs_runner_path must be set when runner_type='nodejs'"
                             )
-                            return bridge.state
+                        with open(nodejs_runner_source) as f:
+                            nodejs_runner_code = f.read()
+                        await sbox.write_file(_NODEJS_RUNNER_PATH, nodejs_runner_code)
 
-                        # Parse bridge proxy errors for structured diagnostics
-                        diagnostics = parse_bridge_stderr(stderr)
-                        if diagnostics:
-                            logger.error(
-                                "Bridge proxy error detected in Copilot runner:\n%s",
-                                diagnostics,
-                            )
+                        agent_md_candidates = _nodejs_agent_md_candidates(
+                            bundle=bundle,
+                            config=config,
+                            sandbox_agents_dir=sandbox_agents_dir,
+                        )
+                        agent_md_sandbox = await _first_existing_sandbox_file(
+                            sbox,
+                            agent_md_candidates,
+                            label="Node.js runner agent.md",
+                        )
 
-                        # Log full stderr at debug level for forensics
-                        if stderr:
-                            logger.debug(
-                                "Copilot runner full stderr (%d chars):\n%s",
-                                len(stderr),
-                                stderr[:2000],
-                            )
+                        runner_env = _build_nodejs_runner_env(
+                            bridge_port=bridge.port,
+                            model=config.model,
+                            prompt=user_prompt,
+                            timeout=runner_timeout,
+                            agent_md_path=agent_md_sandbox,
+                            working_dir="/workspace",
+                            max_turns=config.max_turns,
+                            max_delegated_turns=config.max_delegated_turns,
+                            reasoning_effort=_resolve_nodejs_reasoning_effort(config),
+                        )
 
-                        # Truncated detail for the exception message
-                        detail = stderr[:500] if stderr else stdout[:500] if stdout else "(no output)"
-                        msg = f"Copilot runner exited with code {result.returncode}: {detail}"
-                        logger.error(msg)
-                        raise RuntimeError(msg)
+                        logger.info(
+                            "Starting Copilot Node.js runner: bridge_url=%s timeout=%ds agent_md=%s",
+                            runner_env["BRIDGE_URL"],
+                            runner_timeout,
+                            agent_md_sandbox,
+                        )
+                        runner_start = perf_counter()
+                        result = await sbox.exec(
+                            [
+                                "bash",
+                                "-c",
+                                'exec 0</dev/null; "$@"',
+                                "bash",
+                                "node",
+                                _NODEJS_RUNNER_PATH,
+                            ],
+                            env=runner_env,
+                        )
+                        logger.info(
+                            "Copilot Node.js runner exited: "
+                            "returncode=%d elapsed=%.1fs stdout=%d chars stderr=%d chars",
+                            result.returncode,
+                            perf_counter() - runner_start,
+                            len(result.stdout or ""),
+                            len(result.stderr or ""),
+                        )
+                    else:
+                        # Python runner (default): existing behavior
+                        runner_env = _build_runner_env(
+                            bridge_port=bridge.port,
+                            model=config.model,
+                            prompt=user_prompt,
+                            mcp_configs=bridge.mcp_server_configs,
+                            timeout=runner_timeout,
+                            persona_prompt=persona_prompt,
+                            skill_directories_json=skill_directories_json,
+                            extra_mcp_config=extra_mcp_config,
+                            custom_agents_json=custom_agents_json,
+                            active_agent=active_agent,
+                            config_dir=config_dir,
+                            nested_agents_mode=config.nested_agents,
+                            nested_agent_timeout=config.nested_agent_timeout,
+                            nested_agent_quiet_timeout=config.nested_agent_quiet_timeout,
+                            nested_agent_max_calls=config.nested_agent_max_calls,
+                            nested_agent_output_limit=config.nested_agent_output_limit,
+                            idle_timeout=config.idle_timeout,
+                        )
 
-                    # Parse and log runner metrics on success
-                    if result.returncode == 0 and result.stderr:
+                        logger.info(
+                            "Starting Copilot Python runner: bridge_url=%s timeout=%ds nested_agents=%s",
+                            runner_env["OPENAI_BASE_URL"],
+                            runner_timeout,
+                            config.nested_agents,
+                        )
+                        runner_start = perf_counter()
+                        result = await sbox.exec(
+                            [
+                                "bash",
+                                "-c",
+                                'exec 0</dev/null; "$@"',
+                                "bash",
+                                "python3",
+                                _RUNNER_PATH,
+                            ],
+                            env=runner_env,
+                        )
+                        logger.info(
+                            "Copilot Python runner exited: "
+                            "returncode=%d elapsed=%.1fs stdout=%d chars stderr=%d chars",
+                            result.returncode,
+                            perf_counter() - runner_start,
+                            len(result.stdout or ""),
+                            len(result.stderr or ""),
+                        )
+
+                    if result.stderr:
                         metrics = parse_runner_metrics(result.stderr)
                         if metrics:
                             logger.info(
                                 "Copilot runner metrics: %s",
                                 json.dumps(metrics),
                             )
-
-                        # Parse and log idle decision if present
+                        workflow_status = parse_workflow_status(result.stderr)
+                        if workflow_status:
+                            logger.info(
+                                "Copilot workflow status: complete=%s missing=%s reason=%s",
+                                workflow_status.get("workflowComplete"),
+                                workflow_status.get("missing"),
+                                workflow_status.get("reason"),
+                            )
                         idle_decision = parse_idle_decision(result.stderr)
                         if idle_decision:
                             logger.info(
@@ -1654,7 +2167,56 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                                 idle_decision.action,
                                 len(idle_decision.classifications),
                             )
+                        warnings = parse_bridge_stderr(result.stderr)
+                        if warnings:
+                            log_method = logger.error if result.returncode != 0 else logger.warning
+                            log_method(
+                                "Bridge proxy diagnostics in Copilot runner (exit %d):\n%s",
+                                result.returncode,
+                                warnings,
+                            )
 
+                    nonfatal_timeout = False
+                    if result.returncode != 0:
+                        stderr = result.stderr or ""
+                        stdout = result.stdout or ""
+
+                        # Check if this is a timeout from the old-style
+                        # runner ("Timeout after ...s waiting for session.idle")
+                        # — treat as non-fatal so partial scoring can proceed.
+                        if _is_nonfatal_idle_timeout(stderr):
+                            logger.warning(
+                                "Copilot runner timed out (non-fatal, returning partial transcript): %s",
+                                stderr[:500],
+                            )
+                            nonfatal_timeout = True
+                        else:
+                            # Log full stderr at debug level for forensics
+                            if stderr:
+                                logger.debug(
+                                    "Copilot runner full stderr (%d chars):\n%s",
+                                    len(stderr),
+                                    stderr[:2000],
+                                )
+
+                            # Truncated detail for the exception message
+                            detail = (
+                                stderr[:500]
+                                if stderr
+                                else stdout[:500]
+                                if stdout
+                                else "(no output)"
+                            )
+                            msg = (
+                                f"Copilot runner exited with code "
+                                f"{result.returncode}: {detail}"
+                            )
+                            logger.error(msg)
+                            record_bridge_diagnostics()
+                            raise RuntimeError(msg)
+
+                    # Parse and log runner completion markers on success
+                    if result.returncode == 0 and result.stderr:
                         if "COPILOT_RUNNER_IDLE_TIMEOUT" in result.stderr:
                             logger.warning(
                                 "Copilot session appeared orphaned (idle timeout). "
@@ -1666,13 +2228,34 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                                 "Returning partial transcript for scoring.",
                             )
 
-                        # Log bridge warnings even on success
-                        warnings = parse_bridge_stderr(result.stderr)
-                        if warnings:
-                            logger.warning(
-                                "Bridge proxy warnings in Copilot runner (exit 0):\n%s",
-                                warnings,
-                            )
+                    if (
+                        config.runner_type == "nodejs"
+                        and config.use_runner_stdout_completion
+                        and result.returncode == 0
+                        and result.stdout
+                    ):
+                        override_state_completion(bridge.state, result.stdout)
+                        logger.info(
+                            "Overrode Copilot bridge completion from Node runner stdout (%d chars)",
+                            len(result.stdout),
+                        )
+
+                    bridge_tool_steps = await _read_bridge_tool_steps(sbox)
+                    if bridge_tool_steps:
+                        store().set(SABER_BRIDGE_TOOL_STEPS_KEY, bridge_tool_steps)
+                        setattr(
+                            bridge.state,
+                            SABER_BRIDGE_TOOL_STEPS_KEY,
+                            bridge_tool_steps,
+                        )
+                        logger.info(
+                            "Captured %d bridged Copilot tool step(s) for scoring metadata",
+                            len(bridge_tool_steps),
+                        )
+
+                    if nonfatal_timeout:
+                        record_bridge_diagnostics()
+                        return bridge.state
 
                     # Parse CLI stderr for enriched observability
                     parsed_output = parse_copilot_cli(result.stderr or "")
@@ -1688,7 +2271,7 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
                             logger.debug("Could not record CLI output InfoEvent")
 
                 # Record bridge session summary
-                record_bridge_summary(get_tracking_summary, logger)
+                record_bridge_diagnostics()
 
                 # Raise LimitExceededError in the main flow if the
                 # tool-call limit was hit so that apply_limits handles
@@ -1700,9 +2283,6 @@ def create_agent(**kwargs: object) -> "Callable[..., Solver]":
 
             return execute
 
-        return as_solver(
-            _copilot_agent(),
-            limits=[tool_call_limit(max_steps)],
-        )
+        return _agent_as_solver_with_metadata(_copilot_agent(), max_steps=max_steps)
 
     return create_with_prompts

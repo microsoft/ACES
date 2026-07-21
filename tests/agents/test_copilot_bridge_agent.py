@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import pytest
@@ -56,13 +57,78 @@ class TestRunnerScript:
         assert "__name__" in RUNNER_SCRIPT
         assert "__main__" in RUNNER_SCRIPT
 
+    def test_runner_script_persists_bridge_events(self) -> None:
+        """Default Python runner writes bounded tool-only scoring events."""
+        from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
+
+        assert 'EVENT_LOG_PATH = "/workspace/.runner_events.jsonl"' in RUNNER_SCRIPT
+        assert "EVENT_SCHEMA_VERSION = 1" in RUNNER_SCRIPT
+        assert "EVENT_LOG_MAX_EVENTS" in RUNNER_SCRIPT
+        assert "EVENT_LOG_MAX_BYTES" in RUNNER_SCRIPT
+        assert "SECRET_FIELD_NAMES" in RUNNER_SCRIPT
+        assert "def _tool_event_record(event):" in RUNNER_SCRIPT
+        assert '"schema_version": EVENT_SCHEMA_VERSION' in RUNNER_SCRIPT
+        assert '"toolCallId": str(tool_call_id)' in RUNNER_SCRIPT
+        assert '"parentToolCallId": (' in RUNNER_SCRIPT
+        assert '"arguments": _bounded_event_value(' in RUNNER_SCRIPT
+        assert '"result": _bounded_event_value(' in RUNNER_SCRIPT
+        assert "def _append_event_log(event):" in RUNNER_SCRIPT
+
+    def test_runner_event_constants_match_scoring_module(self) -> None:
+        """Embedded runner constants must stay in sync with the reader/parser.
+
+        The runner is emitted as a sandbox string and cannot import saber, so
+        its scoring constants are duplicated in three places (this embedded
+        script, ``bridge_events`` and the ``solver`` reader). A silent drift —
+        especially the schema version — would make the reader reject every event
+        and fall back to message-derived steps, so pin the values together here.
+        """
+        import re
+
+        from saber.agents.bridge_events import (
+            _SECRET_FIELD_NAMES,
+            BRIDGE_TOOL_EVENT_FIELD_MAX_CHARS,
+            BRIDGE_TOOL_EVENT_SCHEMA_VERSION,
+        )
+        from saber.agents.registry.copilot.solver import (
+            _RUNNER_EVENT_LOG_MAX_BYTES,
+            _RUNNER_EVENT_LOG_MAX_EVENTS,
+            _RUNNER_EVENT_LOG_PATH,
+            RUNNER_SCRIPT,
+        )
+
+        def _int_const(name: str) -> int:
+            match = re.search(rf"(?m)^{name}\s*=\s*([0-9_]+)\b", RUNNER_SCRIPT)
+            assert match, f"{name} not found in RUNNER_SCRIPT"
+            return int(match.group(1).replace("_", ""))
+
+        def _secret_names() -> set[str]:
+            match = re.search(
+                r"SECRET_FIELD_NAMES\s*=\s*frozenset\(\{(.*?)\}\)",
+                RUNNER_SCRIPT,
+                re.S,
+            )
+            assert match, "SECRET_FIELD_NAMES not found in RUNNER_SCRIPT"
+            return set(re.findall(r'"([^"]+)"', match.group(1)))
+
+        # Schema version drift is the dangerous one: it makes the reader reject
+        # the whole event log and silently score from messages instead.
+        assert _int_const("EVENT_SCHEMA_VERSION") == BRIDGE_TOOL_EVENT_SCHEMA_VERSION
+        assert _int_const("EVENT_FIELD_MAX_CHARS") == BRIDGE_TOOL_EVENT_FIELD_MAX_CHARS
+        assert _int_const("EVENT_LOG_MAX_EVENTS") == _RUNNER_EVENT_LOG_MAX_EVENTS
+        assert _int_const("EVENT_LOG_MAX_BYTES") == _RUNNER_EVENT_LOG_MAX_BYTES
+        assert _secret_names() == set(_SECRET_FIELD_NAMES)
+        assert f'EVENT_LOG_PATH = "{_RUNNER_EVENT_LOG_PATH}"' in RUNNER_SCRIPT
+        assert "_append_event_log(event)" in RUNNER_SCRIPT
+        assert 'event_type not in {"tool.execution_start", "tool.execution_complete"}' in RUNNER_SCRIPT
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: Solver Helpers
 # ---------------------------------------------------------------------------
 
 
-class TestCopilotBridgeConfig:
+class TestCopilotBridgeStdoutCompletionConfig:
     """CopilotBridgeConfig model."""
 
     def test_defaults(self) -> None:
@@ -90,6 +156,339 @@ class TestCopilotBridgeConfig:
         cfg = CopilotBridgeConfig()
         with pytest.raises(ValidationError):
             cfg.sandbox_name = "other"  # type: ignore[misc]
+
+
+class TestBridgeEventToolSteps:
+    """Bridge event trajectory extraction."""
+
+    def test_joins_nested_tool_start_and_completion(self) -> None:
+        """Nested Copilot tool events are converted to scorer-ready steps."""
+        from saber.agents.bridge_events import bridge_event_tool_steps_from_lines
+
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_start",
+                        "data": {
+                            "toolCallId": "call_1",
+                            "mcpToolName": "RunAdvancedHuntingQuery",
+                            "arguments": {"kqlQuery": "AADSignInLogs | take 1"},
+                            "parentToolCallId": "call_parent",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_complete",
+                        "data": {
+                            "toolCallId": "call_1",
+                            "success": True,
+                            "result": {
+                                "content": '{"Results":[{"Account":"user"}],"Count":1}'
+                            },
+                            "parentToolCallId": "call_parent",
+                        },
+                    }
+                ),
+            ]
+        )
+
+        assert steps == [
+            {
+                "step_number": 1,
+                "tool_name": "RunAdvancedHuntingQuery",
+                "tool_input": {"kqlQuery": "AADSignInLogs | take 1"},
+                "output": '{"Results":[{"Account":"user"}],"Count":1}',
+                "is_error": False,
+                "error_type": None,
+                "tool_call_id": "call_1",
+                "parent_tool_call_id": "call_parent",
+            }
+        ]
+
+    def test_completion_without_start_is_preserved(self) -> None:
+        """Completion-only events are retained instead of silently dropped."""
+        from saber.agents.bridge_events import bridge_event_tool_steps_from_lines
+
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                '{"schema_version":1,"type":"tool.execution_complete","data":{"toolCallId":"call_1","toolName":"get_incident","success":false,"result":{"content":"boom"},"toolTelemetry":{"errorType":"runtime"}}}',
+            ]
+        )
+
+        assert steps[0]["tool_name"] == "get_incident"
+        assert steps[0]["output"] == "boom"
+        assert steps[0]["is_error"] is True
+        assert steps[0]["error_type"] == "runtime"
+        assert steps[0]["tool_call_id"] == "call_1"
+
+    def test_incomplete_node_event_schema_falls_back(self) -> None:
+        """Name-only Node events do not suppress message-derived tool steps."""
+        from saber.agents.bridge_events import bridge_event_tool_steps_from_lines
+
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                '{"type":"tool.execution_start","tool":"investigation-sentinel-triage-get_incident"}',
+                '{"type":"tool.execution_complete","tool":"unknown"}',
+                '{"type":"tool.execution_start","tool":"sentinel-triage-RunAdvancedHuntingQuery"}',
+            ]
+        )
+
+        assert steps == []
+
+    def test_missing_call_id_rejects_event_log(self) -> None:
+        """Call IDs are required for runner-independent event correlation."""
+        from saber.agents.bridge_events import bridge_event_tool_steps_from_lines
+
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                '{"schema_version":1,"type":"tool.execution_start","data":{"toolName":"run_hunting_query","arguments":{}}}',
+            ]
+        )
+
+        assert steps == []
+
+    def test_node_schema_error_round_trip(self) -> None:
+        """Canonical Node records preserve input, output, errors, and IDs."""
+        from saber.agents.bridge_events import bridge_event_tool_steps_from_lines
+
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_start",
+                        "data": {
+                            "toolCallId": "node_call",
+                            "parentToolCallId": "node_parent",
+                            "toolName": "get_incident",
+                            "arguments": {"incident_id": "42"},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_complete",
+                        "data": {
+                            "toolCallId": "node_call",
+                            "parentToolCallId": "node_parent",
+                            "success": False,
+                            "result": {"content": "incident error"},
+                            "toolTelemetry": {"errorType": "runtime"},
+                        },
+                    }
+                ),
+            ]
+        )
+
+        assert steps == [
+            {
+                "step_number": 1,
+                "tool_name": "get_incident",
+                "tool_input": {"incident_id": "42"},
+                "output": "incident error",
+                "is_error": True,
+                "error_type": "runtime",
+                "tool_call_id": "node_call",
+                "parent_tool_call_id": "node_parent",
+            }
+        ]
+
+    def test_snake_case_event_data_is_supported(self) -> None:
+        """Python SDK model dumps can use snake_case field names."""
+        from saber.agents.bridge_events import bridge_event_tool_steps_from_lines
+
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                '{"schema_version":1,"type":"tool.execution_start","data":{"tool_call_id":"call_1","mcp_tool_name":"get_incident","arguments":{"id":"42"},"parent_tool_call_id":"parent"}}',
+                '{"schema_version":1,"type":"tool.execution_complete","data":{"tool_call_id":"call_1","success":false,"result":{"content":"boom"},"tool_telemetry":{"error_type":"runtime"}}}',
+            ]
+        )
+
+        assert steps == [
+            {
+                "step_number": 1,
+                "tool_name": "get_incident",
+                "tool_input": {"id": "42"},
+                "output": "boom",
+                "is_error": True,
+                "error_type": "runtime",
+                "tool_call_id": "call_1",
+                "parent_tool_call_id": "parent",
+            }
+        ]
+
+    def test_parser_redacts_secrets_and_truncates_large_fields(self) -> None:
+        """External runner records are sanitized before scoring metadata."""
+        from saber.agents.bridge_events import (
+            BRIDGE_TOOL_EVENT_FIELD_MAX_CHARS,
+            bridge_event_tool_steps_from_lines,
+        )
+
+        oversized = "x" * (BRIDGE_TOOL_EVENT_FIELD_MAX_CHARS + 100)
+        steps = bridge_event_tool_steps_from_lines(
+            [
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_start",
+                        "data": {
+                            "toolCallId": "call_1",
+                            "toolName": "run",
+                            "arguments": {
+                                "password": "super-secret",
+                                "query": oversized,
+                            },
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_complete",
+                        "data": {
+                            "toolCallId": "call_1",
+                            "success": True,
+                            "result": {
+                                "content": json.dumps(
+                                    {
+                                        "access_token": "token-value",
+                                        "result": oversized,
+                                    }
+                                )
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+
+        assert steps[0]["tool_input"]["password"] == "[REDACTED]"
+        assert str(steps[0]["tool_input"]["query"]).endswith("...[truncated]")
+        assert "token-value" not in steps[0]["output"]
+        assert "[REDACTED]" in steps[0]["output"]
+        assert "...[truncated]" in steps[0]["output"]
+
+
+class TestBridgeEventLogIngestion:
+    """Best-effort host ingestion of runner event files."""
+
+    @pytest.mark.asyncio
+    async def test_partial_timeout_events_are_read_before_return(self) -> None:
+        """A valid partial event file survives the old-style timeout path."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from saber.agents.registry.copilot.solver import (
+            _is_nonfatal_idle_timeout,
+            _read_bridge_tool_steps,
+            create_agent,
+        )
+
+        event_log = "\n".join(
+            [
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_start",
+                        "data": {
+                            "toolCallId": "partial_call",
+                            "parentToolCallId": "parent_call",
+                            "toolName": "get_incident",
+                            "arguments": {"incident_id": "42"},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_complete",
+                        "data": {
+                            "toolCallId": "partial_call",
+                            "success": True,
+                            "result": {"content": "partial result"},
+                        },
+                    }
+                ),
+            ]
+        )
+        sbox = SimpleNamespace(
+            read_file=AsyncMock(return_value=event_log),
+            exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
+        )
+
+        steps = await _read_bridge_tool_steps(sbox)
+
+        assert _is_nonfatal_idle_timeout(
+            "Timeout after 30s waiting for session.idle"
+        )
+        assert steps[0]["tool_call_id"] == "partial_call"
+        assert steps[0]["output"] == "partial result"
+        source = inspect.getsource(create_agent)
+        assert source.index(
+            "bridge_tool_steps = await _read_bridge_tool_steps(sbox)"
+        ) < source.index("if nonfatal_timeout:")
+        sbox.exec.assert_awaited_once_with(
+            ["rm", "-f", "/workspace/.runner_events.jsonl"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_read_failure_falls_back_without_masking_result(self) -> None:
+        """Permission/transport-style read failures return no bridge steps."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from saber.agents.registry.copilot.solver import _read_bridge_tool_steps
+
+        sbox = SimpleNamespace(
+            read_file=AsyncMock(side_effect=PermissionError("denied")),
+            exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
+        )
+
+        assert await _read_bridge_tool_steps(sbox) == []
+        sbox.exec.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_oversized_read_falls_back_without_masking_result(self) -> None:
+        """Sandbox output-limit failures do not replace the agent outcome."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from inspect_ai.util import OutputLimitExceededError
+
+        from saber.agents.registry.copilot.solver import _read_bridge_tool_steps
+
+        sbox = SimpleNamespace(
+            read_file=AsyncMock(
+                side_effect=OutputLimitExceededError("100 MiB", None)
+            ),
+            exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
+        )
+
+        assert await _read_bridge_tool_steps(sbox) == []
+        sbox.exec.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_incomplete_node_log_is_removed_and_falls_back(self) -> None:
+        """Incomplete Node telemetry is rejected and the raw file is removed."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from saber.agents.registry.copilot.solver import _read_bridge_tool_steps
+
+        sbox = SimpleNamespace(
+            read_file=AsyncMock(
+                return_value='{"type":"tool.execution_start","tool":"get_incident"}'
+            ),
+            exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
+        )
+
+        assert await _read_bridge_tool_steps(sbox) == []
+        sbox.exec.assert_awaited_once()
 
 
 class TestBuildSystemPrompt:
@@ -278,6 +677,127 @@ class TestBuildRunnerEnv:
             mcp_configs=[],
         )
         assert env["COPILOT_TIMEOUT"] == "3600"
+
+    def test_nodejs_max_turns_flows_to_env(self) -> None:
+        """Node.js runner receives optional turn budget overrides."""
+        from saber.agents.registry.copilot.solver import _build_nodejs_runner_env
+
+        env = _build_nodejs_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+            max_turns=150,
+            max_delegated_turns=24,
+            reasoning_effort="xhigh",
+        )
+        assert env["COPILOT_MAX_TURNS"] == "150"
+        assert env["COPILOT_MAX_DELEGATED_TURNS"] == "24"
+        assert env["COPILOT_REASONING_EFFORT"] == "xhigh"
+
+        default_env = _build_nodejs_runner_env(
+            bridge_port=13131,
+            model="inspect",
+            prompt="Go",
+        )
+        assert default_env["COPILOT_MAX_TURNS"] == ""
+        assert default_env["COPILOT_MAX_DELEGATED_TURNS"] == ""
+        assert default_env["COPILOT_REASONING_EFFORT"] == ""
+
+
+class TestNodejsAgentMdPathResolution:
+    """Node runner agent.md path selection stays inside the sandbox."""
+
+    def test_prefers_baked_workspace_agent_path_before_uploaded_bundle(self) -> None:
+        """IA-MTP-style images bake the full agent tree under /workspace/agents."""
+        from types import SimpleNamespace
+
+        from saber.agents.registry.copilot.solver import (
+            CopilotBridgeConfig,
+            _nodejs_agent_md_candidates,
+        )
+
+        bundle = SimpleNamespace(
+            main_agent=SimpleNamespace(
+                relative_path=Path("defender-investigation-agent.agent.md"),
+                source_path="/host/not/in/sandbox/agent.md",
+            )
+        )
+        cfg = CopilotBridgeConfig(
+            agent_bundle="domains/perception/ia_mtp/agents",
+            main_agent="defender-investigation-agent",
+        )
+
+        candidates = _nodejs_agent_md_candidates(
+            bundle=bundle,
+            config=cfg,
+            sandbox_agents_dir=".github/agents",
+        )
+
+        assert candidates[0] == "/workspace/agents/defender-investigation-agent/agent.md"
+        assert "/workspace/.github/agents/defender-investigation-agent.agent.md" in candidates
+        assert "/host/not/in/sandbox/agent.md" not in candidates
+
+    def test_uploaded_bundle_path_is_candidate_for_generic_node_runners(self) -> None:
+        """Generic Node runners can still consume uploaded .github/agents files."""
+        from types import SimpleNamespace
+
+        from saber.agents.registry.copilot.solver import (
+            CopilotBridgeConfig,
+            _nodejs_agent_md_candidates,
+        )
+
+        bundle = SimpleNamespace(main_agent=SimpleNamespace(relative_path=Path("main.agent.md")))
+        cfg = CopilotBridgeConfig(agent_bundle="/tmp/bundle", main_agent="main")
+
+        candidates = _nodejs_agent_md_candidates(
+            bundle=bundle,
+            config=cfg,
+            sandbox_agents_dir=".github/agents",
+        )
+
+        assert "/workspace/.github/agents/main.agent.md" in candidates
+
+    @pytest.mark.asyncio
+    async def test_first_existing_sandbox_file_selects_first_existing_candidate(self) -> None:
+        """Sandbox existence check picks the first candidate that exists."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from saber.agents.registry.copilot.solver import _first_existing_sandbox_file
+
+        sbox = SimpleNamespace(
+            exec=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(returncode=1),
+                    SimpleNamespace(returncode=0),
+                ]
+            )
+        )
+
+        result = await _first_existing_sandbox_file(
+            sbox,
+            ["/workspace/missing.md", "/workspace/agent.md"],
+            label="agent.md",
+        )
+
+        assert result == "/workspace/agent.md"
+
+    @pytest.mark.asyncio
+    async def test_first_existing_sandbox_file_fails_with_candidates(self) -> None:
+        """Missing agent.md fails before launching the Node runner."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from saber.agents.registry.copilot.solver import _first_existing_sandbox_file
+
+        sbox = SimpleNamespace(exec=AsyncMock(return_value=SimpleNamespace(returncode=1)))
+
+        with pytest.raises(FileNotFoundError, match="/workspace/missing.md"):
+            await _first_existing_sandbox_file(
+                sbox,
+                ["/workspace/missing.md"],
+                label="agent.md",
+            )
 
 
 class TestSampleLimitsTimeout:
@@ -1401,6 +1921,38 @@ class TestBuildRunnerEnvPersonaSkills:
         assert env["COPILOT_SKILL_DIRECTORIES"] == data
 
 
+class TestCopilotBridgeConfig:
+    """Verify Copilot bridge config parsing for Node runner behavior flags."""
+
+    def test_runner_stdout_completion_defaults_false(self) -> None:
+        """Runner stdout completion override is opt-in."""
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        config = CopilotBridgeConfig.from_kwargs({})
+        assert config.use_runner_stdout_completion is False
+
+    def test_runner_stdout_completion_parses_true_string(self) -> None:
+        """Inspect -T string values can enable the stdout completion override."""
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        config = CopilotBridgeConfig.from_kwargs({"use_runner_stdout_completion": "true"})
+        assert config.use_runner_stdout_completion is True
+
+    def test_delegated_turn_budget_parses_string(self) -> None:
+        """Inspect -T string values can set the delegated turn budget."""
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        config = CopilotBridgeConfig.from_kwargs({"max_delegated_turns": "24"})
+        assert config.max_delegated_turns == 24
+
+    def test_reasoning_effort_parses_string(self) -> None:
+        """Inspect -T string values can explicitly override reasoning effort."""
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        config = CopilotBridgeConfig.from_kwargs({"reasoning_effort": "xhigh"})
+        assert config.reasoning_effort == "xhigh"
+
+
 # ---------------------------------------------------------------------------
 # Persona & Skills: RUNNER_SCRIPT env var references
 # ---------------------------------------------------------------------------
@@ -1667,6 +2219,40 @@ class TestParseRunnerMetrics:
         result = parse_runner_metrics(stderr)
         assert result is not None
         assert result["exit_reason"] == "first"
+
+
+class TestParseWorkflowStatus:
+    """Tests for parse_workflow_status in bridge_utils."""
+
+    def test_parses_valid_workflow_status_json(self) -> None:
+        """Parses valid COPILOT_WORKFLOW_STATUS JSON from stderr."""
+        from saber.agents.bridge_utils import parse_workflow_status
+
+        stderr = (
+            "Some log line\n"
+            "COPILOT_WORKFLOW_STATUS: "
+            '{"workflowComplete": false, "missing": ["report"], "reason": "report.md is missing"}\n'
+            "More output\n"
+        )
+        result = parse_workflow_status(stderr)
+        assert result is not None
+        assert result["workflowComplete"] is False
+        assert result["missing"] == ["report"]
+        assert result["reason"] == "report.md is missing"
+
+    def test_returns_none_for_no_workflow_status(self) -> None:
+        """Returns None when no COPILOT_WORKFLOW_STATUS line is present."""
+        from saber.agents.bridge_utils import parse_workflow_status
+
+        result = parse_workflow_status("some random stderr output\n")
+        assert result is None
+
+    def test_returns_none_for_invalid_workflow_status_json(self) -> None:
+        """Returns None when COPILOT_WORKFLOW_STATUS contains invalid JSON."""
+        from saber.agents.bridge_utils import parse_workflow_status
+
+        result = parse_workflow_status("COPILOT_WORKFLOW_STATUS: {not valid json}\n")
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from typing import ClassVar
 from inspect_ai.scorer import Score, Scorer, Target, accuracy, mean, scorer, stderr
 from inspect_ai.solver import TaskState
 
+from saber.agents.bridge_events import SABER_BRIDGE_TOOL_STEPS_KEY
 from saber.config.models import (
     ScorerConfig,
     ScorerTarget,
@@ -82,6 +83,62 @@ def _is_batch_eligible(sc: ScorerConfig) -> bool:
 
 
 logger = logging.getLogger("saber.scoring.factory")
+
+
+def _bridge_tool_steps_from_metadata(
+    metadata: dict[str, object],
+    sample_store: object | None = None,
+) -> tuple[ToolStep, ...] | None:
+    """Return generic bridged tool steps from state metadata or sample store."""
+    raw_steps = metadata.get(SABER_BRIDGE_TOOL_STEPS_KEY)
+    if not isinstance(raw_steps, list) and sample_store is not None:
+        raw_steps = sample_store.get(SABER_BRIDGE_TOOL_STEPS_KEY, None)
+    if not isinstance(raw_steps, list):
+        try:
+            from inspect_ai.util import store
+
+            stored_steps = store().get(SABER_BRIDGE_TOOL_STEPS_KEY, None)
+        except Exception:
+            stored_steps = None
+        raw_steps = stored_steps
+    if not isinstance(raw_steps, list):
+        return None
+
+    steps: list[ToolStep] = []
+    for idx, raw in enumerate(raw_steps):
+        if not isinstance(raw, dict):
+            continue
+        raw_input = raw.get("tool_input")
+        tool_input = raw_input if isinstance(raw_input, dict) else {}
+        try:
+            step_number = int(raw.get("step_number", len(steps) + 1))
+        except (TypeError, ValueError):
+            step_number = len(steps) + 1
+        steps.append(
+            ToolStep(
+                step_number=step_number or idx + 1,
+                tool_name=str(raw.get("tool_name") or ""),
+                tool_input=tool_input,
+                output=str(raw.get("output") or ""),
+                is_error=bool(raw.get("is_error", False)),
+                error_type=(
+                    str(raw["error_type"])
+                    if raw.get("error_type") is not None
+                    else None
+                ),
+                assistant_message=(
+                    str(raw["assistant_message"])
+                    if raw.get("assistant_message") is not None
+                    else None
+                ),
+                reasoning=(
+                    str(raw["reasoning"])
+                    if raw.get("reasoning") is not None
+                    else None
+                ),
+            )
+        )
+    return tuple(steps) if steps else None
 
 
 def _task_from_state(
@@ -179,7 +236,12 @@ async def _make_scoring_context(
     """
     return ScoringContext(
         submission=await _resolve_submission(state, scorer),
-        tool_steps=(tool_steps if tool_steps is not None else tuple(extract_tool_steps(state.messages))),
+        tool_steps=(
+            tool_steps
+            if tool_steps is not None
+            else _bridge_tool_steps_from_metadata(state.metadata or {}, state.store)
+            or tuple(extract_tool_steps(state.messages))
+        ),
         messages=tuple(state.messages),
         target=target.text,
         task_id=task_id,
@@ -288,7 +350,10 @@ class ScorerFactory:
         self._validate_strategies(task)
 
         task_id = task.task_id
-        tool_steps = tuple(extract_tool_steps(state.messages))
+        tool_steps = (
+            _bridge_tool_steps_from_metadata(state.metadata or {}, state.store)
+            or tuple(extract_tool_steps(state.messages))
+        )
 
         # --- Run all strategies and collect per-scorer results -----------
         individual_scores: dict[str, Score] = {}

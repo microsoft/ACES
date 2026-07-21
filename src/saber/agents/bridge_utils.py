@@ -286,6 +286,38 @@ def build_user_prompt(messages: Sequence[ChatMessage]) -> tuple[str, bool]:
     return prompt_text, has_assistant_response
 
 
+def override_state_completion(state: object, completion: str) -> None:
+    """Set a task state's final completion and assistant message.
+
+    Args:
+        state: Inspect TaskState-like object with ``messages`` and ``output``.
+        completion: Final assistant text to expose to scorers.
+    """
+    from inspect_ai.model import ChatCompletionChoice, ChatMessageAssistant, ModelOutput
+
+    message = ChatMessageAssistant(content=completion, source="generate")
+    messages = getattr(state, "messages", None)
+    if isinstance(messages, list):
+        if messages and isinstance(messages[-1], ChatMessageAssistant):
+            messages[-1] = message
+        else:
+            messages.append(message)
+
+    current_output = getattr(state, "output", None)
+    if current_output is not None:
+        state.output = current_output.model_copy(
+            update={
+                "choices": [ChatCompletionChoice(message=message, stop_reason="stop")],
+                "completion": completion,
+            }
+        )
+    else:
+        state.output = ModelOutput(
+            choices=[ChatCompletionChoice(message=message, stop_reason="stop")],
+            completion=completion,
+        )
+
+
 def resolve_mcp_servers(
     mcp_server_configs: Sequence[MCPServerConfigHTTP],
 ) -> tuple[str, list[str]]:
@@ -946,6 +978,31 @@ def parse_runner_metrics(stderr: str) -> dict[str, object] | None:
                 return json.loads(json_str)  # type: ignore[no-any-return]
             except (json.JSONDecodeError, ValueError):
                 logger.debug("Failed to parse COPILOT_METRICS JSON: %s", json_str[:200])
+                return None
+
+    return None
+
+
+def parse_workflow_status(stderr: str) -> dict[str, object] | None:
+    """Parse COPILOT_WORKFLOW_STATUS JSON from runner stderr.
+
+    Args:
+        stderr: Raw stderr from the runner subprocess.
+
+    Returns:
+        Parsed workflow status dict, or None if no status line found.
+    """
+    if not stderr:
+        return None
+
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("COPILOT_WORKFLOW_STATUS:"):
+            json_str = stripped[len("COPILOT_WORKFLOW_STATUS:") :].strip()
+            try:
+                return json.loads(json_str)  # type: ignore[no-any-return]
+            except (json.JSONDecodeError, ValueError):
+                logger.debug("Failed to parse COPILOT_WORKFLOW_STATUS JSON: %s", json_str[:200])
                 return None
 
     return None

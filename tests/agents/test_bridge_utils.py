@@ -180,6 +180,65 @@ class TestBuildUserPrompt:
         assert has_assistant is True
 
 
+class TestOverrideStateCompletion:
+    """override_state_completion updates scorer output and transcript."""
+
+    def test_replaces_trailing_assistant_and_output(self) -> None:
+        """A trailing assistant status is replaced with the scored completion."""
+        from types import SimpleNamespace
+
+        from inspect_ai.model import (
+            ChatCompletionChoice,
+            ChatMessageAssistant,
+            ChatMessageUser,
+            ModelOutput,
+        )
+
+        from saber.agents.bridge_utils import override_state_completion
+
+        old_message = ChatMessageAssistant(content="status pointer")
+        state = SimpleNamespace(
+            messages=[
+                ChatMessageUser(content="investigate"),
+                old_message,
+            ],
+            output=ModelOutput(
+                model="inspect",
+                choices=[ChatCompletionChoice(message=old_message)],
+                completion="status pointer",
+                metadata={"keep": "me"},
+            ),
+        )
+
+        override_state_completion(state, "# Final report\n\nFull report.")
+
+        assert state.messages[-1].content == "# Final report\n\nFull report."
+        assert state.messages[-1].source == "generate"
+        assert state.output.completion == "# Final report\n\nFull report."
+        assert state.output.choices[0].message.content == "# Final report\n\nFull report."
+        assert state.output.model == "inspect"
+        assert state.output.metadata == {"keep": "me"}
+
+    def test_appends_when_no_trailing_assistant(self) -> None:
+        """A completion message is appended if no assistant message trails."""
+        from types import SimpleNamespace
+
+        from inspect_ai.model import ChatMessageAssistant, ChatMessageUser
+
+        from saber.agents.bridge_utils import override_state_completion
+
+        state = SimpleNamespace(
+            messages=[ChatMessageUser(content="investigate")],
+            output=None,
+        )
+
+        override_state_completion(state, "# Final report")
+
+        assert isinstance(state.messages[-1], ChatMessageAssistant)
+        assert state.messages[-1].content == "# Final report"
+        assert state.output.completion == "# Final report"
+
+
 class TestResolveMcpServers:
     """resolve_mcp_servers uses model_dump for proper serialization."""
 
