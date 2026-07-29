@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -139,6 +141,7 @@ class TestCopilotBridgeStdoutCompletionConfig:
         assert cfg.sandbox_name == "default"
         assert cfg.port_base == 3000
         assert cfg.model == "inspect"
+        assert cfg.artifact_patterns == ()
 
     def test_from_kwargs(self) -> None:
         """from_kwargs extracts known fields and ignores unknowns."""
@@ -146,6 +149,37 @@ class TestCopilotBridgeStdoutCompletionConfig:
 
         cfg = CopilotBridgeConfig.from_kwargs({"sandbox_name": "custom", "unknown": "ignored"})
         assert cfg.sandbox_name == "custom"
+
+    def test_accepts_host_mcp_server_directory(self) -> None:
+        from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+        cfg = CopilotBridgeConfig.from_kwargs({
+            "mcp_servers_dir": "/host/mcp_servers",
+        })
+
+        assert cfg.mcp_servers_dir == "/host/mcp_servers"
+
+    async def test_uploads_host_mcp_servers_over_image_copy(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from saber.agents.registry.copilot import solver
+
+        upload = AsyncMock(return_value="mcp_servers")
+        monkeypatch.setattr(solver, "upload_skills_to_sandbox", upload)
+        sbox = object()
+
+        result = await solver._upload_mcp_servers_to_sandbox(
+            sbox,
+            "/host/mcp_servers",
+        )
+
+        assert result == "mcp_servers"
+        upload.assert_awaited_once_with(
+            sbox,
+            "/host/mcp_servers",
+            "mcp_servers",
+        )
 
     def test_frozen(self) -> None:
         """Config model is immutable."""
@@ -156,6 +190,220 @@ class TestCopilotBridgeStdoutCompletionConfig:
         cfg = CopilotBridgeConfig()
         with pytest.raises(ValidationError):
             cfg.sandbox_name = "other"  # type: ignore[misc]
+
+
+class TestCopilotArtifactExport:
+    """Host-side artifact preservation before sandbox cleanup."""
+
+    async def test_exports_reports_and_disambiguates_logs(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Required reports and both log namespaces are preserved."""
+        from saber.agents.registry.copilot import solver
+
+        monkeypatch.setattr(
+            solver,
+            "uuid4",
+            lambda: SimpleNamespace(hex="artifact-id"),
+        )
+        paths = "\n".join(
+            [
+                "/workspace/report.md",
+                "/workspace/investigation_report.md",
+                "/workspace/.copilot/logs/session.log",
+                "/root/.copilot/logs/session.log",
+            ]
+        )
+        contents = {
+            "/workspace/report.md": b"# Final",
+            "/workspace/investigation_report.md": b"# Working",
+            "/workspace/.copilot/logs/session.log": b"agent log",
+            "/root/.copilot/logs/session.log": b"process log",
+        }
+        sbox = SimpleNamespace(
+            exec=AsyncMock(
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=paths,
+                    stderr="",
+                )
+            ),
+            read_file=AsyncMock(side_effect=lambda path, text=False: contents[path]),
+        )
+
+        patterns = (
+            "/workspace/report.md",
+            "/workspace/investigation_report.md",
+            "/workspace/.copilot/logs/*.log",
+            "/root/.copilot/logs/*.log",
+        )
+        metadata = await solver._export_copilot_artifacts(
+            sbox,
+            str(tmp_path),
+            patterns,
+        )
+
+        artifact_dir = tmp_path / "artifact-id"
+        assert metadata == {
+            "artifact_id": "artifact-id",
+            "artifact_dir": str(artifact_dir),
+            "files": [
+                "report.md",
+                "investigation_report.md",
+                "agent-session.log",
+                "process-session.log",
+            ],
+            "failed_files": [],
+        }
+        assert (artifact_dir / "report.md").read_text() == "# Final"
+        assert (artifact_dir / "agent-session.log").read_text() == "agent log"
+        assert (artifact_dir / "process-session.log").read_text() == "process log"
+        assert sbox.exec.await_args.args[0][-4:] == list(patterns)
+        sbox.read_file.assert_any_await(
+            "/workspace/report.md",
+            text=False,
+        )
+
+    async def test_preserves_binary_files_with_colliding_basenames(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Binary artifacts with the same basename receive unique names."""
+        from saber.agents.registry.copilot import solver
+
+        monkeypatch.setattr(
+            solver,
+            "uuid4",
+            lambda: SimpleNamespace(hex="artifact-id"),
+        )
+        paths = "/workspace/a/result.bin\n/workspace/b/result.bin\n/workspace/c/result.bin\n"
+        sbox = SimpleNamespace(
+            exec=AsyncMock(
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=paths,
+                    stderr="",
+                )
+            ),
+            read_file=AsyncMock(
+                side_effect=[b"\x00first", b"\x00second", b"\x00third"],
+            ),
+        )
+
+        metadata = await solver._export_copilot_artifacts(
+            sbox,
+            str(tmp_path),
+            ("/workspace/*/result.bin",),
+        )
+
+        assert metadata is not None
+        names = metadata["files"]
+        assert len(names) == 3
+        assert len(set(names)) == 3
+        artifact_dir = tmp_path / "artifact-id"
+        assert sorted((artifact_dir / name).read_bytes() for name in names) == [
+            b"\x00first",
+            b"\x00second",
+            b"\x00third",
+        ]
+
+    async def test_shielded_export_finishes_before_reraising_cancellation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Cancellation waits for the export task and is then preserved."""
+        import asyncio
+
+        from saber.agents.registry.copilot import solver
+
+        exported = asyncio.Event()
+
+        async def record(*args: object) -> None:
+            await asyncio.sleep(0)
+            exported.set()
+
+        monkeypatch.setattr(solver, "_record_copilot_artifacts", record)
+
+        task = asyncio.create_task(
+            solver._record_copilot_artifacts_shielded(
+                SimpleNamespace(),
+                "/tmp/artifacts",
+                ("/workspace/report.md",),
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert exported.is_set()
+
+    async def test_read_failure_preserves_other_artifacts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One unreadable sandbox file does not mask the agent outcome."""
+        from saber.agents.registry.copilot import solver
+
+        monkeypatch.setattr(
+            solver,
+            "uuid4",
+            lambda: SimpleNamespace(hex="artifact-id"),
+        )
+
+        async def read_file(path: str, text: bool = False) -> bytes:
+            if path.endswith("report.md"):
+                raise RuntimeError("sandbox read failed")
+            return b"notes"
+
+        sbox = SimpleNamespace(
+            exec=AsyncMock(
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=("/workspace/report.md\n/workspace/investigation_notes.md\n"),
+                    stderr="",
+                )
+            ),
+            read_file=AsyncMock(side_effect=read_file),
+        )
+
+        metadata = await solver._export_copilot_artifacts(
+            sbox,
+            str(tmp_path),
+            (
+                "/workspace/report.md",
+                "/workspace/investigation_notes.md",
+            ),
+        )
+
+        assert metadata is not None
+        assert metadata["files"] == ["investigation_notes.md"]
+        assert metadata["failed_files"] == ["/workspace/report.md"]
+        assert (tmp_path / "artifact-id" / "investigation_notes.md").read_text() == "notes"
+
+    async def test_discovery_failure_returns_none(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Sandbox discovery failures do not replace the agent result."""
+        from saber.agents.registry.copilot import solver
+
+        sbox = SimpleNamespace(
+            exec=AsyncMock(side_effect=RuntimeError("sandbox unavailable")),
+        )
+
+        assert (
+            await solver._export_copilot_artifacts(
+                sbox,
+                str(tmp_path),
+                ("/workspace/report.md",),
+            )
+            is None
+        )
 
 
 class TestBridgeEventToolSteps:
@@ -186,9 +434,7 @@ class TestBridgeEventToolSteps:
                         "data": {
                             "toolCallId": "call_1",
                             "success": True,
-                            "result": {
-                                "content": '{"Results":[{"Account":"user"}],"Count":1}'
-                            },
+                            "result": {"content": '{"Results":[{"Account":"user"}],"Count":1}'},
                             "parentToolCallId": "call_parent",
                         },
                     }
@@ -423,18 +669,14 @@ class TestBridgeEventLogIngestion:
 
         steps = await _read_bridge_tool_steps(sbox)
 
-        assert _is_nonfatal_idle_timeout(
-            "Timeout after 30s waiting for session.idle"
-        )
+        assert _is_nonfatal_idle_timeout("Timeout after 30s waiting for session.idle")
         assert steps[0]["tool_call_id"] == "partial_call"
         assert steps[0]["output"] == "partial result"
         source = inspect.getsource(create_agent)
-        assert source.index(
-            "bridge_tool_steps = await _read_bridge_tool_steps(sbox)"
-        ) < source.index("if nonfatal_timeout:")
-        sbox.exec.assert_awaited_once_with(
-            ["rm", "-f", "/workspace/.runner_events.jsonl"]
+        assert source.index("bridge_tool_steps = await _read_bridge_tool_steps(sbox)") < source.index(
+            "if nonfatal_timeout:"
         )
+        sbox.exec.assert_awaited_once_with(["rm", "-f", "/workspace/.runner_events.jsonl"])
 
     @pytest.mark.asyncio
     async def test_read_failure_falls_back_without_masking_result(self) -> None:
@@ -463,13 +705,68 @@ class TestBridgeEventLogIngestion:
         from saber.agents.registry.copilot.solver import _read_bridge_tool_steps
 
         sbox = SimpleNamespace(
-            read_file=AsyncMock(
-                side_effect=OutputLimitExceededError("100 MiB", None)
-            ),
+            read_file=AsyncMock(side_effect=OutputLimitExceededError("100 MiB", None)),
             exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
         )
 
         assert await _read_bridge_tool_steps(sbox) == []
+        sbox.exec.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_tool_events_do_not_exhaust_tool_event_limit(self) -> None:
+        """Large SDK telemetry logs retain their bounded tool trajectory."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from saber.agents.registry.copilot.solver import (
+            _RUNNER_EVENT_LOG_MAX_EVENTS,
+            _read_bridge_tool_steps,
+        )
+
+        non_tool_event = json.dumps(
+            {
+                "schema_version": 1,
+                "type": "assistant.streaming_delta",
+                "data": {"delta": "x"},
+            }
+        )
+        event_log = "\n".join(
+            [
+                *([non_tool_event] * (_RUNNER_EVENT_LOG_MAX_EVENTS + 1)),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_start",
+                        "data": {
+                            "toolCallId": "call-1",
+                            "toolName": "get_incident",
+                            "arguments": {"incident_id": "42"},
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "type": "tool.execution_complete",
+                        "data": {
+                            "toolCallId": "call-1",
+                            "success": True,
+                            "result": {"content": "incident evidence"},
+                        },
+                    }
+                ),
+            ]
+        )
+        sbox = SimpleNamespace(
+            read_file=AsyncMock(return_value=event_log),
+            exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
+        )
+
+        steps = await _read_bridge_tool_steps(sbox)
+
+        assert len(steps) == 1
+        assert steps[0]["tool_name"] == "get_incident"
+        assert steps[0]["output"] == "incident evidence"
         sbox.exec.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -481,9 +778,7 @@ class TestBridgeEventLogIngestion:
         from saber.agents.registry.copilot.solver import _read_bridge_tool_steps
 
         sbox = SimpleNamespace(
-            read_file=AsyncMock(
-                return_value='{"type":"tool.execution_start","tool":"get_incident"}'
-            ),
+            read_file=AsyncMock(return_value='{"type":"tool.execution_start","tool":"get_incident"}'),
             exec=AsyncMock(return_value=SimpleNamespace(returncode=0)),
         )
 
@@ -2147,11 +2442,7 @@ class TestParseRunnerMetrics:
         """Parses valid COPILOT_METRICS JSON from stderr."""
         from saber.agents.bridge_utils import parse_runner_metrics
 
-        stderr = (
-            'Some log line\n'
-            'COPILOT_METRICS: {"total_events": 42, "exit_reason": "completed"}\n'
-            'More output\n'
-        )
+        stderr = 'Some log line\nCOPILOT_METRICS: {"total_events": 42, "exit_reason": "completed"}\nMore output\n'
         result = parse_runner_metrics(stderr)
         assert result is not None
         assert result["total_events"] == 42
@@ -2212,10 +2503,7 @@ class TestParseRunnerMetrics:
         """When multiple COPILOT_METRICS lines exist, first one is returned."""
         from saber.agents.bridge_utils import parse_runner_metrics
 
-        stderr = (
-            'COPILOT_METRICS: {"exit_reason": "first"}\n'
-            'COPILOT_METRICS: {"exit_reason": "second"}\n'
-        )
+        stderr = 'COPILOT_METRICS: {"exit_reason": "first"}\nCOPILOT_METRICS: {"exit_reason": "second"}\n'
         result = parse_runner_metrics(stderr)
         assert result is not None
         assert result["exit_reason"] == "first"
@@ -2287,6 +2575,7 @@ class TestCopilotModelAliases:
 
         source = Path(solver.__file__).read_text()
         assert "resolve_model_aliases" in source
+
 
 class TestCopilotCLIParserIntegration:
     """Verify CLI output parser is wired into Copilot solver."""
