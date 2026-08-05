@@ -12,6 +12,7 @@ from inspect_ai._util.registry import registry_unqualified_name
 from inspect_ai.model import ChatMessageUser
 from inspect_ai.scorer import Score, Target
 
+from saber.agents.bridge_events import SABER_BRIDGE_TOOL_STEPS_KEY
 from saber.config.models import (
     AggregationConfig,
     LLMJudgeCriteria,
@@ -22,7 +23,13 @@ from saber.config.models import (
     StaticCriteria,
     TaskConfig,
 )
-from saber.scoring.factory import CacheKeys, ScorerFactory, StrategyName, _is_batch_eligible
+from saber.scoring.factory import (
+    CacheKeys,
+    ScorerFactory,
+    StrategyName,
+    _bridge_tool_steps_from_metadata,
+    _is_batch_eligible,
+)
 from saber.scoring.registry import ScoringStrategyRegistry
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -119,6 +126,64 @@ class TestCacheKeys:
 
     def test_unified_scores_empty_task_id(self) -> None:
         assert CacheKeys.unified_scores("") == "_saber_all_scores_"
+
+
+class TestBridgeToolStepsFromMetadata:
+    """Generic bridged tool steps metadata conversion."""
+
+    def test_converts_metadata_steps_to_tool_steps(self) -> None:
+        """Runtime scoring can prefer nested bridge trajectory metadata."""
+        steps = _bridge_tool_steps_from_metadata(
+            {
+                SABER_BRIDGE_TOOL_STEPS_KEY: [
+                    {
+                        "step_number": 3,
+                        "tool_name": "RunAdvancedHuntingQuery",
+                        "tool_input": {"kqlQuery": "AADSignInLogs | take 1"},
+                        "output": '{"Results":[{"Account":"user"}],"Count":1}',
+                        "is_error": False,
+                    }
+                ]
+            }
+        )
+
+        assert steps is not None
+        assert len(steps) == 1
+        assert steps[0].step_number == 3
+        assert steps[0].tool_name == "RunAdvancedHuntingQuery"
+        assert steps[0].tool_input == {"kqlQuery": "AADSignInLogs | take 1"}
+        assert steps[0].output == '{"Results":[{"Account":"user"}],"Count":1}'
+
+    def test_returns_none_for_missing_or_empty_metadata(self) -> None:
+        """Fallback trajectory extraction remains available."""
+        assert _bridge_tool_steps_from_metadata({}) is None
+        assert _bridge_tool_steps_from_metadata({SABER_BRIDGE_TOOL_STEPS_KEY: []}) is None
+
+    def test_reads_steps_from_sample_store_when_metadata_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Runtime solver can pass bridged steps through Inspect's sample store."""
+        import inspect_ai.util
+
+        class FakeStore:
+            def get(self, key: str, default: object = None) -> object:
+                if key == SABER_BRIDGE_TOOL_STEPS_KEY:
+                    return [
+                        {
+                            "step_number": 1,
+                            "tool_name": "RunAdvancedHuntingQuery",
+                            "tool_input": {"kqlQuery": "query"},
+                            "output": '{"Results":[{"Account":"user"}],"Count":1}',
+                            "is_error": False,
+                        }
+                    ]
+                return default
+
+        monkeypatch.setattr(inspect_ai.util, "store", lambda: FakeStore())
+
+        steps = _bridge_tool_steps_from_metadata({})
+
+        assert steps is not None
+        assert steps[0].tool_name == "RunAdvancedHuntingQuery"
+        assert steps[0].output == '{"Results":[{"Account":"user"}],"Count":1}'
 
 
 # ── TestIsBatchEligible ─────────────────────────────────────────────
@@ -586,6 +651,37 @@ class TestUnifiedScoreCache:
         assert state.metadata[cache_key]["sub"].value == 1.0
         # Batch cache key must NOT exist
         assert "_saber_batch_cfg_test_task" not in state.metadata
+
+    @pytest.mark.asyncio
+    async def test_compute_task_aggregate_prefers_bridge_tool_steps(self) -> None:
+        """saber_overall cache must use bridged tool steps, not flat messages."""
+
+        class ToolNameStrategy:
+            async def score(self, ctx, renderer):
+                names = [step.tool_name for step in ctx.tool_steps]
+                return Score(value=1.0 if "RunAdvancedHuntingQuery" in names else 0.0)
+
+        registry = ScoringStrategyRegistry()
+        registry.register("tool_names", ToolNameStrategy())
+        factory = ScorerFactory(domain_root=Path("/fake/domain"), registry=registry)
+        sc = _make_scorer(name="bridge", strategy="tool_names", target=ScorerTarget.TRAJECTORY)
+        task = _make_task(scorers=(sc,))
+
+        state = _make_mock_state(task_id="test_task")
+        state.metadata[SABER_BRIDGE_TOOL_STEPS_KEY] = [
+            {
+                "step_number": 1,
+                "tool_name": "RunAdvancedHuntingQuery",
+                "tool_input": {"kqlQuery": "SigninLogs | take 1"},
+                "output": '{"Results":[{"Account":"user"}],"Count":1}',
+                "is_error": False,
+            }
+        ]
+
+        await factory.compute_task_aggregate(task, state, Target("expected"))
+
+        cache = state.metadata[CacheKeys.unified_scores("test_task")]
+        assert cache["bridge"].value == 1.0
 
     @pytest.mark.asyncio
     async def test_unit_scorer_reads_unified_cache(self) -> None:

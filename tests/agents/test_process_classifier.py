@@ -36,18 +36,36 @@ def _load_runner_functions() -> dict[str, object]:
     import sys
     import types
 
-    # Stub the copilot SDK so the import inside RUNNER_SCRIPT succeeds.
+    # Stub the copilot SDK so the imports inside RUNNER_SCRIPT succeed even when
+    # the real SDK is not installed (e.g. CI installs only the ``dev`` extra).
+    # The stub packages are given ``__path__`` so dotted submodule imports such
+    # as ``from copilot.generated.session_events import SessionEventType``
+    # resolve against the entries registered in ``sys.modules`` below.
     _copilot_stub = types.ModuleType("copilot")
+    _copilot_stub.__path__ = []  # type: ignore[attr-defined]
     _copilot_types_stub = types.ModuleType("copilot.types")
     _copilot_types_stub.PermissionRequestResult = type(  # type: ignore[attr-defined]
         "PermissionRequestResult", (), {}
     )
     _copilot_stub.types = _copilot_types_stub  # type: ignore[attr-defined]
 
-    prev_copilot = sys.modules.get("copilot")
-    prev_copilot_types = sys.modules.get("copilot.types")
-    sys.modules["copilot"] = _copilot_stub
-    sys.modules["copilot.types"] = _copilot_types_stub
+    _copilot_generated_stub = types.ModuleType("copilot.generated")
+    _copilot_generated_stub.__path__ = []  # type: ignore[attr-defined]
+    _copilot_session_events_stub = types.ModuleType("copilot.generated.session_events")
+    _copilot_session_events_stub.SessionEventType = type(  # type: ignore[attr-defined]
+        "SessionEventType", (), {}
+    )
+    _copilot_generated_stub.session_events = _copilot_session_events_stub  # type: ignore[attr-defined]
+    _copilot_stub.generated = _copilot_generated_stub  # type: ignore[attr-defined]
+
+    _stubs = {
+        "copilot": _copilot_stub,
+        "copilot.types": _copilot_types_stub,
+        "copilot.generated": _copilot_generated_stub,
+        "copilot.generated.session_events": _copilot_session_events_stub,
+    }
+    _prev_modules = {name: sys.modules.get(name) for name in _stubs}
+    sys.modules.update(_stubs)
 
     try:
         from saber.agents.registry.copilot.solver import RUNNER_SCRIPT
@@ -59,14 +77,11 @@ def _load_runner_functions() -> dict[str, object]:
         return namespace
     finally:
         # Restore original module state to avoid leaking stubs.
-        if prev_copilot is None:
-            sys.modules.pop("copilot", None)
-        else:
-            sys.modules["copilot"] = prev_copilot
-        if prev_copilot_types is None:
-            sys.modules.pop("copilot.types", None)
-        else:
-            sys.modules["copilot.types"] = prev_copilot_types
+        for name, prev in _prev_modules.items():
+            if prev is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = prev
 
 
 # Cache the namespace so we don't recompile for every test

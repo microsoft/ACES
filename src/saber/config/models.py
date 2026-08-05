@@ -237,9 +237,7 @@ class SubmissionSource(BaseModel):
     @model_validator(mode="after")
     def _require_path_for_file_type(self) -> SubmissionSource:
         if self.type == SubmissionSourceType.FILE and not self.path:
-            raise ValueError(
-                "submission_source.path is required when type=file"
-            )
+            raise ValueError("submission_source.path is required when type=file")
         return self
 
 

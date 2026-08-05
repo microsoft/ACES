@@ -175,6 +175,16 @@ def _parse_agent_text(text: str, path: Path) -> tuple[dict[str, Any], AgentFileM
     """Parse raw agent markdown text."""
     match = _FRONTMATTER_RE.match(text)
     if match is None:
+        # Lenient fallback for nested subagent bodies that carry no frontmatter
+        # (e.g. ``subagents/<name>/agent.md``). In bundles where subagent
+        # metadata lives in the orchestrator's ``subagents:`` map, the per-agent
+        # file is just the prompt body. Infer the agent name from its parent
+        # directory so the agent still registers and stays invocable.
+        if path.name.lower() == "agent.md" and path.parent.name:
+            inferred_name = path.parent.name
+            data: dict[str, Any] = {"name": inferred_name}
+            metadata = AgentFileMetadata(name=inferred_name)
+            return data, metadata, text.strip()
         raise ValueError(
             f"Missing or malformed YAML frontmatter in {path}. Expected file to start with '---' delimiters."
         )
@@ -364,6 +374,24 @@ def _discover_agent_files(agents_dir: Path | None, persona_file: Path | None) ->
                     path.resolve()
                     for path in agents_dir.glob("*.md")
                     if path.is_file() and path.name.lower() not in {"readme.md", "license.md"}
+                )
+            )
+        # Also discover nested agent definitions: <dir>/<name>/agent.md
+        discovered.extend(
+            sorted(
+                path.resolve()
+                for path in agents_dir.glob("*/agent.md")
+                if path.is_file() and path.resolve() not in set(discovered)
+            )
+        )
+        # Also check subagents/ subdirectory for <subagents>/<name>/agent.md
+        subagents_dir = agents_dir / "subagents"
+        if subagents_dir.is_dir():
+            discovered.extend(
+                sorted(
+                    path.resolve()
+                    for path in subagents_dir.glob("*/agent.md")
+                    if path.is_file() and path.resolve() not in set(discovered)
                 )
             )
 
