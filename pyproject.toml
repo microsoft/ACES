@@ -51,7 +51,7 @@ dependencies = [
     # Security: pin minimum safe versions
     "urllib3>=2.6.0",
     "filelock>=3.20.1",
-    "mcp>=1.23.0",
+    "mcp>=1.28.1",
     # inspect-ai dependency managed via tool.uv.sources for flexible installation
     "inspect-ai",
     "azure-identity>=1.25.1",
