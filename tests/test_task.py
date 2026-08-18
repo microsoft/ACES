@@ -332,6 +332,7 @@ class TestCreateTask:
             permanent_project="saber-permanent",
             rebuild=RebuildMode.none(),
             keep_permanent=False,
+            agent="react",
         )
 
     def test_sandbox_spec_wired(self, tmp_path: Path) -> None:

@@ -751,7 +751,7 @@ class TestPreflightInTaskInit:
             patch.object(DockerSandboxEnvironment, "task_init", new_callable=AsyncMock),
         ):
             await SaberSandboxEnvironment.task_init("test_task", None)
-            mock_build.assert_called_once_with(tmp_path, rebuild=RebuildMode.all())
+            mock_build.assert_called_once_with(tmp_path, rebuild=RebuildMode.all(), base_variant="base")
 
     @pytest.mark.asyncio
     async def test_skips_when_no_preflight_config(self) -> None:

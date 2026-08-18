@@ -1,0 +1,146 @@
+parameters:
+  - name: packageFolder
+    type: string
+    default: $(Build.SourcesDirectory)
+  - name: virtualEnvironment
+    type: string
+    default: $(Build.SourcesDirectory)/.venv
+  - name: distributionName
+    type: string
+  - name: packageVersion
+    type: string
+  - name: repositoryUrl
+    type: string
+  - name: checkUrl
+    type: string
+  - name: publishUsername
+    type: string
+    default: build
+  - name: publishPasswordVariable
+    type: string
+  - name: publish
+    type: boolean
+    default: false
+  - name: publishSourceRef
+    type: string
+    default: refs/heads/main
+  - name: prePublishSteps
+    type: stepList
+    default: []
+
+steps:
+  - bash: |
+      set -euo pipefail
+      if [[ "${AGENT_OS}" != "Linux" ]]; then
+        echo "python-wheel-publish-steps.yml requires a Linux agent" >&2
+        exit 1
+      fi
+      source "${VIRTUAL_ENVIRONMENT}/bin/activate"
+      cd "${PACKAGE_FOLDER}"
+      uv pip install packaging
+
+      PACKAGE_VERSION="${PACKAGE_VERSION}" python3 - <<'PY'
+      import os
+      from packaging.version import Version
+
+      version = Version(os.environ["PACKAGE_VERSION"])
+      if not version.is_prerelease:
+        raise SystemExit(
+          f"RC publishing requires a pre-release version, got {version}"
+        )
+      PY
+
+      PACKAGE_VERSION="${PACKAGE_VERSION}" python3 - <<'PY'
+      import os
+      import re
+      from pathlib import Path
+
+      path = Path("pyproject.toml")
+      content = path.read_text(encoding="utf-8")
+      updated, count = re.subn(
+          r'(?m)^version = "[^"]+"$',
+          f'version = "{os.environ["PACKAGE_VERSION"]}"',
+          content,
+          count=1,
+      )
+      if count != 1:
+          raise SystemExit("Expected exactly one static project version")
+      path.write_text(updated, encoding="utf-8")
+      PY
+
+      rm -rf dist
+      uv build --wheel
+
+      mapfile -t wheels < <(find dist -maxdepth 1 -type f -name '*.whl' -print)
+      if [[ ${#wheels[@]} -ne 1 ]]; then
+        echo "Expected exactly one wheel, found ${#wheels[@]}" >&2
+        exit 1
+      fi
+      wheel=$(realpath "${wheels[0]}")
+      WHEEL_PATH="$wheel" python3 - <<'PY'
+      import email
+      import os
+      import zipfile
+
+      from packaging.utils import canonicalize_name
+      from packaging.version import Version
+
+      with zipfile.ZipFile(os.environ["WHEEL_PATH"]) as wheel:
+          metadata_path = next(
+              name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")
+          )
+          metadata = email.message_from_bytes(wheel.read(metadata_path))
+
+      if canonicalize_name(metadata["Name"]) != canonicalize_name(
+          os.environ["DISTRIBUTION_NAME"]
+      ):
+          raise SystemExit(f"Unexpected wheel distribution: {metadata['Name']}")
+      if Version(metadata["Version"]) != Version(os.environ["PACKAGE_VERSION"]):
+          raise SystemExit(f"Unexpected wheel version: {metadata['Version']}")
+      PY
+      uv publish \
+        --dry-run \
+        --publish-url "${REPOSITORY_URL}" \
+        --no-attestations \
+        "$wheel"
+      echo "##vso[task.setvariable variable=wheelPath]$wheel"
+      echo "Built wheel: $wheel"
+    displayName: "Build ${{ parameters.distributionName }} ${{ parameters.packageVersion }}"
+    env:
+      AGENT_OS: $(Agent.OS)
+      PACKAGE_FOLDER: ${{ parameters.packageFolder }}
+      VIRTUAL_ENVIRONMENT: ${{ parameters.virtualEnvironment }}
+      DISTRIBUTION_NAME: ${{ parameters.distributionName }}
+      PACKAGE_VERSION: ${{ parameters.packageVersion }}
+      REPOSITORY_URL: ${{ parameters.repositoryUrl }}
+
+  - ${{ each step in parameters.prePublishSteps }}:
+      - ${{ step }}
+
+  - ${{ if parameters.publish }}:
+      - bash: |
+          set -euo pipefail
+          source "${VIRTUAL_ENVIRONMENT}/bin/activate"
+          if [[ "${BUILD_SOURCEBRANCH}" != "${PUBLISH_SOURCE_REF}" ]]; then
+            echo "Publishing is restricted to ${PUBLISH_SOURCE_REF}; got ${BUILD_SOURCEBRANCH}" >&2
+            exit 1
+          fi
+          : "${UV_PUBLISH_PASSWORD:?Publishing credential is unavailable}"
+          if [[ "$UV_PUBLISH_PASSWORD" == '$('* ]]; then
+            echo "Publishing credential variable was not resolved" >&2
+            exit 1
+          fi
+          uv publish \
+            --publish-url "${REPOSITORY_URL}" \
+            --check-url "${CHECK_URL}" \
+            --no-attestations \
+            "$(wheelPath)"
+        displayName: "Publish ${{ parameters.distributionName }} ${{ parameters.packageVersion }}"
+        env:
+          CHECK_URL: ${{ parameters.checkUrl }}
+          BUILD_SOURCEBRANCH: $(Build.SourceBranch)
+          PUBLISH_SOURCE_REF: ${{ parameters.publishSourceRef }}
+          REPOSITORY_URL: ${{ parameters.repositoryUrl }}
+          VIRTUAL_ENVIRONMENT: ${{ parameters.virtualEnvironment }}
+          UV_PUBLISH_USERNAME: ${{ parameters.publishUsername }}
+          UV_PUBLISH_PASSWORD: $(${{ parameters.publishPasswordVariable }})

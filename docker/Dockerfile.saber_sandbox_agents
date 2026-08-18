@@ -1,0 +1,67 @@
+# SABER Sandbox Environment - agent-harness image (saber/sandbox:agents)
+#
+# Adds what the `copilot` and `claude_code` harnesses need on top of the base
+# image: Node.js, the two agent CLIs, and the Python agent SDKs. The default
+# `react` harness does NOT need any of this - it uses saber/sandbox:latest.
+#
+# saber builds this automatically when `-T agent=copilot` / `-T agent=claude_code`
+# is selected, and passes the resulting tag to domain images as SABER_BASE_IMAGE.
+ARG SABER_BASE_IMAGE=saber/sandbox:latest
+FROM ${SABER_BASE_IMAGE}
+
+# Install Node.js 22 LTS (required by the Copilot CLI and Claude Code CLI)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install the agent CLIs.
+# --ignore-scripts blocks package postinstalls (supply-chain hardening); the Claude
+# Code native binary its postinstall would fetch is installed explicitly below.
+#
+# Installs from the npm registry so builds pick up the latest CLIs. Where container
+# egress to registry.npmjs.org is blocked, run docker/fetch_npm.sh on a host that
+# can reach it and the build falls back to those tarballs. They are NOT committed
+# (the platform packages are ~260MB and go stale quickly).
+COPY npm/ /tmp/npm/
+RUN if npm install -g --ignore-scripts @github/copilot @anthropic-ai/claude-code; then \
+        echo "agent CLIs: installed from the npm registry"; \
+    elif ls /tmp/npm/*.tgz >/dev/null 2>&1 \
+         && npm install -g --ignore-scripts --offline /tmp/npm/*.tgz; then \
+        echo "agent CLIs: npm registry unreachable - installed from vendored docker/npm/ tarballs"; \
+    else \
+        echo "ERROR: agent CLIs could not be installed (npm registry unreachable," >&2; \
+        echo "ERROR: no vendored tarballs in docker/npm/). Run docker/fetch_npm.sh" >&2; \
+        echo "ERROR: on a host with npm access and rebuild, or use the default" >&2; \
+        echo "ERROR: 'react' harness, which does not need these CLIs." >&2; \
+        exit 1; \
+    fi; \
+    npm cache clean --force >/dev/null 2>&1 || true; \
+    rm -rf /tmp/npm
+
+# Download the Claude Code native binary (skipped by --ignore-scripts above).
+# Without this, `claude` fails at runtime with "native binary not installed".
+RUN CC=/usr/lib/node_modules/@anthropic-ai/claude-code/install.cjs; \
+    if [ -f "$CC" ]; then \
+        node "$CC" || echo "WARNING: Claude Code native binary download failed - the claude_code harness will not work."; \
+    fi
+
+# Python agent SDKs, PyPI first with the vendored-wheel fallback.
+COPY wheels/ /tmp/wheels/
+RUN PKGS='github-copilot-sdk>=0.3.0 claude-code-sdk'; \
+    uv pip install --system --no-cache --break-system-packages $PKGS \
+    || { echo "PyPI unreachable - falling back to docker/wheels/ (populate it on a host with PyPI access via docker/fetch_wheels.sh)"; \
+         uv pip install --system --no-cache --break-system-packages \
+             --no-index --find-links=/tmp/wheels $PKGS; } \
+    && rm -rf /tmp/wheels
+
+# Point the Copilot SDK at the CLI installed above. Without this the SDK downloads
+# a second copy at session start, which fails inside the network-isolated sandbox.
+ENV COPILOT_CLI_PATH=/usr/bin/copilot
+
+# Warm the CLIs once at build time. Their first invocation unpacks the platform
+# package (~5s); doing it here bakes the result into the image so every eval
+# sample does not pay that cost in its own fresh sandbox container.
+RUN copilot --version >/dev/null 2>&1 || true; \
+    claude --version >/dev/null 2>&1 || true
+
+LABEL saber.base_variant="agents"

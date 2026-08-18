@@ -1,0 +1,100 @@
+trigger: none
+pr: none
+
+parameters:
+  - name: packageVersion
+    displayName: "Saber package version"
+    type: string
+    default: "0.2.3rc$(Build.BuildId)"
+  - name: publish
+    displayName: "Publish to Perception-Eval-Feed"
+    type: boolean
+    default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: BuildAndPublish
+    displayName: "Build and verify Saber RC"
+    jobs:
+      - job: BuildAndPublish
+        displayName: "Build Saber ${{ parameters.packageVersion }}"
+        steps:
+          - checkout: self
+            fetchDepth: 1
+
+          - bash: |
+              set -euo pipefail
+              python3 -m pip install --upgrade pip
+              python3 -m pip install uv
+              uv venv
+              source .venv/bin/activate
+              uv pip install --no-sources -e ".[dev]"
+            displayName: "Install Saber development dependencies"
+
+          - bash: |
+              set -euo pipefail
+              source .venv/bin/activate
+              uv run --no-sources pytest \
+                tests/agents/test_copilot_bridge_agent.py \
+                -k ArtifactExport \
+                -q
+            displayName: "Test Saber artifact export"
+
+          - template: /.pipelines/python-wheel-publish-steps.yml
+            parameters:
+              distributionName: saber
+              packageVersion: ${{ parameters.packageVersion }}
+              repositoryUrl: "https://pkgs.dev.azure.com/microsoft/WDATP/_packaging/Perception-Eval-Feed/pypi/upload/"
+              checkUrl: "https://pkgs.dev.azure.com/microsoft/WDATP/_packaging/Perception-Eval-Feed/pypi/simple/"
+              publishUsername: build
+              publish: ${{ and(parameters.publish, eq(variables['Build.SourceBranch'], 'refs/heads/main')) }}
+              publishSourceRef: refs/heads/main
+              # Configure this as a protected pipeline secret; do not allow
+              # queue-time overrides.
+              # Provision only after definition 78 is constrained to protected
+              # source by an ADO-side required-template/queue policy.
+              publishPasswordVariable: SABER_PUBLISH_PASSWORD
+              prePublishSteps:
+                - bash: |
+                    set -euo pipefail
+                    source .venv/bin/activate
+                    uv pip install --reinstall --no-deps "$(wheelPath)"
+                    python3 - <<'PY'
+                    from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+                    required = {"artifact_output_dir", "artifact_patterns"}
+                    missing = required - CopilotBridgeConfig.model_fields.keys()
+                    if missing:
+                        raise SystemExit(
+                            "Built Saber wheel lacks Copilot artifact export: "
+                            f"{sorted(missing)}"
+                        )
+                    PY
+                  displayName: "Verify Saber artifact-export API"
+                - bash: |
+                    set -euo pipefail
+                    smoke_dir="$(mktemp -d)"
+                    trap 'rm -rf "$smoke_dir"' EXIT
+                    uv venv "$smoke_dir/.venv"
+                    source "$smoke_dir/.venv/bin/activate"
+                    uv pip install "$(wheelPath)"
+                    python3 - <<'PY'
+                    from saber.agents.registry.copilot.solver import CopilotBridgeConfig
+
+                    required = {"artifact_output_dir", "artifact_patterns"}
+                    missing = required - CopilotBridgeConfig.model_fields.keys()
+                    if missing:
+                        raise SystemExit(
+                            f"Clean wheel install lacks API: {sorted(missing)}"
+                        )
+                    PY
+                  displayName: "Verify wheel in a clean environment"
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: $(wheelPath)
+              artifact: "saber-${{ parameters.packageVersion }}"
+            displayName: "Attach published Saber wheel"
+            condition: and(succeededOrFailed(), ne(variables['wheelPath'], ''))

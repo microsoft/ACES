@@ -50,6 +50,8 @@ BuildProgressCallback = Callable[[str, str, str], None]
 logger = get_logger(__name__)
 
 __all__ = [
+    "AGENTS_DOCKERFILE_NAME",
+    "AGENTS_IMAGE_TAG",
     "BASE_DOCKERFILE_NAME",
     "BASE_IMAGE_TAG",
     "BuildProgressCallback",
@@ -58,6 +60,7 @@ __all__ = [
     "PreflightResult",
     "RebuildMode",
     "RebuildScope",
+    "base_variant_for_agent",
     "build_domain_images",
     "build_image",
     "find_base_dockerfile",
@@ -69,6 +72,31 @@ __all__ = [
 
 BASE_IMAGE_TAG: str = "saber/sandbox:latest"
 BASE_DOCKERFILE_NAME: str = "Dockerfile.saber_sandbox"
+#: Variant of the base image that adds the Copilot / Claude Code CLIs. Built on
+#: top of BASE_IMAGE_TAG and selected automatically for the CLI harnesses.
+AGENTS_IMAGE_TAG: str = "saber/sandbox:agents"
+AGENTS_DOCKERFILE_NAME: str = "Dockerfile.saber_sandbox_agents"
+#: Label stamped on each base variant; derived images inherit it, which lets
+#: saber detect a domain image built from the wrong variant and rebuild it.
+BASE_VARIANT_LABEL: str = "saber.base_variant"
+#: Agents that run entirely in-process and so need no CLI tooling in the sandbox.
+#: Everything else drives a CLI over the sandbox bridge and needs AGENTS_IMAGE_TAG.
+_REACT_ONLY_AGENTS: frozenset[str] = frozenset({"react"})
+
+
+def base_variant_for_agent(agent: str | None) -> str:
+    """Return the base image variant an agent needs.
+
+    Args:
+        agent: Selected agent name, or ``None`` for the default.
+
+    Returns:
+        ``"base"`` for the react-only sandbox, ``"agents"`` for harnesses that
+        run the Copilot / Claude Code CLIs inside the sandbox.
+    """
+    if agent is None or agent in _REACT_ONLY_AGENTS:
+        return "base"
+    return "agents"
 
 
 class RebuildScope(Enum):
@@ -393,21 +421,72 @@ def find_base_dockerfile(saber_root: Path | None = None) -> Path:
         FileNotFoundError: If the Dockerfile does not exist at any
             expected location.
     """
+    return _find_dockerfile(BASE_DOCKERFILE_NAME, saber_root)
+
+
+def find_agents_dockerfile(saber_root: Path | None = None) -> Path:
+    """Locate the Dockerfile for the agent-harness base image variant.
+
+    Args:
+        saber_root: Explicit project root.  When *None*, auto-discovered
+            relative to this source file.
+
+    Returns:
+        Resolved ``Path`` to the Dockerfile.
+
+    Raises:
+        FileNotFoundError: If the Dockerfile does not exist at any
+            expected location.
+    """
+    return _find_dockerfile(AGENTS_DOCKERFILE_NAME, saber_root)
+
+
+def _find_dockerfile(name: str, saber_root: Path | None = None) -> Path:
+    """Resolve *name* in the source checkout, falling back to the packaged copy."""
     # 1. Check repo / source tree location
     if saber_root is None:
         saber_root = Path(__file__).parent.parent.parent.parent
 
-    repo_path = saber_root / "docker" / BASE_DOCKERFILE_NAME
+    repo_path = saber_root / "docker" / name
     if repo_path.exists():
         return repo_path.resolve()
 
-    # 2. Check package-bundled location (installed from wheel / ADO)
-    package_path = Path(__file__).parent / "_dockerfiles" / BASE_DOCKERFILE_NAME
+    # 2. Check package-bundled location (installed from wheel)
+    package_path = Path(__file__).parent / "_dockerfiles" / name
     if package_path.exists():
         return package_path.resolve()
 
-    msg = f"Base Dockerfile not found at {repo_path} or bundled location {package_path}"
+    msg = f"Dockerfile {name} not found at {repo_path} or bundled location {package_path}"
     raise FileNotFoundError(msg)
+
+
+async def image_base_variant(tag: str) -> str | None:
+    """Return the base variant an image was built from, or ``None`` if unknown.
+
+    Derived images inherit the label from their base, so this reports whether a
+    domain image was built on ``saber/sandbox:latest`` or ``saber/sandbox:agents``.
+
+    Args:
+        tag: Image tag to inspect.
+
+    Returns:
+        ``"base"``, ``"agents"``, or ``None`` when the image or label is absent.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        "image",
+        "inspect",
+        tag,
+        "--format",
+        f'{{{{index .Config.Labels "{BASE_VARIANT_LABEL}"}}}}',
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+    variant = stdout.decode().strip()
+    return variant or None
 
 
 # ── Progress helpers ─────────────────────────────────────────────────
@@ -576,6 +655,7 @@ async def build_domain_images(
     rebuild: RebuildMode | None = None,
     saber_root: Path | None = None,
     on_progress: BuildProgressCallback | None = None,
+    base_variant: str = "base",
 ) -> PreflightResult:
     """Build or verify all Docker images required by a domain.
 
@@ -587,6 +667,9 @@ async def build_domain_images(
             build with ``(name, tag, event)``.  Events are ``"checking"``,
             ``"building"``, ``"built"``, ``"rebuilt"``, ``"skipped"``,
             or ``"failed"``.
+        base_variant: ``"base"`` for the react-only sandbox, or ``"agents"`` to
+            also build the CLI image that the copilot / claude_code harnesses
+            need and derive domain images from it.
 
     Returns:
         A :class:`PreflightResult` summarising the outcome of each image.
@@ -622,7 +705,11 @@ async def build_domain_images(
 
     all_results: list[ImageBuildResult] = []
 
-    total_images = 1 + len(config.images)
+    wants_agents = base_variant == "agents"
+    #: Tag domain images are built FROM, and the variant they should carry.
+    domain_base_tag = AGENTS_IMAGE_TAG if wants_agents else BASE_IMAGE_TAG
+
+    total_images = 1 + int(wants_agents) + len(config.images)
     display = _create_build_progress(total_images)
     start_time = time.monotonic()
 
@@ -677,6 +764,57 @@ async def build_domain_images(
             _print_build_summary(result, elapsed)
             return result
 
+        # ── Handle the agent-CLI base variant ────────────────────────────
+        if wants_agents:
+            rebuild_agents = rebuild_base or rebuild.should_rebuild("agents")
+            if rebuild_agents or not await image_exists(AGENTS_IMAGE_TAG):
+                agents_action: Literal["built", "rebuilt"] = "rebuilt" if rebuild_agents else "built"
+                agents_df = find_agents_dockerfile(saber_root)
+                _notify("agents", AGENTS_IMAGE_TAG, "building")
+
+                def _agents_status(status: str) -> None:
+                    if display is not None:
+                        display.set_status("agents", status)
+
+                try:
+                    await build_image(
+                        tag=AGENTS_IMAGE_TAG,
+                        dockerfile=agents_df,
+                        context=agents_df.parent,
+                        build_args={"SABER_BASE_IMAGE": BASE_IMAGE_TAG},
+                        no_cache=rebuild_agents,
+                        status_callback=_agents_status if display else None,
+                    )
+                    agents_result = ImageBuildResult(name="agents", tag=AGENTS_IMAGE_TAG, action=agents_action)
+                    logger.info("Image %s (%s): %s", "agents", AGENTS_IMAGE_TAG, agents_action)
+                    _notify("agents", AGENTS_IMAGE_TAG, agents_action)
+                except ImageBuildError as exc:
+                    agents_result = ImageBuildResult(
+                        name="agents", tag=AGENTS_IMAGE_TAG, action="failed", error=str(exc)
+                    )
+                    logger.warning("Image %s (%s): failed \u2014 %s", "agents", AGENTS_IMAGE_TAG, exc)
+                    _notify("agents", AGENTS_IMAGE_TAG, "failed")
+            else:
+                agents_result = ImageBuildResult(name="agents", tag=AGENTS_IMAGE_TAG, action="skipped")
+                logger.info("Image %s (%s): skipped (already exists)", "agents", AGENTS_IMAGE_TAG)
+                _notify("agents", AGENTS_IMAGE_TAG, "skipped")
+
+            all_results.append(agents_result)
+            if display is not None:
+                status_label = (
+                    f"[green]\u2713[/green] {agents_result.action}"
+                    if agents_result.action != "failed"
+                    else "[red]\u2717 failed[/red]"
+                )
+                display.complete_image("agents", status_label)
+
+            if agents_result.action == "failed":
+                logger.warning("Skipping domain images \u2014 agent CLI image build failed")
+                result = PreflightResult(results=tuple(all_results), domain_slug=config.slug)
+                elapsed = time.monotonic() - start_time
+                _print_build_summary(result, elapsed)
+                return result
+
         # ── Handle domain images ─────────────────────────────────────────
         for name, image_config in config.images.items():
             dockerfile = domain_root / image_config.dockerfile
@@ -690,12 +828,33 @@ async def build_domain_images(
             if force_rebuild:
                 action: Literal["built", "rebuilt"] = "rebuilt"
             elif await image_exists(image_config.tag):
-                all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="skipped"))
-                logger.info("Image %s (%s): skipped (already exists)", name, image_config.tag)
-                _notify(name, image_config.tag, "skipped")
-                if display is not None:
-                    display.complete_image(name, "[dim]skipped[/dim]")
-                continue
+                # Only images that derive from the saber base can be the wrong
+                # variant; services built from their own base (a database image,
+                # say) are unrelated and must not be rebuilt on every run.
+                derives_from_base = False
+                with contextlib.suppress(OSError):
+                    derives_from_base = "SABER_BASE_IMAGE" in dockerfile.read_text(errors="ignore")
+                # An unlabelled image predates the variants, so its CLI tooling is
+                # unknown - treat it as unusable when a CLI harness is requested.
+                stale_variant = (
+                    wants_agents
+                    and derives_from_base
+                    and await image_base_variant(image_config.tag) != "agents"
+                )
+                if not stale_variant:
+                    all_results.append(ImageBuildResult(name=name, tag=image_config.tag, action="skipped"))
+                    logger.info("Image %s (%s): skipped (already exists)", name, image_config.tag)
+                    _notify(name, image_config.tag, "skipped")
+                    if display is not None:
+                        display.complete_image(name, "[dim]skipped[/dim]")
+                    continue
+                logger.info(
+                    "Image %s (%s): rebuilding \u2014 %s needs the agent CLIs and this image lacks them",
+                    name,
+                    image_config.tag,
+                    base_variant,
+                )
+                action = "rebuilt"
             else:
                 action = "built"
 
@@ -712,7 +871,7 @@ async def build_domain_images(
                     tag=image_config.tag,
                     dockerfile=dockerfile,
                     context=context,
-                    build_args=image_config.build_args or None,
+                    build_args={"SABER_BASE_IMAGE": domain_base_tag, **(image_config.build_args or {})},
                     labels=image_config.labels or None,
                     no_cache=force_rebuild,
                     status_callback=_image_status if display else None,
