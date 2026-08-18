@@ -1,0 +1,4 @@
+# Keeps this directory present so `COPY wheels/` resolves in the Dockerfile.
+# The wheels themselves are NOT committed (they go stale and bloat the repo).
+# Populate them with ../fetch_wheels.sh on a host with PyPI access when the
+# container cannot reach files.pythonhosted.org; the build falls back to them.

@@ -32,7 +32,9 @@ steps:
       repository: saber-sandbox
       containerRegistry: benchmarking-spear-stg-acr
       dockerfile: docker/Dockerfile.saber_sandbox
-      buildContext: .
+      # Context is docker/ (not the repo root) so `COPY wheels/` resolves, matching
+      # how saber builds this image locally (context = the Dockerfile's directory).
+      buildContext: docker
       arguments: |
         --secret id=ADO_TOKEN,env=ADO_TOKEN
         --build-arg FEED_ORG=MSECAIModels

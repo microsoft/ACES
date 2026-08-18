@@ -1,5 +1,12 @@
-# SABER Sandbox Environment
-# Base sandbox with Python, Node.js, and agent tooling
+# SABER Sandbox Environment - base image (saber/sandbox:latest)
+#
+# Everything the default `react` harness needs and nothing else: Python, uv and
+# requests. No Node.js and no agent CLIs, so this image builds even on networks
+# that block container access to registry.npmjs.org.
+#
+# The `copilot` / `claude_code` harnesses additionally need the agent CLIs; those
+# live in Dockerfile.saber_sandbox_agents, which builds saber/sandbox:agents on
+# top of this image. saber picks between the two automatically from `-T agent=`.
 FROM python:3.11-slim
 
 # Install essential system packages
@@ -10,25 +17,24 @@ RUN apt-get update && \
         gnupg \
         && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 22 LTS (required by Copilot CLI and Claude Code CLI)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install agent CLI tools globally via npm
-RUN npm install -g --ignore-scripts \
-        @github/copilot \
-        @anthropic-ai/claude-code && \
-    npm cache clean --force
-
 # Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Install Python packages for basic execution and agent SDKs
-RUN uv pip install --system --no-cache --break-system-packages \
-    requests \
-    github-copilot-sdk==0.3.0 \
-    claude-code-sdk
+# Install Python packages for basic execution.
+# Installs from PyPI so builds always pick up the latest versions. Where container
+# egress to files.pythonhosted.org (PyPI's CDN) is blocked, run
+# docker/fetch_wheels.sh on the host first and the build falls back to those
+# wheels. They are deliberately NOT committed (they go stale and bloat the repo).
+COPY wheels/ /tmp/wheels/
+RUN PKGS='requests'; \
+    uv pip install --system --no-cache --break-system-packages $PKGS \
+    || { echo "PyPI unreachable - falling back to docker/wheels/ (populate it on a host with PyPI access via docker/fetch_wheels.sh)"; \
+         uv pip install --system --no-cache --break-system-packages \
+             --no-index --find-links=/tmp/wheels $PKGS; } \
+    && rm -rf /tmp/wheels
+
+# Lets saber detect which variant a derived image was built from.
+LABEL saber.base_variant="base"
 
 # Set working directory
 WORKDIR /workspace

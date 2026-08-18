@@ -2,11 +2,19 @@
 
 **Agent Capability Evaluation Suite (ACES) / Security Agent Benchmarking and Evaluation Research (SABER)**
 
+<!-- ADO-ONLY:START -->
+> ## ⚠️ This Azure DevOps repository is deprecated
+>
+> **SABER's permanent home is GitHub:** [github.com/microsoft/ACES](https://github.com/microsoft/ACES) (this library) + [github.com/microsoft/ACESEvals](https://github.com/microsoft/ACESEvals) (benchmarks).
+>
+> This Azure DevOps repo (`SABER`) becomes **read-only after 2026-09-30** and will then be retired. Migrate any clones, pipelines, and references to GitHub, and do all new work there.
+<!-- ADO-ONLY:END -->
+
 > **Naming:** The external name for this project is **ACES**. **SABER** is the internal Microsoft codename. The Python package, CLI commands, and code all use the name `saber`. Both names refer to the same system.
 >
-> **Dual repositories:**
-> - **GitHub (external):** [ACESEvals](https://github.com/microsoft/ACESEvals) (benchmarks) + [ACES](https://github.com/microsoft/ACES) (this library)
-> - **Azure DevOps (internal):** [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) (benchmarks) + [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER) (this library)
+> **Repositories (GitHub is the permanent home):**
+> - **GitHub (permanent home):** [ACESEvals](https://github.com/microsoft/ACESEvals) (benchmarks) + [ACES](https://github.com/microsoft/ACES) (this library)
+> - **Azure DevOps (deprecated — read-only after 2026-09-30):** [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) + [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER). Being retired; do new work on GitHub.
 
 A thin Python library (~5,200 LOC) that lets you define cybersecurity benchmarks using YAML files and run them through inspect_ai's native evaluation engine. No server, no client, no REST API.
 
@@ -32,34 +40,20 @@ YAML task configs  →  saber  →  inspect_ai Task  →  inspect eval
 - Implement its own agent loop (wraps `react()` and other agents)
 - Implement its own MCP server (uses `@tool` directly)
 
-## Dual Repository Setup
+## Repositories
 
-This project is maintained in two repositories. Use whichever you have access to — the content is the same:
+**GitHub is the permanent home for SABER/ACES** — clone from there and do all new work on GitHub. The Azure DevOps mirrors are deprecated and become read-only after **2026-09-30**.
 
-| | GitHub (external) | Azure DevOps (Microsoft internal) |
+| | GitHub (permanent home) | Azure DevOps (deprecated) |
 |---|---|---|
-| **Benchmarks** | [ACESEvals](https://github.com/microsoft/ACESEvals) | [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) |
-| **Library** (this repo) | [ACES](https://github.com/microsoft/ACES) | [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER) |
+| **Benchmarks** | [ACESEvals](https://github.com/microsoft/ACESEvals) | [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) *(read-only after 2026-09-30)* |
+| **Library** (this repo) | [ACES](https://github.com/microsoft/ACES) | [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER) *(read-only after 2026-09-30)* |
 
-The `pyproject.toml` has labeled source blocks for `inspect-ai` — uncomment the matching block for your environment. The GitHub source is active by default.
-
-> **⚠️ Azure DevOps (Microsoft internal) users — required setup step:**
->
-> The `pyproject.toml` defaults to **GitHub** sources for `inspect-ai`. If you cloned from Azure DevOps (`SABER`), you **must** switch to the ADO source before running `uv sync`:
->
-> 1. Open `pyproject.toml` and find the `[tool.uv.sources]` section
-> 2. Comment the GitHub line, uncomment the ADO line:
->    ```toml
->    # inspect-ai = { git = "https://github.com/microsoft/ACESEvals", branch = "inspect-ai/dev/aces_integration" }
->    inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
->    ```
-> 3. Run `uv sync --all-extras`
->
-> **Without this step, `uv sync` will fail** because GitHub sources may not be accessible from internal networks.
+`pyproject.toml` sources `inspect-ai` from the GitHub [ACESEvals fork](https://github.com/microsoft/ACESEvals) (branch `inspect-ai/dev/aces_integration`) — a **required** fork that powers the agent harnesses (`-T agent=copilot`, `-T agent=claude_code`) and tool_call limits. Do not switch it to upstream inspect_ai.
 
 > **💡 Local development with inspect-ai:**
 >
-> If you have a local clone of inspect_ai and want to iterate on it, you can also use the local path source:
+> If you have a local clone of inspect_ai and want to iterate on it, use the local path source:
 > ```toml
 > inspect-ai = { path = "../inspect_ai", editable = true }
 > ```
@@ -74,10 +68,36 @@ The `pyproject.toml` has labeled source blocks for `inspect-ai` — uncomment th
 - Docker (with Docker Compose v2)
 - uv package manager
 
+### Sandbox images and agent harnesses
+
+SABER builds two sandbox images and picks between them automatically from `-T agent=`,
+so there is nothing to configure:
+
+| Mode | Image | Contains | When |
+|---|---|---|---|
+| **1. Default** | `saber/sandbox:latest` (~320MB) | Python, uv, requests | `-T agent=react` (default) |
+| **2. Agent harnesses** | `saber/sandbox:agents` (~2.9GB) | + Node, Copilot / Claude Code CLIs and SDKs | `-T agent=copilot`, `-T agent=claude_code` |
+
+**Mode 1 needs no network beyond PyPI and Debian**, so the default build works even
+where corporate policy blocks container access to `registry.npmjs.org`. Domain images
+are built from whichever variant the selected agent needs, and are rebuilt
+automatically if they were built from the other one.
+
+**Mode 3 - restricted networks.** If container builds cannot reach the npm registry
+or PyPI's CDN, vendor the artifacts from a host that can and rebuild; the build falls
+back to them automatically:
+
+```bash
+docker/fetch_npm.sh      # agent CLI tarballs (~260MB) - only needed for mode 2
+docker/fetch_wheels.sh   # Python wheels
+```
+
+Neither set is committed (they go stale and are large). Normal builds always install
+the latest from the network and ignore them.
+
 ### Installation
 
 ```bash
-# ⚠️ ADO users: switch inspect-ai source in pyproject.toml first (see above)
 uv sync --all-extras
 
 # Verify

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from saber.environments.images import RebuildMode
+from saber.environments.images import RebuildMode, base_variant_for_agent
 from saber.logging import get_logger
 
 __all__ = ["resolve_sandbox_spec"]
@@ -24,6 +24,7 @@ def resolve_sandbox_spec(
     permanent_project: str,
     rebuild: RebuildMode | None = None,
     keep_permanent: bool = False,
+    agent: str | None = None,
 ) -> tuple[str, str] | None:
     """Resolve sandbox specification for Task(sandbox=...).
 
@@ -39,6 +40,8 @@ def resolve_sandbox_spec(
         rebuild: Which images to rebuild, or ``None`` to skip.
         keep_permanent: When True, permanent services are not stopped on
             task cleanup, allowing the next run to reuse them.
+        agent: Selected agent name; decides whether the sandbox images are built
+            from the react-only base or the agent-CLI variant.
 
     Returns:
         ``("saber", compose_path)`` when sandbox compose exists,
@@ -71,7 +74,11 @@ def resolve_sandbox_spec(
     SaberSandboxEnvironment.set_keep_permanent(keep_permanent)
 
     # Configure preflight
-    SaberSandboxEnvironment.set_preflight_config(domain_root, rebuild)
+    SaberSandboxEnvironment.set_preflight_config(
+        domain_root,
+        rebuild,
+        base_variant=base_variant_for_agent(agent),
+    )
 
     # Always return "saber" — DEC-009
     return ("saber", str(sandbox_path))

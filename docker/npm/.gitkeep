@@ -1,0 +1,4 @@
+# Keeps this directory present so `COPY npm/` resolves in the Dockerfile.
+# The tarballs are NOT committed (the Copilot platform package is ~180MB).
+# Populate with ../fetch_npm.sh only if you need the copilot / claude_code
+# harnesses on a machine where containers cannot reach registry.npmjs.org.
