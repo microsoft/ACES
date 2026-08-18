@@ -302,6 +302,7 @@ def create_task(
         permanent_project=effective_permanent_project,
         rebuild=rebuild_mode,
         keep_permanent=keep_permanent_bool,
+        agent=agent,
     )
 
     # 8. Build approval policies from ALL tasks' security configs

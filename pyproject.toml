@@ -44,7 +44,9 @@ dependencies = [
     "websockets>=11.0.0",
     "aiohttp>=3.12.15",
     "python-dotenv>=1.1.1",
-    "openai>=2.17.0",
+    # openai floor raised for the inspect-ai fork agent bridge (react/copilot
+    # harnesses require the Responses API in openai>=2.40.0).
+    "openai>=2.40.0",
     "click>=8.0.0",
     "tabulate>=0.9.0",
     "jinja2>=3.1.0",
@@ -55,7 +57,9 @@ dependencies = [
     # inspect-ai dependency managed via tool.uv.sources for flexible installation
     "inspect-ai",
     "azure-identity>=1.25.1",
-    "anthropic>=0.80.0",
+    # anthropic floor raised for the inspect-ai agent bridge (claude_code harness
+    # generate_anthropic path requires >=0.105.0).
+    "anthropic>=0.105.0",
     "watchfiles>=1.1.1",
     "ruamel-yaml>=0.18.0",
 ]
@@ -91,19 +95,29 @@ include = [
 
 [tool.hatch.build.targets.wheel.force-include]
 "docker/Dockerfile.saber_sandbox" = "saber/environments/_dockerfiles/Dockerfile.saber_sandbox"
+"docker/Dockerfile.saber_sandbox_agents" = "saber/environments/_dockerfiles/Dockerfile.saber_sandbox_agents"
+# Ship the empty wheels/ and npm/ dirs (so `COPY wheels/` and `COPY npm/` resolve
+# when the base image is rebuilt from the installed package) plus the scripts that
+# populate them. The artifacts themselves are deliberately not packaged - they are
+# fallbacks for networks that block PyPI/npm, and bundling them would ship stale
+# pins and hundreds of MB.
+"docker/wheels/.gitkeep" = "saber/environments/_dockerfiles/wheels/.gitkeep"
+"docker/npm/.gitkeep" = "saber/environments/_dockerfiles/npm/.gitkeep"
+"docker/fetch_wheels.sh" = "saber/environments/_dockerfiles/fetch_wheels.sh"
+"docker/fetch_npm.sh" = "saber/environments/_dockerfiles/fetch_npm.sh"
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
-# inspect-ai: ADO fork required for tool_call limit functionality not yet merged upstream.
-# Uncomment the following options based on your preference
+# inspect-ai: REQUIRED fork on the ACESEvals `inspect-ai/dev/aces_integration`
+# branch. It powers the agent harnesses (`-T agent=copilot`, `-T agent=claude_code`)
+# and tool_call limits — none of which exist in upstream inspect_ai. Do NOT switch
+# this to upstream inspect-ai, or the harness / agent-architecture evals break. This
+# branch must continue to be maintained on GitHub.
 [tool.uv.sources]
-# Preferred github storage branch
 inspect-ai = { git = "https://github.com/microsoft/ACESEvals", branch = "inspect-ai/dev/aces_integration" }
-# ADO source
-# inspect-ai = { git = "https://MSECAIModels@dev.azure.com/MSECAIModels/Benchmarking/_git/inspect_ai", branch = "dev/aces_integration" }
-# Local if you clone and want to change the upstream
-# inspect-ai = { path = "../inspect_ai", editable = true }
+# For local development against a checkout:
+#   inspect-ai = { path = "../inspect_ai", editable = true }
 
 [tool.hatch.build.targets.sdist]
 include = [

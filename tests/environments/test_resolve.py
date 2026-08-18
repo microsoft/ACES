@@ -222,7 +222,7 @@ class TestResolveSandboxSpecRebuild:
                 permanent_project="saber-permanent",
                 rebuild=RebuildMode.all(),
             )
-        mock_set.assert_called_once_with(tmp_path, RebuildMode.all())
+        mock_set.assert_called_once_with(tmp_path, RebuildMode.all(), base_variant="base")
 
     def test_rebuild_none_passes_none(self, tmp_path: Path) -> None:
         """When rebuild not specified, passes None to set_preflight_config."""
@@ -237,7 +237,7 @@ class TestResolveSandboxSpecRebuild:
                 permanent_compose=None,
                 permanent_project="saber-permanent",
             )
-        mock_set.assert_called_once_with(tmp_path, None)
+        mock_set.assert_called_once_with(tmp_path, None, base_variant="base")
 
 
 class TestResolveSandboxSpecKeepPermanent:

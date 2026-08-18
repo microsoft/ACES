@@ -34,6 +34,12 @@ htmlcov/
 dist/
 build/
 
+# Sandbox fallback wheels: keep the directory (so `COPY wheels/` resolves) but
+# not the wheels themselves — fetch them on demand via docker/fetch_wheels.sh
+# when the container cannot reach PyPI's CDN.
+docker/wheels/*.whl
+docker/npm/*.tgz
+
 # Ignore .gitconfig and other git-related files
 .gitconfig
 

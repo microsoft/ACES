@@ -70,6 +70,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
     _keep_permanent: ClassVar[bool] = False
     _preflight_domain_root: ClassVar[Path | None] = None
     _preflight_rebuild: ClassVar[RebuildMode | None] = None
+    _preflight_base_variant: ClassVar[str] = "base"
     _preflight_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
     _preflight_done: ClassVar[bool] = False
     _preflight_error: ClassVar[RuntimeError | None] = None
@@ -107,15 +108,23 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         cls._keep_permanent = keep
 
     @classmethod
-    def set_preflight_config(cls, domain_root: Path, rebuild: RebuildMode | None = None) -> None:
+    def set_preflight_config(
+        cls,
+        domain_root: Path,
+        rebuild: RebuildMode | None = None,
+        base_variant: str = "base",
+    ) -> None:
         """Configure preflight image building for the next task_init cycle.
 
         Args:
             domain_root: Domain directory path.
             rebuild: Which images to rebuild, or ``None`` to skip.
+            base_variant: ``"base"`` for the react-only sandbox, or ``"agents"``
+                when the selected harness needs the Copilot / Claude Code CLIs.
         """
         cls._preflight_domain_root = domain_root
         cls._preflight_rebuild = rebuild
+        cls._preflight_base_variant = base_variant
         cls._preflight_done = False
 
     @classmethod
@@ -153,6 +162,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
                 result = await build_domain_images(
                     cls._preflight_domain_root,
                     rebuild=cls._preflight_rebuild,
+                    base_variant=cls._preflight_base_variant,
                 )
                 cls._preflight_done = True
                 if not result.all_succeeded:
@@ -272,6 +282,7 @@ class SaberSandboxEnvironment(DockerSandboxEnvironment):
         cls._keep_permanent = False
         cls._preflight_domain_root = None
         cls._preflight_rebuild = None
+        cls._preflight_base_variant = "base"
         cls._preflight_done = False
         cls._preflight_error = None
         cls._preflight_lock = asyncio.Lock()

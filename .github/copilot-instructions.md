@@ -3,9 +3,9 @@
 
 > **Naming:** The external name for this project is **ACES** (Agent Capability Evaluation Suite). **SABER** (Security Agent Benchmarking and Evaluation Research) is the internal Microsoft codename. The Python package, CLI commands, and code all use the name `saber`. Both names refer to the same system.
 >
-> **Dual repositories:**
-> - **GitHub (external):** [ACESEvals](https://github.com/microsoft/ACESEvals) + [ACES](https://github.com/microsoft/ACES)
-> - **Azure DevOps (internal):** [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) + [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER)
+> **Repositories (GitHub is the permanent home):**
+> - **GitHub (permanent home):** [ACESEvals](https://github.com/microsoft/ACESEvals) (benchmarks) + [ACES](https://github.com/microsoft/ACES) (library)
+> - **Azure DevOps (deprecated — read-only after 2026-09-30):** [oss_saber](https://dev.azure.com/MSECAIModels/Benchmarking/_git/oss_saber) + [SABER](https://dev.azure.com/MSECAIModels/Benchmarking/_git/SABER). Being retired; do new work on GitHub.
 
 **SABER** is a distributed system for benchmarking agentic workflows in cybersecurity domains using **inspect_ai** integration with **Model Context Protocol (MCP)**.
 
